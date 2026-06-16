@@ -3,3 +3,9 @@
 .DS_Store
 .env
 *.log
+tmp/
+*.tmp
+/tmp/
+data/tmp/
+*.sock
+*.socket
