@@ -9,7 +9,6 @@ async fn main() -> Result<()> {
     utils::logging::init();
     tracing::info!("🚀 Veyron starting...");
 
-    // API сервер
     let api = api::server::ApiServer::new(8000);
     let api_task = tokio::spawn(async move {
         if let Err(e) = api.run().await {
@@ -19,11 +18,9 @@ async fn main() -> Result<()> {
 
     tracing::info!("✅ Kernel ready!");
 
-    // Ждем Ctrl+C
     tokio::signal::ctrl_c().await?;
     tracing::info!("🛑 Shutting down...");
 
-    // Останавливаем задачи
     api_task.abort();
 
     Ok(())
