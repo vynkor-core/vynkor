@@ -1,0 +1,5 @@
+port: 8080
+log_level: debug
+pid_file: /tmp/veyron.pid
+log_file: /tmp/veyron.log
+data_dir: /var/lib/veyron
