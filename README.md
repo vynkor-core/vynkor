@@ -1,3 +1,1 @@
-# Veyron — Orchestration Kernel
-
-Veyron is a lightweight orchestration kernel for AI-driven automation.
+**Veyron** is a **lightweight, Unix-native orchestration kernel** for building secure AI‑driven automation. It decouples AI logic from infrastructure, allowing you to extend functionality through isolated plugins that communicate over **Unix Domain Sockets** using a strict **Protocol Buffers** contract.
