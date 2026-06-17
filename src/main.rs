@@ -9,7 +9,7 @@ async fn main() -> Result<()> {
     utils::logging::init();
     tracing::info!("🚀 Veyron starting...");
 
-    let api = api::server::ApiServer::new(8000);
+    let api = api::server::ApiServer::new(8783);
     let api_task = tokio::spawn(async move {
         if let Err(e) = api.run().await {
             tracing::error!("API error: {}", e);
