@@ -217,12 +217,12 @@ fn check(plugin_id, required_permission) -> Result<(), PermissionDenied>
 `monitor.rs` периодически (каждые N секунд, конфигурируемо) шлёт `Ping` всем
 зарегистрированным плагинам. Если плагин не ответил `Pong` за таймаут —
 считается умершим. Ядро:
-1. Удаляет плагин из реестра
-2. Публикует `Event { event_type: "system.plugin_died", payload: { plugin_id } }`
-3. Закрывает соединение
+1. помечает плагин зависшим
+2. отправляет сообщение пользование о том что плагин упал
+3. в зависимости от настроек пользователя игнорирует/пытается поднять упавший плагин, после N неудач информирует пользователя и показывает log.txt
+4. в зависимости от настроек пользователя отправляет/не отправляет падение того или иного плагина на сервера veyron
 
-Watchdog не пытается перезапустить плагин — это задача внешнего процесс-менеджера
-(systemd, launchd). Ядро только фиксирует факт смерти.
+Watchdog не пытается перезапустить плагин — это задача пользователя. Ядро только фиксирует факт смерти.
 
 ---
 
@@ -294,41 +294,3 @@ Env переменные имеют приоритет над файлом. Ко
 
 ---
 
-## Зависимости Cargo (минимум)
-
-```toml
-[dependencies]
-tokio       = { version = "1", features = ["full"] }
-prost       = "0.12"          # protobuf
-prost-types = "0.12"
-bytes       = "1"
-serde       = { version = "1", features = ["derive"] }
-serde_json  = "1"
-rusqlite    = { version = "0.31", features = ["bundled"] }  # EventStore
-toml        = "0.8"           # конфиг
-tracing     = "0.1"           # логирование
-tracing-subscriber = "0.3"
-thiserror   = "1"             # удобные ошибки
-uuid        = { version = "1", features = ["v4"] }
-dashmap     = "5"             # concurrent HashMap для реестра
-tokio-util  = "0.7"           # framed codec для length-prefix
-
-[build-dependencies]
-prost-build = "0.12"          # кодогенерация из .proto
-```
-
----
-
-## Первые шаги
-
-1. `proto/veyron_protocol.proto` → уже есть, это контракт
-2. `build.rs` → настроить `prost-build` для генерации Rust кода из proto
-3. `transport/framing.rs` + `transport/server.rs` → принять первое подключение
-4. `registry/plugin_registry.rs` → зарегистрировать тестовый плагин
-5. Написать `tests/fixtures/mock_plugin.rs` → заглушка плагина для тестов
-6. `permissions/checker.rs` → проверка манифеста
-7. `dispatcher/action_dispatcher.rs` → первые два действия (ping, http_get)
-8. `event_bus/bus.rs` → pub/sub
-9. `health/monitor.rs` → watchdog
-
-Итого: рабочее ядро за ~2–3 недели при фокусе на одном разработчике.
