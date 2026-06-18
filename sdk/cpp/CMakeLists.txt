@@ -1,5 +1,7 @@
+cmake_minimum_required(VERSION 3.20)
+project(veyron_sdk CXX)
+
 find_package(Threads REQUIRED)
-find_package(Protobuf REQUIRED)
 find_package(gRPC CONFIG REQUIRED)
 
 add_library(veyron_sdk_cpp STATIC
@@ -50,3 +52,16 @@ install(
         NAMESPACE veyron::
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/veyron-sdk
 )
+
+add_library(veyron_sdk_lib SHARED
+        src/client.cpp
+        src/framing.cpp
+)
+
+target_include_directories(veyron_sdk_lib
+        PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_include_directories(veyron_sdk_lib PRIVATE include)
+target_link_libraries(veyron_sdk_lib PRIVATE veyron_proto_lib)

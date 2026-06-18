@@ -17,3 +17,5 @@ find_package(Threads REQUIRED)
 
 # SDK
 add_subdirectory(sdk/cpp)
+# protobuf
+add_subdirectory(proto)
