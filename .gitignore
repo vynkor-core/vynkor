@@ -1,7 +1,42 @@
+# rust
 /target/
-*.rs.bk
+**/*.rs.bk
+Cargo.lock
+
+# c++
+build/
+bin/
+obj/
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+# cmake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+compile_commands.json
+
+# ide
+.idea/
+.vscode/
+*.swp
+*.swo
+*.sublime-*
+
+# system
 .DS_Store
+Thumbs.db
+
+# env
 .env
+.env.*
+!.env.example
+
+# logs
 *.log
 tmp/
 *.tmp
@@ -9,4 +44,3 @@ tmp/
 data/tmp/
 *.sock
 *.socket
-.idea
