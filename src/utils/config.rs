@@ -7,7 +7,14 @@ pub struct Config {
     pub log_level: String,
     pub pid_file: PathBuf,
     pub log_file: PathBuf,
+    #[allow(dead_code)]
     pub data_dir: PathBuf,
+    #[serde(default = "default_socket_path")]
+    pub socket_path: String,
+}
+
+fn default_socket_path() -> String {
+    "/tmp/veyron.sock".to_string()
 }
 
 impl Default for Config {
@@ -18,6 +25,7 @@ impl Default for Config {
             pid_file: PathBuf::from("/tmp/veyron.pid"),
             log_file: PathBuf::from("/tmp/veyron.log"),
             data_dir: PathBuf::from("/var/lib/veyron"),
+            socket_path: default_socket_path(),
         }
     }
 }

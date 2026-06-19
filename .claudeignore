@@ -1,0 +1,46 @@
+# Build artifacts
+target/
+build/
+cmake-build-*/
+dist/
+
+# Dependencies
+node_modules/
+.cargo/
+.pnpm-store/
+vendor/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Generated
+**/*.rs.pb
+**/*.pb.cc
+**/*.pb.h
+**/*.pb.py
+
+# Binaries
+*.o
+*.a
+*.so
+*.dll
+*.dylib
+*.rlib
+target/release/
+target/debug/
+
+# Logs
+*.log
+logs/
+data/tmp/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+venv/

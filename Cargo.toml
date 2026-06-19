@@ -7,6 +7,18 @@ edition = "2021"
 name = "vyn"
 path = "src/main.rs"
 
+[lib]
+name = "veyron"
+path = "src/lib.rs"
+
+[[test]]
+name = "unit"
+path = "tests/unit/mod.rs"
+
+[[test]]
+name = "integration"
+path = "tests/integration/mod.rs"
+
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 
@@ -28,3 +40,17 @@ nix = { version = "0.28", features = ["signal", "process"] }
 clap = { version = "4.6", features = ["derive"] }
 
 anyhow = "1"
+
+prost = "0.13"
+prost-types = "0.13"
+
+crc32fast = "1"
+dashmap = "6"
+
+[dev-dependencies]
+crc32fast = "1"
+veyron-sdk = { path = "sdk/rust" }
+tower = "0.5"
+
+[build-dependencies]
+prost-build = "0.13"

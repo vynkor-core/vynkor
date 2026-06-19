@@ -1,0 +1,12 @@
+mod test_api;
+mod test_errors;
+mod test_event_bus;
+mod test_framing;
+mod test_kernel;
+mod test_permissions;
+mod test_proto;
+mod test_registry;
+mod test_router;
+mod test_sdk;
+mod test_server;
+mod test_supervisor;

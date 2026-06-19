@@ -1,6 +1,11 @@
 mod api;
+mod auth;
 mod cli;
+mod events;
 mod ipc;
+mod kernel;
+mod plugins;
+mod proto;
 mod utils;
 
 use anyhow::Result;
@@ -8,8 +13,7 @@ use clap::Parser;
 use cli::{Cli, Commands};
 use std::fs;
 use std::process::Command;
-use tokio::signal;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 use utils::config::{load_config, Config};
 
 const DEFAULT_CONFIG: &str = "config.yaml";
@@ -157,21 +161,9 @@ async fn run_foreground(cfg: Config) -> Result<()> {
     let pid = std::process::id() as i32;
     write_pid(&cfg.pid_file, pid)?;
     info!("veyron starting in foreground (port {})", cfg.port);
-
-    let api = api::server::ApiServer::new(cfg.port);
-    let mut api_task = tokio::spawn(async move {
-        if let Err(e) = api.run().await {
-            error!("API error: {}", e);
-        }
-    });
-
-    tokio::select! {
-        _ = signal::ctrl_c() => info!("shutting down"),
-        _ = &mut api_task => error!("API task finished unexpectedly"),
-    }
-
-    api_task.abort();
-    let _ = fs::remove_file(&cfg.pid_file);
+    let pid_file = cfg.pid_file.clone();
+    kernel::Kernel::run(cfg).await?;
+    let _ = fs::remove_file(&pid_file);
     info!("kernel stopped");
     Ok(())
 }
