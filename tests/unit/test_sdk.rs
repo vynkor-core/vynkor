@@ -16,7 +16,7 @@ async fn start_kernel(socket_path: &'static str) {
     let (_srv, _disc) = UdsServer::start(Path::new(socket_path), router_tx)
         .await
         .unwrap();
-    tokio::spawn(MessageRouter::run(router_rx, registry, event_bus));
+    tokio::spawn(MessageRouter::run(router_rx, registry, event_bus, None));
     // brief pause for socket to be ready
     tokio::time::sleep(Duration::from_millis(10)).await;
 }

@@ -11,6 +11,8 @@ pub struct Config {
     pub data_dir: PathBuf,
     #[serde(default = "default_socket_path")]
     pub socket_path: String,
+    #[serde(default)]
+    pub jwt_secret: Option<String>,
 }
 
 fn default_socket_path() -> String {
@@ -26,6 +28,7 @@ impl Default for Config {
             log_file: PathBuf::from("/tmp/veyron.log"),
             data_dir: PathBuf::from("/var/lib/veyron"),
             socket_path: default_socket_path(),
+            jwt_secret: None,
         }
     }
 }

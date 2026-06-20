@@ -50,6 +50,7 @@ message PluginRegister {
   string          version      = 2;  // semver: "1.0.0"
   string          description  = 3;
   PluginManifest  manifest     = 4;
+  string          jwt_token    = 5;  // auth token (required when kernel has jwt_secret configured)
 }
 
 message PluginRegisterAck {

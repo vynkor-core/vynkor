@@ -1,3 +1,4 @@
+use crate::auth::jwt::JwtValidator;
 use crate::auth::permissions::{action_to_permission, check_permission};
 use crate::events::bus::EventBus;
 use crate::ipc::framing::{target_as_str, Frame};
@@ -9,8 +10,10 @@ use crate::proto::veyron::{
 };
 use prost::Message;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
+use tokio::time::timeout;
+use tracing::warn;
 
 pub struct MessageRouter;
 
@@ -19,6 +22,7 @@ impl MessageRouter {
         mut rx: mpsc::Receiver<IncomingMessage>,
         registry: Arc<PluginRegistry>,
         event_bus: Arc<EventBus>,
+        jwt_validator: Option<Arc<JwtValidator>>,
     ) {
         while let Some(msg) = rx.recv().await {
             let target = {
@@ -28,7 +32,7 @@ impl MessageRouter {
 
             match target.as_str() {
                 "kernel" => {
-                    Self::handle_kernel_message(msg, &registry, &event_bus).await;
+                    Self::handle_kernel_message(msg, &registry, &event_bus, &jwt_validator).await;
                 }
                 "*" => {
                     Self::broadcast(msg, &registry).await;
@@ -44,6 +48,7 @@ impl MessageRouter {
         msg: IncomingMessage,
         registry: &PluginRegistry,
         event_bus: &EventBus,
+        jwt_validator: &Option<Arc<JwtValidator>>,
     ) {
         let envelope = match Envelope::decode(msg.frame.payload.as_slice()) {
             Ok(e) => e,
@@ -68,7 +73,31 @@ impl MessageRouter {
         match envelope.payload {
             Some(envelope::Payload::PluginRegister(reg)) => {
                 let plugin_id = reg.plugin_id.clone();
-                let manifest = reg.manifest.unwrap_or_default();
+                let mut manifest = reg.manifest.unwrap_or_default();
+
+                // JWT validation (only when kernel has jwt_secret configured)
+                if let Some(validator) = jwt_validator {
+                    match validator.validate(&reg.jwt_token) {
+                        Ok(claims) => {
+                            if claims.sub != plugin_id {
+                                Self::send_register_reject(
+                                    &msg.write_tx,
+                                    "token plugin_id mismatch",
+                                )
+                                .await;
+                                return;
+                            }
+                            // Token permissions take precedence over manifest declaration
+                            manifest.permissions = claims.permissions;
+                        }
+                        Err(e) => {
+                            Self::send_register_reject(&msg.write_tx, &format!("auth failed: {e}"))
+                                .await;
+                            return;
+                        }
+                    }
+                }
+
                 let result = registry.register(
                     plugin_id.clone(),
                     msg.conn_id,
@@ -203,7 +232,6 @@ impl MessageRouter {
             if entry.conn_id == msg.conn_id {
                 continue; // skip sender
             }
-            // clone frame payload for each recipient
             let frame = Frame {
                 magic: msg.frame.magic,
                 flags: msg.frame.flags,
@@ -212,8 +240,29 @@ impl MessageRouter {
                 crc32: msg.frame.crc32,
                 payload: msg.frame.payload.clone(),
             };
-            let _ = entry.write_tx.send(frame).await;
+            match timeout(Duration::from_millis(50), entry.write_tx.send(frame)).await {
+                Ok(_) => {}
+                Err(_) => {
+                    warn!(
+                        plugin_id = %entry.plugin_id,
+                        "broadcast timeout: slow plugin skipped"
+                    );
+                }
+            }
         }
+    }
+
+    async fn send_register_reject(tx: &mpsc::Sender<Frame>, reason: &str) {
+        let ack = PluginRegisterAck {
+            accepted: false,
+            reject_reason: reason.to_string(),
+            granted_permissions: vec![],
+        };
+        let env = Envelope {
+            payload: Some(envelope::Payload::PluginRegisterAck(ack)),
+            ..Default::default()
+        };
+        Self::send_envelope(tx, env).await;
     }
 
     async fn send_envelope(tx: &mpsc::Sender<Frame>, env: Envelope) {

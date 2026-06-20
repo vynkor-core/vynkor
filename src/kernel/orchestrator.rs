@@ -8,6 +8,7 @@ use tokio::sync::mpsc;
 use tracing::{error, info};
 
 use crate::api::server::ApiServer;
+use crate::auth::jwt::JwtValidator;
 use crate::events::bus::EventBus;
 use crate::ipc::framing::Frame;
 use crate::ipc::protocol::MessageRouter;
@@ -50,10 +51,19 @@ impl Kernel {
             UdsServer::start(Path::new(&config.socket_path), router_tx).await?;
         info!("UDS server listening on {}", config.socket_path);
 
+        let jwt_validator = config.jwt_secret.as_deref().map(|s| {
+            info!("JWT auth enabled");
+            Arc::new(JwtValidator::new(s.as_bytes()))
+        });
+        if jwt_validator.is_none() {
+            tracing::warn!("JWT auth disabled — set jwt_secret in config for production use");
+        }
+
         tokio::spawn(MessageRouter::run(
             router_rx,
             Arc::clone(&registry),
             Arc::clone(&event_bus),
+            jwt_validator,
         ));
 
         // disconnect handler: unregister plugin + publish system.plugin_left

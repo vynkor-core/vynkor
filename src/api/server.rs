@@ -42,7 +42,7 @@ impl ApiServer {
 
     pub async fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
         let app = create_router(Arc::clone(&self.registry), Arc::clone(&self.supervisor));
-        let addr = SocketAddr::from(([0, 0, 0, 0], self.port));
+        let addr = SocketAddr::from(([127, 0, 0, 1], self.port));
         info!("HTTP API: http://localhost:{}", self.port);
         let listener = tokio::net::TcpListener::bind(addr).await?;
         axum::serve(listener, app).await?;

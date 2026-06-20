@@ -8,6 +8,7 @@ fn envelope_round_trip_serializes_and_deserializes() {
         version: "1.0.0".to_string(),
         description: "Weather plugin".to_string(),
         manifest: None,
+        ..Default::default()
     };
 
     let env = Envelope {

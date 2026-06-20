@@ -64,7 +64,7 @@ fn spawn_router(
     event_bus: Arc<EventBus>,
 ) -> mpsc::Sender<IncomingMessage> {
     let (tx, rx) = mpsc::channel::<IncomingMessage>(64);
-    tokio::spawn(MessageRouter::run(rx, registry, event_bus));
+    tokio::spawn(MessageRouter::run(rx, registry, event_bus, None));
     tx
 }
 
