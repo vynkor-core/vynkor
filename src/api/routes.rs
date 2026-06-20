@@ -7,6 +7,12 @@ use serde::Serialize;
 use std::sync::Arc;
 
 use crate::plugins::registry::PluginRegistry;
+use crate::plugins::supervisor::PluginSupervisor;
+
+pub struct AppState {
+    pub registry: Arc<PluginRegistry>,
+    pub supervisor: Arc<PluginSupervisor>,
+}
 
 #[derive(Serialize)]
 pub struct PluginInfo {
@@ -16,8 +22,9 @@ pub struct PluginInfo {
     pub permissions: Vec<String>,
 }
 
-pub async fn list_plugins(State(registry): State<Arc<PluginRegistry>>) -> Json<Vec<PluginInfo>> {
-    let plugins = registry
+pub async fn list_plugins(State(state): State<Arc<AppState>>) -> Json<Vec<PluginInfo>> {
+    let plugins = state
+        .registry
         .list()
         .into_iter()
         .map(|e| PluginInfo {
@@ -31,10 +38,11 @@ pub async fn list_plugins(State(registry): State<Arc<PluginRegistry>>) -> Json<V
 }
 
 pub async fn get_plugin(
-    State(registry): State<Arc<PluginRegistry>>,
+    State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<PluginInfo>, StatusCode> {
-    registry
+    state
+        .registry
         .get(&id)
         .map(|e| {
             Json(PluginInfo {
@@ -47,13 +55,24 @@ pub async fn get_plugin(
         .ok_or(StatusCode::NOT_FOUND)
 }
 
-pub async fn stop_plugin(
-    State(registry): State<Arc<PluginRegistry>>,
-    Path(id): Path<String>,
-) -> StatusCode {
-    if registry.get(&id).is_none() {
+pub async fn stop_plugin(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> StatusCode {
+    if state.registry.get(&id).is_none() {
         return StatusCode::NOT_FOUND;
     }
-    registry.unregister(&id);
+    state.registry.unregister(&id);
     StatusCode::OK
+}
+
+pub async fn restart_plugin(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> StatusCode {
+    if state.registry.get(&id).is_none() {
+        return StatusCode::NOT_FOUND;
+    }
+    match state.supervisor.restart_plugin(&id).await {
+        Ok(()) => StatusCode::ACCEPTED,
+        // Plugin not in supervisor entries (connected on its own, not spawned)
+        Err(_) => StatusCode::UNPROCESSABLE_ENTITY,
+    }
 }

@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use crate::utils::errors::VeyronError;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
@@ -17,6 +15,7 @@ pub struct Frame {
     pub payload: Vec<u8>,
 }
 
+#[allow(dead_code)]
 pub async fn write_frame<W>(
     stream: &mut W,
     target: &str,

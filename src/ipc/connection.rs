@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use crate::ipc::framing::{read_frame, write_frame_raw, Frame};
 use crate::ipc::messages::IncomingMessage;
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};

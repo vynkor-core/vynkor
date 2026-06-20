@@ -13,6 +13,7 @@ use crate::ipc::framing::Frame;
 use crate::ipc::protocol::MessageRouter;
 use crate::ipc::server::UdsServer;
 use crate::plugins::registry::PluginRegistry;
+use crate::plugins::supervisor::PluginSupervisor;
 use crate::proto::veyron::{envelope, Envelope, Event, PluginShutdown};
 use crate::utils::config::Config;
 
@@ -64,7 +65,11 @@ impl Kernel {
             disc_bus,
         ));
 
-        let api = ApiServer::new(config.port, Arc::clone(&registry));
+        let supervisor = Arc::new(PluginSupervisor::new(&config.socket_path));
+        let sup_loop = Arc::clone(&supervisor);
+        tokio::spawn(async move { sup_loop.monitor_loop().await });
+
+        let api = ApiServer::new(config.port, Arc::clone(&registry), supervisor);
         tokio::spawn(async move {
             if let Err(e) = api.run().await {
                 error!("HTTP API error: {e}");

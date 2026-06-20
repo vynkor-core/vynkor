@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use crate::ipc::connection::ConnectionHandler;
 use crate::ipc::messages::IncomingMessage;
 use crate::utils::errors::VeyronError;

@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use crate::plugins::registry::PluginRegistry;
 use crate::proto::veyron::PermissionType;
 use crate::utils::errors::VeyronError;

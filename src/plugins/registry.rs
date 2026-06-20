@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use crate::ipc::framing::Frame;
 use crate::proto::veyron::PluginManifest;
 use crate::utils::errors::VeyronError;
@@ -9,9 +7,7 @@ use tokio::sync::mpsc;
 
 #[derive(Debug, Clone)]
 pub enum PluginState {
-    Connected,
     Registered,
-    Shuttingdown,
 }
 
 #[derive(Clone)]

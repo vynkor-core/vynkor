@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use crate::utils::errors::VeyronError;
 use dashmap::DashMap;
 use std::path::PathBuf;
@@ -7,6 +5,7 @@ use std::sync::Arc;
 use tokio::process::Command;
 use tokio::sync::{mpsc, Mutex};
 
+#[allow(dead_code)]
 #[derive(Clone)]
 pub enum RestartPolicy {
     Always,
@@ -23,6 +22,7 @@ pub struct PluginConfig {
     pub max_restarts: u32,
 }
 
+#[allow(dead_code)]
 pub struct PluginProcess {
     pub plugin_id: String,
     pub pid: u32,
@@ -57,6 +57,7 @@ impl PluginSupervisor {
         }
     }
 
+    #[allow(dead_code)]
     pub async fn spawn_plugin(&self, config: PluginConfig) -> Result<PluginProcess, VeyronError> {
         self.spawn_internal(config, 0).await
     }
@@ -102,6 +103,7 @@ impl PluginSupervisor {
         Ok(PluginProcess { plugin_id, pid })
     }
 
+    #[allow(dead_code)]
     pub async fn stop_plugin(&self, plugin_id: &str) -> Result<(), VeyronError> {
         let entry = self
             .entries
@@ -113,10 +115,25 @@ impl PluginSupervisor {
         Ok(())
     }
 
+    // Sends SIGTERM without removing the entry so monitor_loop restarts the plugin.
+    pub async fn restart_plugin(&self, plugin_id: &str) -> Result<(), VeyronError> {
+        let pid = self
+            .entries
+            .get(plugin_id)
+            .map(|e| e.pid)
+            .ok_or_else(|| VeyronError::PluginNotFound(plugin_id.to_string()))?;
+
+        let nix_pid = nix::unistd::Pid::from_raw(pid as i32);
+        let _ = nix::sys::signal::kill(nix_pid, nix::sys::signal::Signal::SIGTERM);
+        Ok(())
+    }
+
+    #[allow(dead_code)]
     pub fn is_running(&self, plugin_id: &str) -> bool {
         self.entries.contains_key(plugin_id)
     }
 
+    #[allow(dead_code)]
     pub fn restart_count(&self, plugin_id: &str) -> Option<u32> {
         self.entries.get(plugin_id).map(|e| e.restart_count)
     }

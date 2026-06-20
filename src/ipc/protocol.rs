@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use crate::auth::permissions::{action_to_permission, check_permission};
 use crate::events::bus::EventBus;
 use crate::ipc::framing::{target_as_str, Frame};
@@ -11,6 +9,7 @@ use crate::proto::veyron::{
 };
 use prost::Message;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 
 pub struct MessageRouter;
@@ -78,11 +77,17 @@ impl MessageRouter {
                 );
 
                 let ack = match &result {
-                    Ok(()) => PluginRegisterAck {
-                        accepted: true,
-                        reject_reason: String::new(),
-                        granted_permissions: vec![],
-                    },
+                    Ok(()) => {
+                        let granted = registry
+                            .get(&plugin_id)
+                            .map(|e| e.manifest.permissions.clone())
+                            .unwrap_or_default();
+                        PluginRegisterAck {
+                            accepted: true,
+                            reject_reason: String::new(),
+                            granted_permissions: granted,
+                        }
+                    }
                     Err(e) => PluginRegisterAck {
                         accepted: false,
                         reject_reason: e.to_string(),
@@ -113,10 +118,14 @@ impl MessageRouter {
             }
 
             Some(envelope::Payload::Ping(ping)) => {
+                let server_timestamp = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64;
                 let pong = Envelope {
                     payload: Some(envelope::Payload::Pong(Pong {
                         original_timestamp: ping.timestamp,
-                        server_timestamp: 0,
+                        server_timestamp,
                     })),
                     ..Default::default()
                 };

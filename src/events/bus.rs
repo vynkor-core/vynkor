@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use crate::ipc::framing::Frame;
 use crate::plugins::registry::PluginRegistry;
 use crate::proto::veyron::{envelope, Envelope, Event};
@@ -58,6 +56,7 @@ impl EventBus {
         }
     }
 
+    #[allow(dead_code)]
     pub fn subscribers(&self, event_type: &str) -> Vec<String> {
         self.subscriptions
             .get(event_type)

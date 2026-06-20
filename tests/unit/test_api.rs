@@ -6,10 +6,15 @@ use tower::ServiceExt;
 use veyron::api::server::create_router;
 use veyron::ipc::framing::Frame;
 use veyron::plugins::registry::PluginRegistry;
+use veyron::plugins::supervisor::PluginSupervisor;
 use veyron::proto::veyron::PluginManifest;
 
 fn make_registry() -> Arc<PluginRegistry> {
     Arc::new(PluginRegistry::new())
+}
+
+fn make_supervisor() -> Arc<PluginSupervisor> {
+    Arc::new(PluginSupervisor::new("/tmp/veyron_test.sock"))
 }
 
 fn register(registry: &PluginRegistry, plugin_id: &str, conn_id: u64) {
@@ -33,7 +38,7 @@ async fn body_string(body: axum::body::Body) -> String {
 
 #[tokio::test]
 async fn health_returns_ok() {
-    let app = create_router(make_registry());
+    let app = create_router(make_registry(), make_supervisor());
     let response = app
         .oneshot(
             Request::builder()
@@ -48,7 +53,7 @@ async fn health_returns_ok() {
 
 #[tokio::test]
 async fn plugins_returns_empty_array_when_no_plugins() {
-    let app = create_router(make_registry());
+    let app = create_router(make_registry(), make_supervisor());
     let response = app
         .oneshot(
             Request::builder()
@@ -69,7 +74,7 @@ async fn plugins_returns_registered_plugins() {
     register(&registry, "weather", 1);
     register(&registry, "timer", 2);
 
-    let app = create_router(registry);
+    let app = create_router(registry, make_supervisor());
     let response = app
         .oneshot(
             Request::builder()
@@ -90,7 +95,7 @@ async fn get_plugin_by_id_returns_plugin() {
     let registry = make_registry();
     register(&registry, "echo", 1);
 
-    let app = create_router(registry);
+    let app = create_router(registry, make_supervisor());
     let response = app
         .oneshot(
             Request::builder()
@@ -107,7 +112,7 @@ async fn get_plugin_by_id_returns_plugin() {
 
 #[tokio::test]
 async fn get_plugin_by_id_returns_404_for_unknown() {
-    let app = create_router(make_registry());
+    let app = create_router(make_registry(), make_supervisor());
     let response = app
         .oneshot(
             Request::builder()
@@ -126,7 +131,7 @@ async fn stop_plugin_returns_200_and_unregisters() {
     register(&registry, "stoppable", 1);
     assert!(registry.get("stoppable").is_some());
 
-    let app = create_router(Arc::clone(&registry));
+    let app = create_router(Arc::clone(&registry), make_supervisor());
     let response = app
         .oneshot(
             Request::builder()
@@ -146,7 +151,7 @@ async fn stop_plugin_returns_200_and_unregisters() {
 
 #[tokio::test]
 async fn stop_nonexistent_plugin_returns_404() {
-    let app = create_router(make_registry());
+    let app = create_router(make_registry(), make_supervisor());
     let response = app
         .oneshot(
             Request::builder()
@@ -158,4 +163,40 @@ async fn stop_nonexistent_plugin_returns_404() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn restart_nonexistent_plugin_returns_404() {
+    let app = create_router(make_registry(), make_supervisor());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/plugins/ghost/restart")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn restart_plugin_not_in_supervisor_returns_422() {
+    let registry = make_registry();
+    register(&registry, "self-connected", 1);
+
+    let app = create_router(Arc::clone(&registry), make_supervisor());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/plugins/self-connected/restart")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    // Plugin exists in registry but not in supervisor (connected on its own)
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
