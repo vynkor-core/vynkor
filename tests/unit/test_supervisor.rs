@@ -10,6 +10,7 @@ fn quick_exit_config(plugin_id: &str, policy: RestartPolicy, max_restarts: u32) 
         // /bin/true exits 0 immediately
         binary_path: PathBuf::from("/bin/true"),
         args: vec![],
+        env: vec![],
         restart_policy: policy,
         max_restarts,
     }
@@ -20,6 +21,7 @@ fn sleep_config(plugin_id: &str) -> PluginConfig {
         plugin_id: plugin_id.to_string(),
         binary_path: PathBuf::from("/bin/sleep"),
         args: vec!["60".to_string()],
+        env: vec![],
         restart_policy: RestartPolicy::Never,
         max_restarts: 0,
     }
@@ -144,6 +146,7 @@ async fn spawned_process_inherits_socket_path_env() {
             "-c".to_string(),
             r#"test -n "$VEYRON_SOCKET_PATH""#.to_string(),
         ],
+        env: vec![],
         restart_policy: RestartPolicy::Never,
         max_restarts: 0,
     };

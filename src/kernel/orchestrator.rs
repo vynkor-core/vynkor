@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use prost::Message;
+use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::mpsc;
 use tracing::{error, info};
 
@@ -13,6 +14,7 @@ use crate::events::bus::EventBus;
 use crate::ipc::framing::Frame;
 use crate::ipc::protocol::MessageRouter;
 use crate::ipc::server::UdsServer;
+use crate::plugins::loader::PluginLoader;
 use crate::plugins::registry::PluginRegistry;
 use crate::plugins::supervisor::PluginSupervisor;
 use crate::proto::veyron::{envelope, Envelope, Event, PluginShutdown};
@@ -23,7 +25,12 @@ pub struct Kernel;
 impl Kernel {
     pub async fn run(config: Config) -> anyhow::Result<()> {
         let shutdown = async {
-            let _ = tokio::signal::ctrl_c().await;
+            let mut sigterm =
+                signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = sigterm.recv() => { info!("received SIGTERM"); }
+            }
         };
         Self::run_with_shutdown(config, shutdown).await
     }
@@ -78,6 +85,8 @@ impl Kernel {
         let supervisor = Arc::new(PluginSupervisor::new(&config.socket_path));
         let sup_loop = Arc::clone(&supervisor);
         tokio::spawn(async move { sup_loop.monitor_loop().await });
+
+        PluginLoader::load_all(&config.plugins, &supervisor).await;
 
         let api = ApiServer::new(config.port, Arc::clone(&registry), supervisor);
         tokio::spawn(async move {

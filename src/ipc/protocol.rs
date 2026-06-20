@@ -9,11 +9,14 @@ use crate::proto::veyron::{
     PluginRegisterAck, Pong,
 };
 use prost::Message;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tracing::warn;
+
+static MSG_SEQ: AtomicU64 = AtomicU64::new(0);
 
 pub struct MessageRouter;
 
@@ -265,7 +268,16 @@ impl MessageRouter {
         Self::send_envelope(tx, env).await;
     }
 
-    async fn send_envelope(tx: &mpsc::Sender<Frame>, env: Envelope) {
+    async fn send_envelope(tx: &mpsc::Sender<Frame>, mut env: Envelope) {
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let seq = MSG_SEQ.fetch_add(1, Ordering::Relaxed);
+        env.message_id = format!("k-{ts}-{seq}");
+        env.timestamp = ts;
+        env.sender_id = "kernel".to_string();
+
         let mut payload = Vec::new();
         if env.encode(&mut payload).is_err() {
             return;

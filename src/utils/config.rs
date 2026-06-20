@@ -1,6 +1,28 @@
 use serde::Deserialize;
 use std::path::PathBuf;
 
+/// One plugin entry in the `plugins:` list in config.yaml.
+#[derive(Debug, Deserialize, Clone)]
+pub struct PluginDef {
+    pub id: String,
+    pub binary: String,
+    #[serde(default = "default_restart_policy")]
+    pub restart: String,
+    #[serde(default = "default_max_restarts")]
+    pub max_restarts: u32,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: Vec<String>,
+}
+
+fn default_restart_policy() -> String {
+    "on-failure".to_string()
+}
+fn default_max_restarts() -> u32 {
+    5
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
     pub port: u16,
@@ -13,6 +35,9 @@ pub struct Config {
     pub socket_path: String,
     #[serde(default)]
     pub jwt_secret: Option<String>,
+    /// Plugins to auto-spawn on kernel start. Empty by default.
+    #[serde(default)]
+    pub plugins: Vec<PluginDef>,
 }
 
 fn default_socket_path() -> String {
@@ -29,6 +54,7 @@ impl Default for Config {
             data_dir: PathBuf::from("/var/lib/veyron"),
             socket_path: default_socket_path(),
             jwt_secret: None,
+            plugins: vec![],
         }
     }
 }

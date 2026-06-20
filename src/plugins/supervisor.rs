@@ -6,18 +6,21 @@ use tokio::process::Command;
 use tokio::sync::{mpsc, Mutex};
 
 #[allow(dead_code)]
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub enum RestartPolicy {
     Always,
+    #[default]
     OnFailure,
     Never,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct PluginConfig {
     pub plugin_id: String,
     pub binary_path: PathBuf,
     pub args: Vec<String>,
+    /// Additional environment variables as "KEY=VALUE" strings.
+    pub env: Vec<String>,
     pub restart_policy: RestartPolicy,
     pub max_restarts: u32,
 }
@@ -67,11 +70,15 @@ impl PluginSupervisor {
         config: PluginConfig,
         restart_count: u32,
     ) -> Result<PluginProcess, VeyronError> {
-        let mut child = Command::new(&config.binary_path)
-            .args(&config.args)
-            .env("VEYRON_SOCKET_PATH", &self.socket_path)
-            .spawn()
-            .map_err(VeyronError::Io)?;
+        let mut cmd = Command::new(&config.binary_path);
+        cmd.args(&config.args)
+            .env("VEYRON_SOCKET_PATH", &self.socket_path);
+        for kv in &config.env {
+            if let Some((k, v)) = kv.split_once('=') {
+                cmd.env(k, v);
+            }
+        }
+        let mut child = cmd.spawn().map_err(VeyronError::Io)?;
 
         let pid = child
             .id()
