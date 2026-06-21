@@ -13,6 +13,7 @@ fn quick_exit_config(plugin_id: &str, policy: RestartPolicy, max_restarts: u32) 
         env: vec![],
         restart_policy: policy,
         max_restarts,
+        sandbox: false,
     }
 }
 
@@ -24,6 +25,7 @@ fn sleep_config(plugin_id: &str) -> PluginConfig {
         env: vec![],
         restart_policy: RestartPolicy::Never,
         max_restarts: 0,
+        sandbox: false,
     }
 }
 
@@ -149,6 +151,7 @@ async fn spawned_process_inherits_socket_path_env() {
         env: vec![],
         restart_policy: RestartPolicy::Never,
         max_restarts: 0,
+        sandbox: false,
     };
 
     let proc = sup.spawn_plugin(config).await.expect("spawn must succeed");

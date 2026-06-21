@@ -4,3 +4,4 @@ mod test_events;
 mod test_ping;
 mod test_registration;
 mod test_routing;
+mod test_websocket;

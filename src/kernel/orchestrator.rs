@@ -75,8 +75,10 @@ impl Kernel {
         };
 
         let (router_tx, router_rx) = mpsc::channel(1024);
+        let ws_router_tx = router_tx.clone();
         let (_server_handle, disconnect_rx) =
             UdsServer::start(Path::new(&config.socket_path), router_tx).await?;
+        let (ws_disconnect_tx, ws_disconnect_rx) = mpsc::channel::<u64>(64);
         info!("UDS server listening on {}", config.socket_path);
 
         let jwt_validator = config.jwt_secret.as_deref().map(|s| {
@@ -106,6 +108,15 @@ impl Kernel {
             disconnect_rx,
             disc_registry,
             disc_bus,
+        ));
+
+        // WS disconnect handler (same logic, separate channel)
+        let ws_disc_registry = Arc::clone(&registry);
+        let ws_disc_bus = Arc::clone(&event_bus);
+        tokio::spawn(Self::disconnect_loop(
+            ws_disconnect_rx,
+            ws_disc_registry,
+            ws_disc_bus,
         ));
 
         // at-least-once delivery retry worker
@@ -143,6 +154,8 @@ impl Kernel {
             Arc::clone(&registry),
             supervisor,
             jwt_validator.clone(),
+            Some(ws_router_tx),
+            Some(ws_disconnect_tx),
         );
         tokio::spawn(async move {
             if let Err(e) = api.run().await {

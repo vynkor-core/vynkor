@@ -1,13 +1,16 @@
 use axum::{http::header, middleware, response::IntoResponse, routing::get, routing::post, Router};
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{atomic::AtomicU64, Arc};
+use tokio::sync::mpsc;
 use tracing::info;
 
 use crate::api::middleware::auth_middleware;
 use crate::api::routes::{
     get_plugin, get_plugin_logs, list_plugins, restart_plugin, stop_plugin, AppState,
 };
+use crate::api::websocket::{ws_handler, WsGateway};
 use crate::auth::jwt::JwtValidator;
+use crate::ipc::messages::IncomingMessage;
 use crate::plugins::registry::PluginRegistry;
 use crate::plugins::supervisor::PluginSupervisor;
 
@@ -16,10 +19,20 @@ pub fn create_router(
     supervisor: Arc<PluginSupervisor>,
     jwt_validator: Option<Arc<JwtValidator>>,
 ) -> Router {
+    create_router_full(registry, supervisor, jwt_validator, None, None)
+}
+
+pub fn create_router_full(
+    registry: Arc<PluginRegistry>,
+    supervisor: Arc<PluginSupervisor>,
+    jwt_validator: Option<Arc<JwtValidator>>,
+    ws_router_tx: Option<mpsc::Sender<IncomingMessage>>,
+    ws_disconnect_tx: Option<mpsc::Sender<u64>>,
+) -> Router {
     let state = Arc::new(AppState {
         registry,
         supervisor,
-        jwt_validator,
+        jwt_validator: jwt_validator.clone(),
     });
 
     let public = Router::new()
@@ -37,10 +50,25 @@ pub fn create_router(
             auth_middleware,
         ));
 
-    Router::new()
+    let mut app = Router::new()
         .merge(public)
         .merge(protected)
-        .with_state(state)
+        .with_state(state);
+
+    if let (Some(router_tx), Some(disconnect_tx)) = (ws_router_tx, ws_disconnect_tx) {
+        let gateway = Arc::new(WsGateway {
+            router_tx,
+            disconnect_tx,
+            conn_counter: Arc::new(AtomicU64::new(0)),
+            jwt_validator,
+        });
+        let ws_sub = Router::new()
+            .route("/ws", get(ws_handler))
+            .with_state(gateway);
+        app = app.merge(ws_sub);
+    }
+
+    app
 }
 
 pub struct ApiServer {
@@ -48,6 +76,8 @@ pub struct ApiServer {
     registry: Arc<PluginRegistry>,
     supervisor: Arc<PluginSupervisor>,
     jwt_validator: Option<Arc<JwtValidator>>,
+    ws_router_tx: Option<mpsc::Sender<IncomingMessage>>,
+    ws_disconnect_tx: Option<mpsc::Sender<u64>>,
 }
 
 impl ApiServer {
@@ -56,20 +86,26 @@ impl ApiServer {
         registry: Arc<PluginRegistry>,
         supervisor: Arc<PluginSupervisor>,
         jwt_validator: Option<Arc<JwtValidator>>,
+        ws_router_tx: Option<mpsc::Sender<IncomingMessage>>,
+        ws_disconnect_tx: Option<mpsc::Sender<u64>>,
     ) -> Self {
         Self {
             port,
             registry,
             supervisor,
             jwt_validator,
+            ws_router_tx,
+            ws_disconnect_tx,
         }
     }
 
     pub async fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let app = create_router(
+        let app = create_router_full(
             Arc::clone(&self.registry),
             Arc::clone(&self.supervisor),
             self.jwt_validator.clone(),
+            self.ws_router_tx.clone(),
+            self.ws_disconnect_tx.clone(),
         );
         let addr = SocketAddr::from(([127, 0, 0, 1], self.port));
         info!("HTTP API: http://localhost:{}", self.port);

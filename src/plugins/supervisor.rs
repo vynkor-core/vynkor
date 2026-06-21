@@ -34,6 +34,8 @@ pub struct PluginConfig {
     pub env: Vec<String>,
     pub restart_policy: RestartPolicy,
     pub max_restarts: u32,
+    /// Isolate plugin in new PID + network namespaces (Linux only).
+    pub sandbox: bool,
 }
 
 #[allow(dead_code)]
@@ -124,6 +126,20 @@ impl PluginSupervisor {
                 cmd.env(k, v);
             }
         }
+        #[cfg(target_os = "linux")]
+        if config.sandbox {
+            use std::os::unix::process::CommandExt;
+            unsafe {
+                cmd.as_std_mut().pre_exec(|| {
+                    nix::sched::unshare(
+                        nix::sched::CloneFlags::CLONE_NEWPID
+                            | nix::sched::CloneFlags::CLONE_NEWNET,
+                    )
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+                });
+            }
+        }
+
         let mut child = cmd.spawn().map_err(VeyronError::Io)?;
 
         let pid = child

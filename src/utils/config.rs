@@ -14,6 +14,8 @@ pub struct PluginDef {
     pub args: Vec<String>,
     #[serde(default)]
     pub env: Vec<String>,
+    #[serde(default)]
+    pub sandbox: bool,
 }
 
 fn default_restart_policy() -> String {

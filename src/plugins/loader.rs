@@ -29,6 +29,7 @@ impl PluginLoader {
                 env: def.env.clone(),
                 restart_policy: policy,
                 max_restarts: def.max_restarts,
+                sandbox: def.sandbox,
             };
             match supervisor.spawn_plugin(config).await {
                 Ok(proc) => info!(id = %def.id, pid = proc.pid, "plugin spawned"),
