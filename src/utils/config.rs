@@ -38,10 +38,25 @@ pub struct Config {
     /// Plugins to auto-spawn on kernel start. Empty by default.
     #[serde(default)]
     pub plugins: Vec<PluginDef>,
+    #[serde(default = "default_watchdog_interval")]
+    pub watchdog_interval_secs: u64,
+    #[serde(default = "default_watchdog_timeout")]
+    pub watchdog_timeout_secs: u64,
+    #[serde(default = "default_log_buffer_lines")]
+    pub log_buffer_lines: usize,
 }
 
 fn default_socket_path() -> String {
     "/tmp/veyron.sock".to_string()
+}
+fn default_watchdog_interval() -> u64 {
+    30
+}
+fn default_watchdog_timeout() -> u64 {
+    10
+}
+fn default_log_buffer_lines() -> usize {
+    1000
 }
 
 impl Default for Config {
@@ -55,6 +70,9 @@ impl Default for Config {
             socket_path: default_socket_path(),
             jwt_secret: None,
             plugins: vec![],
+            watchdog_interval_secs: default_watchdog_interval(),
+            watchdog_timeout_secs: default_watchdog_timeout(),
+            log_buffer_lines: default_log_buffer_lines(),
         }
     }
 }

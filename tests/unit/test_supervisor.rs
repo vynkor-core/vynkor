@@ -126,8 +126,8 @@ async fn max_restarts_honored() {
         sup_clone.monitor_loop().await;
     });
 
-    // wait long enough for 2 restarts (true exits nearly instantly)
-    sleep(Duration::from_millis(500)).await;
+    // wait long enough for 2 restarts with backoff (100ms + 200ms + process overhead)
+    sleep(Duration::from_millis(1500)).await;
 
     let count = sup.restart_count("capped").unwrap_or(0);
     assert_eq!(count, 2, "expected exactly 2 restarts, got {}", count);

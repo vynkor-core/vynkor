@@ -158,8 +158,20 @@ fn daemonize_and_run(cfg: Config) -> Result<()> {
 }
 
 async fn run_foreground(cfg: Config) -> Result<()> {
+    use nix::fcntl::{Flock, FlockArg};
+
+    let pid_file_handle = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&cfg.pid_file)?;
+
+    let _lock = Flock::lock(pid_file_handle, FlockArg::LockExclusiveNonblock).map_err(|_| {
+        anyhow::anyhow!("kernel already running — another instance holds the PID lock")
+    })?;
+
     let pid = std::process::id() as i32;
-    write_pid(&cfg.pid_file, pid)?;
+    fs::write(&cfg.pid_file, pid.to_string())?;
     info!("veyron starting in foreground (port {})", cfg.port);
     let pid_file = cfg.pid_file.clone();
     kernel::Kernel::run(cfg).await?;

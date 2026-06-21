@@ -1,9 +1,18 @@
+use crate::ipc::framing::Frame;
+use crate::plugins::registry::PluginRegistry;
+use crate::proto::veyron::{envelope, Envelope, Ping};
 use crate::utils::errors::VeyronError;
 use dashmap::DashMap;
+use prost::Message;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::io::{AsyncBufReadExt, BufReader};
+use std::process::Stdio;
 use tokio::process::Command;
 use tokio::sync::{mpsc, Mutex};
+use tracing::warn;
 
 #[allow(dead_code)]
 #[derive(Clone, Default)]
@@ -47,17 +56,37 @@ pub struct PluginSupervisor {
     entries: Arc<DashMap<String, PluginEntry>>,
     event_tx: mpsc::Sender<ExitEvent>,
     event_rx: Arc<Mutex<mpsc::Receiver<ExitEvent>>>,
+    log_buffers: Arc<DashMap<String, Arc<Mutex<VecDeque<String>>>>>,
+    max_log_lines: usize,
 }
 
 impl PluginSupervisor {
+    #[allow(dead_code)]
     pub fn new(socket_path: &str) -> Self {
+        Self::with_log_lines(socket_path, 1000)
+    }
+
+
+    pub fn with_log_lines(socket_path: &str, max_log_lines: usize) -> Self {
         let (event_tx, event_rx) = mpsc::channel::<ExitEvent>(64);
         PluginSupervisor {
             socket_path: socket_path.to_string(),
             entries: Arc::new(DashMap::new()),
             event_tx,
             event_rx: Arc::new(Mutex::new(event_rx)),
+            log_buffers: Arc::new(DashMap::new()),
+            max_log_lines,
         }
+    }
+
+    pub async fn get_logs(&self, plugin_id: &str, n: usize) -> Vec<String> {
+        let buf = match self.log_buffers.get(plugin_id) {
+            Some(b) => b.clone(),
+            None => return vec![],
+        };
+        let locked = buf.lock().await;
+        let skip = locked.len().saturating_sub(n);
+        locked.iter().skip(skip).cloned().collect()
     }
 
     #[allow(dead_code)]
@@ -72,7 +101,9 @@ impl PluginSupervisor {
     ) -> Result<PluginProcess, VeyronError> {
         let mut cmd = Command::new(&config.binary_path);
         cmd.args(&config.args)
-            .env("VEYRON_SOCKET_PATH", &self.socket_path);
+            .env("VEYRON_SOCKET_PATH", &self.socket_path)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         for kv in &config.env {
             if let Some((k, v)) = kv.split_once('=') {
                 cmd.env(k, v);
@@ -84,6 +115,40 @@ impl PluginSupervisor {
             .id()
             .ok_or_else(|| VeyronError::Internal("no pid".into()))?;
         let plugin_id = config.plugin_id.clone();
+
+        let log_buf = Arc::new(Mutex::new(VecDeque::<String>::with_capacity(
+            self.max_log_lines,
+        )));
+        self.log_buffers.insert(plugin_id.clone(), Arc::clone(&log_buf));
+
+        let max_lines = self.max_log_lines;
+
+        if let Some(stdout) = child.stdout.take() {
+            let buf = Arc::clone(&log_buf);
+            tokio::spawn(async move {
+                let mut lines = BufReader::new(stdout).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let mut locked = buf.lock().await;
+                    if locked.len() >= max_lines {
+                        locked.pop_front();
+                    }
+                    locked.push_back(line);
+                }
+            });
+        }
+        if let Some(stderr) = child.stderr.take() {
+            let buf = Arc::clone(&log_buf);
+            tokio::spawn(async move {
+                let mut lines = BufReader::new(stderr).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let mut locked = buf.lock().await;
+                    if locked.len() >= max_lines {
+                        locked.pop_front();
+                    }
+                    locked.push_back(line);
+                }
+            });
+        }
 
         self.entries.insert(
             plugin_id.clone(),
@@ -157,19 +222,16 @@ impl PluginSupervisor {
                     }
                 };
                 if should {
-                    Some(entry.config.clone())
+                    Some((entry.config.clone(), entry.restart_count))
                 } else {
                     None
                 }
             });
 
             match decision {
-                Some(config) => {
-                    let new_count = self
-                        .entries
-                        .get(&event.plugin_id)
-                        .map(|e| e.restart_count + 1)
-                        .unwrap_or(1);
+                Some((config, prev_count)) => {
+                    let new_count = prev_count + 1;
+                    tokio::time::sleep(backoff_delay(new_count)).await;
                     let _ = self.spawn_internal(config, new_count).await;
                 }
                 None => {
@@ -178,4 +240,68 @@ impl PluginSupervisor {
             }
         }
     }
+
+    pub async fn watchdog_loop(
+        self: Arc<Self>,
+        registry: Arc<PluginRegistry>,
+        interval: Duration,
+        timeout: Duration,
+    ) {
+        let deadline = interval + timeout;
+        loop {
+            tokio::time::sleep(interval).await;
+
+            let supervised: Vec<(String, u32)> = self
+                .entries
+                .iter()
+                .map(|e| (e.key().clone(), e.value().pid))
+                .collect();
+
+            for (plugin_id, pid) in supervised {
+                if let Some(last_pong) = registry.last_pong(&plugin_id) {
+                    if last_pong.elapsed() > deadline {
+                        warn!(plugin_id = %plugin_id, "watchdog: plugin unresponsive, sending SIGKILL");
+                        let nix_pid = nix::unistd::Pid::from_raw(pid as i32);
+                        let _ = nix::sys::signal::kill(
+                            nix_pid,
+                            nix::sys::signal::Signal::SIGKILL,
+                        );
+                        registry.record_pong(&plugin_id);
+                        continue;
+                    }
+                }
+
+                if let Some(reg_entry) = registry.get(&plugin_id) {
+                    let timestamp = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64;
+                    let env = Envelope {
+                        payload: Some(envelope::Payload::Ping(Ping { timestamp })),
+                        ..Default::default()
+                    };
+                    let mut payload = Vec::new();
+                    if env.encode(&mut payload).is_ok() {
+                        let crc = crc32fast::hash(&payload);
+                        let mut target = [0u8; 32];
+                        target[..6].copy_from_slice(b"client");
+                        let frame = Frame {
+                            magic: 0x5652,
+                            flags: 0,
+                            length: payload.len() as u32,
+                            target,
+                            crc32: crc,
+                            payload,
+                        };
+                        let _ = reg_entry.write_tx.send(frame).await;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn backoff_delay(restart_count: u32) -> Duration {
+    let ms = 100u64.saturating_mul(1u64 << restart_count.min(8));
+    Duration::from_millis(ms.min(30_000))
 }

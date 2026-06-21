@@ -2,7 +2,7 @@ use crate::ipc::framing::Frame;
 use crate::proto::veyron::PluginManifest;
 use crate::utils::errors::VeyronError;
 use dashmap::DashMap;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 
 #[derive(Debug, Clone)]
@@ -23,6 +23,7 @@ pub struct PluginEntry {
 pub struct PluginRegistry {
     by_plugin_id: DashMap<String, PluginEntry>,
     by_conn_id: DashMap<u64, String>,
+    pong_times: DashMap<String, Instant>,
 }
 
 impl PluginRegistry {
@@ -30,6 +31,7 @@ impl PluginRegistry {
         PluginRegistry {
             by_plugin_id: DashMap::new(),
             by_conn_id: DashMap::new(),
+            pong_times: DashMap::new(),
         }
     }
 
@@ -59,6 +61,7 @@ impl PluginRegistry {
         };
 
         self.by_conn_id.insert(conn_id, plugin_id.clone());
+        self.pong_times.insert(plugin_id.clone(), Instant::now());
         self.by_plugin_id.insert(plugin_id, entry);
         Ok(())
     }
@@ -66,7 +69,16 @@ impl PluginRegistry {
     pub fn unregister(&self, plugin_id: &str) {
         if let Some((_, entry)) = self.by_plugin_id.remove(plugin_id) {
             self.by_conn_id.remove(&entry.conn_id);
+            self.pong_times.remove(plugin_id);
         }
+    }
+
+    pub fn record_pong(&self, plugin_id: &str) {
+        self.pong_times.insert(plugin_id.to_string(), Instant::now());
+    }
+
+    pub fn last_pong(&self, plugin_id: &str) -> Option<Instant> {
+        self.pong_times.get(plugin_id).map(|t| *t)
     }
 
     pub fn get(&self, plugin_id: &str) -> Option<PluginEntry> {

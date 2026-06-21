@@ -82,9 +82,24 @@ impl Kernel {
             disc_bus,
         ));
 
-        let supervisor = Arc::new(PluginSupervisor::new(&config.socket_path));
+        let supervisor = Arc::new(PluginSupervisor::with_log_lines(
+            &config.socket_path,
+            config.log_buffer_lines,
+        ));
         let sup_loop = Arc::clone(&supervisor);
         tokio::spawn(async move { sup_loop.monitor_loop().await });
+
+        let watchdog_sup = Arc::clone(&supervisor);
+        let watchdog_reg = Arc::clone(&registry);
+        let watchdog_interval =
+            std::time::Duration::from_secs(config.watchdog_interval_secs);
+        let watchdog_timeout =
+            std::time::Duration::from_secs(config.watchdog_timeout_secs);
+        tokio::spawn(async move {
+            watchdog_sup
+                .watchdog_loop(watchdog_reg, watchdog_interval, watchdog_timeout)
+                .await
+        });
 
         PluginLoader::load_all(&config.plugins, &supervisor).await;
 

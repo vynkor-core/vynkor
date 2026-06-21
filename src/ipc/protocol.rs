@@ -164,6 +164,13 @@ impl MessageRouter {
                 Self::send_envelope(&msg.write_tx, pong).await;
             }
 
+            Some(envelope::Payload::Pong(_)) => {
+                // watchdog ping response — record the pong
+                if let Some(entry) = registry.get_by_conn_id(msg.conn_id) {
+                    registry.record_pong(&entry.plugin_id);
+                }
+            }
+
             Some(envelope::Payload::Subscribe(sub)) => {
                 if let Some(entry) = registry.get_by_conn_id(msg.conn_id) {
                     event_bus.subscribe(&entry.plugin_id, sub.event_types);

@@ -3,7 +3,9 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tracing::info;
 
-use crate::api::routes::{get_plugin, list_plugins, restart_plugin, stop_plugin, AppState};
+use crate::api::routes::{
+    get_plugin, get_plugin_logs, list_plugins, restart_plugin, stop_plugin, AppState,
+};
 use crate::plugins::registry::PluginRegistry;
 use crate::plugins::supervisor::PluginSupervisor;
 
@@ -16,6 +18,7 @@ pub fn create_router(registry: Arc<PluginRegistry>, supervisor: Arc<PluginSuperv
         .route("/health", get(health_check))
         .route("/plugins", get(list_plugins))
         .route("/plugins/:id", get(get_plugin))
+        .route("/plugins/:id/logs", get(get_plugin_logs))
         .route("/plugins/:id/stop", post(stop_plugin))
         .route("/plugins/:id/restart", post(restart_plugin))
         .with_state(state)
