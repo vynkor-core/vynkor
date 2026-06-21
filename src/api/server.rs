@@ -1,7 +1,16 @@
-use axum::{http::header, middleware, response::IntoResponse, routing::get, routing::post, Router};
+use axum::{
+    http::{header, StatusCode},
+    middleware,
+    response::IntoResponse,
+    routing::get,
+    routing::post,
+    Router,
+};
 use std::net::SocketAddr;
 use std::sync::{atomic::AtomicU64, Arc};
+use std::time::Duration;
 use tokio::sync::mpsc;
+use tower_http::timeout::TimeoutLayer;
 use tracing::info;
 
 use crate::api::middleware::auth_middleware;
@@ -64,6 +73,10 @@ pub fn create_router_full(
         });
         let ws_sub = Router::new()
             .route("/ws", get(ws_handler))
+            .layer(TimeoutLayer::with_status_code(
+                StatusCode::REQUEST_TIMEOUT,
+                Duration::from_secs(5),
+            ))
             .with_state(gateway);
         app = app.merge(ws_sub);
     }

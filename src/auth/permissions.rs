@@ -31,7 +31,6 @@ pub fn action_to_permission(action: &str) -> Option<PermissionType> {
         "get_cpu" | "get_memory" | "get_disk" => Some(PermissionType::PermissionSystem),
         "play_audio" | "record_audio" => Some(PermissionType::PermissionAudio),
         "send_notification" => Some(PermissionType::PermissionNotify),
-        "ai_complete" | "ai_embed" => Some(PermissionType::PermissionAi),
         "set_timer" | "create_alarm" => Some(PermissionType::PermissionScheduler),
         "browser_navigate" | "browser_screenshot" => Some(PermissionType::PermissionBrowser),
         _ => None,

@@ -43,11 +43,13 @@ Effort estimates assume one developer familiar with the codebase.
 | EventStore | SQLite at-least-once delivery, EventAck, retry worker |
 | WebSocket | /ws gateway — JWT via Sec-WebSocket-Protocol header (not URL), binary framing |
 | Sandbox | PluginConfig.sandbox: bool — CLONE_NEWPID + CLONE_NEWNET via pre_exec (Linux) |
+| Runner | sandbox_pre_exec + apply_resource_limits (RLIMIT_NPROC=64, RLIMIT_AS=512 MiB) in runner.rs |
+| PluginManager | High-level lifecycle API (start/stop/restart/is_supervised/is_connected/logs) |
+| AiRequest | Kernel proxies AI requests to Anthropic API via reqwest (claude-opus-4-8 default) |
+| Slowloris | WS route wrapped with TimeoutLayer(5s, 408) — blocks slow HTTP upgrade attacks |
 
 ### Known gaps
 
-- `AiRequest` proto message unhandled
-- WS gateway: 5s HTTP-level Slowloris protection not yet wired (no request timeout layer)
 - Namespace sandbox requires CAP_SYS_ADMIN or user-namespace support on hardened kernels
 
 ---
@@ -337,8 +339,8 @@ Phase 5.2 (namespaces)       → needs PluginConfig changes from 2.6
 
 | File | Action |
 |------|--------|
-| `src/kernel/signals.rs` | Delete (signal handling now in orchestrator.rs) |
-| `src/plugins/manager.rs` | Implement in Sprint 2 (KernelCommand dispatch + plugin lifecycle commands) |
-| `src/plugins/runner.rs` | Implement in Sprint 3 (execution context for sandboxed plugins) |
-| `src/api/middleware.rs` | Implement in Sprint 2 (JWT auth for HTTP) |
-| `src/api/websocket.rs` | Implement in Sprint 5 |
+| `src/kernel/signals.rs` | Deleted ✅ (signal handling in orchestrator.rs) |
+| `src/plugins/manager.rs` | Implemented ✅ (PluginManager: start/stop/restart/is_supervised/is_connected/logs) |
+| `src/plugins/runner.rs` | Implemented ✅ (sandbox_pre_exec + apply_resource_limits via setrlimit) |
+| `src/api/middleware.rs` | Implemented ✅ (JWT auth for HTTP) |
+| `src/api/websocket.rs` | Implemented ✅ (Sprint 5) |

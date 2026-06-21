@@ -30,14 +30,13 @@ message Envelope {
     Subscribe         subscribe          = 42;
     Unsubscribe       unsubscribe        = 43;
 
-    AiRequest         ai_request         = 50;
-    AiResponse        ai_response        = 51;
-    AiStreamChunk     ai_stream_chunk    = 52;
-
     Ping              ping               = 90;
     Pong              pong               = 91;
     ErrorMessage      error              = 92;
   }
+
+  reserved 50, 51, 52;
+  reserved "ai_request", "ai_response", "ai_stream_chunk";
 }
 
 
@@ -72,9 +71,11 @@ message PluginManifest {
   repeated string  permissions  = 1;  // см. PermissionType ниже
   repeated string  actions      = 2;  // действия которые плагин умеет делать
   repeated string  events       = 3;  // события на которые хочет подписаться
-  bool             needs_ai     = 4;  // нужен ли доступ к AI-провайдеру
   bool             needs_gpu    = 5;  // нужен ли GPU (stt/tts)
   uint32           priority     = 6;  // приоритет 1–10 (влияет на планировщик)
+
+  reserved 4;
+  reserved "needs_ai";
 }
 
 enum PermissionType {
@@ -85,8 +86,9 @@ enum PermissionType {
   PERMISSION_SYSTEM     = 4;  // системные метрики (CPU, RAM)
   PERMISSION_AUDIO      = 5;  // микрофон и аудиовыход (stt/tts)
   PERMISSION_NOTIFY     = 6;  // отправка уведомлений
-  PERMISSION_AI         = 7;  // вызовы AI провайдера
   PERMISSION_SCHEDULER  = 8;  // создание таймеров и алармов
+  reserved 7;
+  reserved "PERMISSION_AI";
   PERMISSION_BROWSER    = 9;  // управление браузером
 }
 
@@ -168,47 +170,6 @@ message Subscribe {
 // Плагин → Ядро: отписаться
 message Unsubscribe {
   repeated string event_types = 1;
-}
-
-
-// ═══════════════════════════════════════════
-// AI ОРКЕСТРАЦИЯ
-// Плагин запрашивает AI через ядро
-// (ядро управляет провайдером, кешем, GPU семафором)
-// ═══════════════════════════════════════════
-
-message AiRequest {
-  string          request_id   = 1;
-  string          model        = 2;  // пусто = дефолтная модель из конфига
-  repeated AiMsg  messages     = 3;
-  AiParams        params       = 4;
-  bool            stream       = 5;  // если true — ядро шлёт AiStreamChunk
-}
-
-message AiMsg {
-  string role    = 1;  // "system", "user", "assistant"
-  string content = 2;
-}
-
-message AiParams {
-  float   temperature  = 1;
-  uint32  max_tokens   = 2;
-  float   top_p        = 3;
-}
-
-message AiResponse {
-  string  request_id  = 1;
-  string  content     = 2;
-  string  model_used  = 3;
-  uint32  tokens_used = 4;
-  string  error       = 5;
-}
-
-// Потоковый чанк для stream = true
-message AiStreamChunk {
-  string  request_id = 1;
-  string  delta      = 2;  // дельта текста
-  bool    done       = 3;  // последний чанк
 }
 
 

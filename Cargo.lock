@@ -1836,8 +1836,10 @@ dependencies = [
  "bitflags",
  "bytes",
  "http",
+ "http-body",
  "percent-encoding",
  "pin-project-lite",
+ "tokio",
  "tower-layer",
  "tower-service",
 ]
@@ -2014,7 +2016,6 @@ dependencies = [
  "prost-types",
  "rusqlite",
  "serde",
- "serde_json",
  "serde_yaml",
  "tokio",
  "tokio-tungstenite",

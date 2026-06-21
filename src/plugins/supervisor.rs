@@ -130,13 +130,7 @@ impl PluginSupervisor {
         if config.sandbox {
             use std::os::unix::process::CommandExt;
             unsafe {
-                cmd.as_std_mut().pre_exec(|| {
-                    nix::sched::unshare(
-                        nix::sched::CloneFlags::CLONE_NEWPID
-                            | nix::sched::CloneFlags::CLONE_NEWNET,
-                    )
-                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
-                });
+                cmd.as_std_mut().pre_exec(crate::plugins::runner::sandbox_pre_exec);
             }
         }
 

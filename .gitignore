@@ -21,6 +21,9 @@ cmake_install.cmake
 Makefile
 compile_commands.json
 
+#python
+__pycache__
+
 # ide
 .idea/
 .vscode/
@@ -35,6 +38,7 @@ Thumbs.db
 # claude/agents infra
 .agents/
 .claude/
+.claudeignore
 
 # env
 .env
@@ -49,3 +53,4 @@ tmp/
 data/tmp/
 *.sock
 *.socket
+

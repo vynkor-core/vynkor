@@ -6,8 +6,8 @@ use crate::ipc::framing::{target_as_str, Frame};
 use crate::ipc::messages::IncomingMessage;
 use crate::plugins::registry::PluginRegistry;
 use crate::proto::veyron::{
-    envelope, ActionResponse, ActionStatus, CommandStatus, Envelope, ErrorCode, ErrorMessage,
-    Event, KernelCommandAck, PluginRegisterAck, Pong,
+    envelope, ActionResponse, ActionStatus, CommandStatus, Envelope, ErrorCode,
+    ErrorMessage, Event, KernelCommandAck, PluginRegisterAck, Pong,
 };
 use crate::utils::config::load_config;
 use metrics::{counter, histogram};
@@ -31,8 +31,16 @@ impl MessageRouter {
         event_bus: Arc<EventBus>,
         jwt_validator: Option<Arc<JwtValidator>>,
     ) {
-        Self::run_with_context(rx, registry, event_bus, jwt_validator, Instant::now(), None, None)
-            .await
+        Self::run_with_context(
+            rx,
+            registry,
+            event_bus,
+            jwt_validator,
+            Instant::now(),
+            None,
+            None,
+        )
+        .await
     }
 
     pub async fn run_with_context(
@@ -422,4 +430,5 @@ impl MessageRouter {
         };
         Self::send_envelope(tx, env).await;
     }
+
 }
