@@ -1,1 +1,22 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
+[project]
+name = "veyron-sdk"
+version = "0.1.0"
+description = "Veyron plugin SDK for Python"
+requires-python = ">=3.9"
+dependencies = [
+    "protobuf>=4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "grpcio-tools>=1.50",
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["veyron"]

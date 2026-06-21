@@ -1,15 +1,20 @@
+use crate::events::store::EventStore;
 use crate::ipc::framing::Frame;
 use crate::plugins::registry::PluginRegistry;
 use crate::proto::veyron::{envelope, Envelope, Event};
 use dashmap::DashMap;
 use prost::Message;
 use std::collections::HashSet;
+use std::sync::Arc;
+use std::time::Duration;
+use tracing::{debug, warn};
 
 pub struct EventBus {
     // event_type → set of plugin_ids
     subscriptions: DashMap<String, HashSet<String>>,
     // plugin_id → set of event_types (for fast unsubscribe_all)
     by_plugin: DashMap<String, HashSet<String>>,
+    store: Option<Arc<EventStore>>,
 }
 
 impl EventBus {
@@ -17,6 +22,15 @@ impl EventBus {
         EventBus {
             subscriptions: DashMap::new(),
             by_plugin: DashMap::new(),
+            store: None,
+        }
+    }
+
+    pub fn with_store(store: Arc<EventStore>) -> Self {
+        EventBus {
+            subscriptions: DashMap::new(),
+            by_plugin: DashMap::new(),
+            store: Some(store),
         }
     }
 
@@ -65,21 +79,33 @@ impl EventBus {
     }
 
     pub async fn publish(&self, event: Event, registry: &PluginRegistry) {
+        if let Some(store) = &self.store {
+            store.persist(&event);
+        }
+        self.deliver(event, registry).await;
+    }
+
+    /// Deliver event to subscribers without persisting to store. Used by retry worker.
+    pub async fn redeliver(&self, event: Event, registry: &PluginRegistry) {
+        self.deliver(event, registry).await;
+    }
+
+    async fn deliver(&self, event: Event, registry: &PluginRegistry) {
         let mut targets: HashSet<String> = HashSet::new();
 
-        // direct subscribers
         if let Some(subs) = self.subscriptions.get(&event.event_type) {
             targets.extend(subs.iter().cloned());
         }
-        // wildcard subscribers
         if let Some(wildcards) = self.subscriptions.get("*") {
             targets.extend(wildcards.iter().cloned());
         }
 
         if targets.is_empty() {
+            debug!(event_type = %event.event_type, "event published with no subscribers");
             return;
         }
 
+        let event_type = event.event_type.clone();
         let env = Envelope {
             payload: Some(envelope::Payload::Event(event)),
             ..Default::default()
@@ -90,10 +116,36 @@ impl EventBus {
         }
 
         for plugin_id in targets {
-            if let Some(entry) = registry.get(&plugin_id) {
-                let frame = build_frame(&payload, &plugin_id);
-                let _ = entry.write_tx.send(frame).await;
+            match registry.get(&plugin_id) {
+                Some(entry) => {
+                    let frame = build_frame(&payload, &plugin_id);
+                    let _ = entry.write_tx.send(frame).await;
+                }
+                None => {
+                    warn!(
+                        plugin_id = %plugin_id,
+                        event_type = %event_type,
+                        "event dropped: subscriber not in registry"
+                    );
+                }
             }
+        }
+    }
+}
+
+pub async fn run_retry_worker(
+    store: Arc<EventStore>,
+    bus: Arc<EventBus>,
+    registry: Arc<PluginRegistry>,
+) {
+    const MAX_RETRIES: u32 = 5;
+    loop {
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        let pending = store.pending_older_than(10);
+        for event in pending {
+            let event_id = event.event_id.clone();
+            store.increment_retry_or_dead(&event_id, MAX_RETRIES);
+            bus.redeliver(event, &registry).await;
         }
     }
 }

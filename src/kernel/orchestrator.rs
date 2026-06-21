@@ -10,7 +10,8 @@ use tracing::{error, info};
 
 use crate::api::server::ApiServer;
 use crate::auth::jwt::JwtValidator;
-use crate::events::bus::EventBus;
+use crate::events::bus::{run_retry_worker, EventBus};
+use crate::events::store::EventStore;
 use crate::ipc::framing::Frame;
 use crate::ipc::protocol::MessageRouter;
 use crate::ipc::server::UdsServer;
@@ -53,6 +54,26 @@ impl Kernel {
     where
         F: Future<Output = ()>,
     {
+        crate::metrics::init_metrics();
+
+        let event_store = match EventStore::new(&config.data_dir) {
+            Ok(s) => {
+                let s = Arc::new(s);
+                info!(path = %config.data_dir.display(), "EventStore opened");
+                Some(s)
+            }
+            Err(e) => {
+                tracing::warn!("EventStore unavailable — at-least-once delivery disabled: {e}");
+                None
+            }
+        };
+
+        let event_bus = if let Some(store) = &event_store {
+            Arc::new(EventBus::with_store(Arc::clone(store)))
+        } else {
+            event_bus
+        };
+
         let (router_tx, router_rx) = mpsc::channel(1024);
         let (_server_handle, disconnect_rx) =
             UdsServer::start(Path::new(&config.socket_path), router_tx).await?;
@@ -75,6 +96,7 @@ impl Kernel {
             jwt_validator.clone(),
             kernel_start,
             config_path,
+            event_store.clone(),
         ));
 
         // disconnect handler: unregister plugin + publish system.plugin_left
@@ -85,6 +107,13 @@ impl Kernel {
             disc_registry,
             disc_bus,
         ));
+
+        // at-least-once delivery retry worker
+        if let Some(store) = event_store {
+            let retry_bus = Arc::clone(&event_bus);
+            let retry_reg = Arc::clone(&registry);
+            tokio::spawn(run_retry_worker(store, retry_bus, retry_reg));
+        }
 
         let supervisor = Arc::new(PluginSupervisor::with_events(
             &config.socket_path,

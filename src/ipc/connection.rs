@@ -1,8 +1,11 @@
 use crate::ipc::framing::{read_frame, write_frame_raw, Frame};
 use crate::ipc::messages::IncomingMessage;
+use crate::utils::errors::VeyronError;
+use metrics::counter;
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::UnixStream;
 use tokio::sync::mpsc;
+use tracing::{info, warn};
 
 pub struct ConnectionHandler {
     conn_id: u64,
@@ -36,16 +39,38 @@ impl ConnectionHandler {
     }
 
     pub async fn run(mut self) {
-        while let Ok(frame) = read_frame(&mut self.read_half).await {
-            let msg = IncomingMessage {
-                conn_id: self.conn_id,
-                frame,
-                write_tx: self.write_tx.clone(),
-            };
-            if self.incoming_tx.send(msg).await.is_err() {
-                break;
+        info!(conn_id = self.conn_id, "connection opened");
+        loop {
+            match read_frame(&mut self.read_half).await {
+                Ok(frame) => {
+                    let msg = IncomingMessage {
+                        conn_id: self.conn_id,
+                        frame,
+                        write_tx: self.write_tx.clone(),
+                    };
+                    if self.incoming_tx.send(msg).await.is_err() {
+                        break;
+                    }
+                }
+                Err(VeyronError::FrameCrcMismatch) => {
+                    warn!(conn_id = self.conn_id, "CRC mismatch on incoming frame");
+                    counter!("ipc_frame_errors_total", "error" => "crc").increment(1);
+                    break;
+                }
+                Err(VeyronError::FrameMagicMismatch) => {
+                    warn!(conn_id = self.conn_id, "frame magic mismatch");
+                    counter!("ipc_frame_errors_total", "error" => "magic").increment(1);
+                    break;
+                }
+                Err(VeyronError::PayloadTooLarge(n)) => {
+                    warn!(conn_id = self.conn_id, bytes = n, "oversized frame rejected");
+                    counter!("ipc_frame_errors_total", "error" => "oversized").increment(1);
+                    break;
+                }
+                Err(_) => break, // IO errors / EOF — normal disconnect
             }
         }
+        info!(conn_id = self.conn_id, "connection closed");
         let _ = self.disconnect_tx.send(self.conn_id).await;
     }
 }

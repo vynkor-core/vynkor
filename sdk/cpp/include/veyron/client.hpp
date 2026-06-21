@@ -1,31 +1,38 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
+
 #include "veyron/framing.hpp"
-#include "proto/veyron_protocol.pb.h"
+#include "veyron_protocol.pb.h"
 
 namespace veyron {
 
-class client {
-    template <typename InitFunc>
-    void send_kernel_message(const std::string& message_id, InitFunc init_payload) {
-        veyron::Envelope env;
-        env.set_message_id(message_id);
-        env.set_version(1);
-        env.set_sender_id(this->plugin_id);
+class VeyronClient {
+public:
+    explicit VeyronClient(std::string socket_path);
+    ~VeyronClient();
 
-        init_payload(env);
+    void connect();
+    void close();
 
-        std::string protobuf_bytes;
-        env.SerializeToString(&protobuf_bytes);
+    // Send PluginRegister, return the RegisterAck envelope.
+    Envelope register_plugin(const std::string& plugin_id,
+                             const std::string& jwt_token = "");
 
-        std::vector<uint8_t> frame = veyron::pack_frame("kernel", protobuf_bytes);
-        this->write_to_socket(frame.data(), frame.size());
-    }
+    void    send(const std::string& target, const Envelope& env);
+    Envelope recv();
 
-    std::string plugin_id;
-    virtual void write_to_socket(const uint8_t* data, size_t len) = 0;
+    void   subscribe(const std::vector<std::string>& event_types);
+    double ping();  // returns round-trip time in seconds
+
+private:
+    std::string socket_path_;
+    int         fd_ = -1;
+    std::string plugin_id_;
+
+    void send_envelope(const std::string& target, const Envelope& env);
 };
 
 } // namespace veyron

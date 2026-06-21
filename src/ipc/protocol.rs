@@ -1,6 +1,7 @@
 use crate::auth::jwt::JwtValidator;
 use crate::auth::permissions::{action_to_permission, check_permission};
 use crate::events::bus::EventBus;
+use crate::events::store::EventStore;
 use crate::ipc::framing::{target_as_str, Frame};
 use crate::ipc::messages::IncomingMessage;
 use crate::plugins::registry::PluginRegistry;
@@ -9,13 +10,14 @@ use crate::proto::veyron::{
     Event, KernelCommandAck, PluginRegisterAck, Pong,
 };
 use crate::utils::config::load_config;
+use metrics::{counter, histogram};
 use prost::Message;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use tokio::time::timeout;
-use tracing::warn;
+use tracing::{info, warn};
 
 static MSG_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -29,7 +31,8 @@ impl MessageRouter {
         event_bus: Arc<EventBus>,
         jwt_validator: Option<Arc<JwtValidator>>,
     ) {
-        Self::run_with_context(rx, registry, event_bus, jwt_validator, Instant::now(), None).await
+        Self::run_with_context(rx, registry, event_bus, jwt_validator, Instant::now(), None, None)
+            .await
     }
 
     pub async fn run_with_context(
@@ -39,6 +42,7 @@ impl MessageRouter {
         jwt_validator: Option<Arc<JwtValidator>>,
         start_time: Instant,
         config_path: Option<String>,
+        event_store: Option<Arc<EventStore>>,
     ) {
         while let Some(msg) = rx.recv().await {
             let target = {
@@ -48,6 +52,7 @@ impl MessageRouter {
 
             match target.as_str() {
                 "kernel" => {
+                    counter!("messages_routed_total", "routing" => "kernel").increment(1);
                     Self::handle_kernel_message(
                         msg,
                         &registry,
@@ -55,13 +60,16 @@ impl MessageRouter {
                         &jwt_validator,
                         start_time,
                         config_path.as_deref(),
+                        event_store.as_deref(),
                     )
                     .await;
                 }
                 "*" => {
+                    counter!("messages_routed_total", "routing" => "broadcast").increment(1);
                     Self::broadcast(msg, &registry).await;
                 }
                 plugin_id => {
+                    counter!("messages_routed_total", "routing" => "forward").increment(1);
                     Self::forward(msg, plugin_id, &registry).await;
                 }
             }
@@ -75,6 +83,7 @@ impl MessageRouter {
         jwt_validator: &Option<Arc<JwtValidator>>,
         start_time: Instant,
         config_path: Option<&str>,
+        event_store: Option<&EventStore>,
     ) {
         let envelope = match Envelope::decode(msg.frame.payload.as_slice()) {
             Ok(e) => e,
@@ -137,17 +146,22 @@ impl MessageRouter {
                             .get(&plugin_id)
                             .map(|e| e.manifest.permissions.clone())
                             .unwrap_or_default();
+                        info!(plugin_id = %plugin_id, "plugin registered");
+                        counter!("plugins_registered_total").increment(1);
                         PluginRegisterAck {
                             accepted: true,
                             reject_reason: String::new(),
                             granted_permissions: granted,
                         }
                     }
-                    Err(e) => PluginRegisterAck {
-                        accepted: false,
-                        reject_reason: e.to_string(),
-                        granted_permissions: vec![],
-                    },
+                    Err(e) => {
+                        warn!(plugin_id = %plugin_id, reason = %e, "registration rejected");
+                        PluginRegisterAck {
+                            accepted: false,
+                            reject_reason: e.to_string(),
+                            granted_permissions: vec![],
+                        }
+                    }
                 };
 
                 let response = Envelope {
@@ -207,6 +221,7 @@ impl MessageRouter {
             }
 
             Some(envelope::Payload::ActionRequest(req)) => {
+                let action_start = Instant::now();
                 let action_id = req.action_id.clone();
                 let sender_id = registry
                     .get_by_conn_id(msg.conn_id)
@@ -217,7 +232,14 @@ impl MessageRouter {
                     None => ActionStatus::ActionNotFound,
                     Some(perm) => match check_permission(registry, &sender_id, perm) {
                         Ok(()) => ActionStatus::ActionOk,
-                        Err(_) => ActionStatus::ActionPermissionDeny,
+                        Err(_) => {
+                            warn!(
+                                sender = %sender_id,
+                                action = %req.action,
+                                "permission denied"
+                            );
+                            ActionStatus::ActionPermissionDeny
+                        }
                     },
                 };
 
@@ -234,6 +256,8 @@ impl MessageRouter {
                     })),
                     ..Default::default()
                 };
+                histogram!("action_request_duration_ms")
+                    .record(action_start.elapsed().as_millis() as f64);
                 Self::send_envelope(&msg.write_tx, response).await;
             }
 
@@ -288,6 +312,12 @@ impl MessageRouter {
                 Self::send_envelope(&msg.write_tx, ack).await;
             }
 
+            Some(envelope::Payload::EventAck(ack)) => {
+                if let Some(store) = event_store {
+                    store.mark_delivered(&ack.event_id);
+                }
+            }
+
             _ => {
                 Self::send_error(&msg.write_tx, ErrorCode::ErrUnknown, "unhandled message").await;
             }
@@ -305,6 +335,7 @@ impl MessageRouter {
                 let _ = entry.write_tx.send(msg.frame).await;
             }
             None => {
+                warn!(target = %plugin_id, "forward: unknown target");
                 Self::send_error(&msg.write_tx, ErrorCode::ErrUnknown, "plugin not found").await;
             }
         }
@@ -331,6 +362,7 @@ impl MessageRouter {
                         plugin_id = %entry.plugin_id,
                         "broadcast timeout: slow plugin skipped"
                     );
+                    counter!("broadcast_timeouts_total").increment(1);
                 }
             }
         }

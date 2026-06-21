@@ -13,7 +13,8 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use std::process::Stdio;
 use tokio::process::Command;
 use tokio::sync::{mpsc, Mutex};
-use tracing::warn;
+use metrics::counter;
+use tracing::{info, warn};
 
 #[allow(dead_code)]
 #[derive(Clone, Default)]
@@ -164,6 +165,7 @@ impl PluginSupervisor {
             });
         }
 
+        info!(plugin_id = %plugin_id, pid = pid, restart_count = restart_count, "plugin spawned");
         self.entries.insert(
             plugin_id.clone(),
             PluginEntry {
@@ -248,6 +250,13 @@ impl PluginSupervisor {
                 .get(&event.plugin_id)
                 .map(|e| e.restart_count)
                 .unwrap_or(0);
+            info!(
+                plugin_id = %event.plugin_id,
+                success = event.success,
+                will_restart = will_restart,
+                restart_count = restart_count,
+                "plugin exited"
+            );
 
             if let (Some(bus), Some(reg)) = (&self.event_bus, &self.plugin_registry) {
                 let payload = format!(
@@ -269,6 +278,13 @@ impl PluginSupervisor {
             match decision {
                 Some((config, prev_count)) => {
                     let new_count = prev_count + 1;
+                    info!(
+                        plugin_id = %config.plugin_id,
+                        restart_count = new_count,
+                        "restarting plugin"
+                    );
+                    counter!("plugin_restarts_total", "plugin_id" => config.plugin_id.clone())
+                        .increment(1);
                     tokio::time::sleep(backoff_delay(new_count)).await;
                     let _ = self.spawn_internal(config, new_count).await;
                 }

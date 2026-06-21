@@ -1,4 +1,4 @@
-use axum::{middleware, routing::get, routing::post, Router};
+use axum::{http::header, middleware, response::IntoResponse, routing::get, routing::post, Router};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tracing::info;
@@ -24,6 +24,7 @@ pub fn create_router(
 
     let public = Router::new()
         .route("/health", get(health_check))
+        .route("/metrics", get(get_metrics))
         .route("/plugins", get(list_plugins))
         .route("/plugins/:id", get(get_plugin))
         .route("/plugins/:id/logs", get(get_plugin_logs));
@@ -80,4 +81,11 @@ impl ApiServer {
 
 async fn health_check() -> &'static str {
     "{\"status\":\"ok\"}"
+}
+
+async fn get_metrics() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
+        crate::metrics::render(),
+    )
 }

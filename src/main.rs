@@ -4,6 +4,7 @@ mod cli;
 mod events;
 mod ipc;
 mod kernel;
+mod metrics;
 mod plugins;
 mod proto;
 mod utils;
