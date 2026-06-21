@@ -1,14 +1,14 @@
 # Veyron Core — Implementation Roadmap
 
-**Last updated:** 2026-06-20  
-**Branch:** `develop` — commit `7cfdbbe`
+**Last updated:** 2026-06-21  
+**Branch:** `develop` — commit `1c2a824`
 
 This document tracks what is built, what is next, and what is later.
 Effort estimates assume one developer familiar with the codebase.
 
 ---
 
-## Current State (Phase 1 complete)
+## Current State (Phases 1–5 complete — roadmap done ✅)
 
 ### Done ✅
 
@@ -28,23 +28,27 @@ Effort estimates assume one developer familiar with the codebase.
 | Security | Socket chmod 0o600, HTTP binds 127.0.0.1 only |
 | Proto | Single-source `veyron_protocol.proto`, prost codegen, jwt_token field |
 | Rust SDK | VeyronClient (connect/register/send/recv/subscribe/ping), Plugin trait |
-| C++ SDK | Framing only (pack_frame, read_frame, CRC32) — client stub empty |
-| Python SDK | **Empty** |
-| Tests | 86 tests (78 unit + 8 integration), all passing |
+| C++ SDK | Full client: connect, register, send/recv, ping, plugin base class |
+| Python SDK | Full client: framing, VeyronClient, Plugin ABC, proto codegen |
+| Tests | 89 tests (80 unit + 9 integration), all passing |
+| Watchdog | Ping/Pong health monitor, SIGKILL + restart on timeout |
+| Log capture | Per-plugin ring buffer (1000 lines), GET /plugins/:id/logs |
+| Backoff | Exponential restart delay (100ms → 30s cap) |
+| PID lock | flock LOCK_EX prevents concurrent daemon starts |
+| HTTP auth | JWT middleware on POST routes, read-only routes open |
+| plugin_died | system.plugin_died event on supervisor crash |
+| KernelCommand | health_check + reload_config dispatched |
+| Logging | Structured tracing spans across IPC, supervisor, events |
+| Prometheus | GET /metrics — messages, plugins, restarts, latency histograms |
+| EventStore | SQLite at-least-once delivery, EventAck, retry worker |
+| WebSocket | /ws gateway — JWT via Sec-WebSocket-Protocol header (not URL), binary framing |
+| Sandbox | PluginConfig.sandbox: bool — CLONE_NEWPID + CLONE_NEWNET via pre_exec (Linux) |
 
 ### Known gaps
 
-- No watchdog — hung plugins not detected
-- No plugin log capture — plugin stdout/stderr lost
-- Supervisor restart is immediate — no backoff
-- HTTP API has no auth — loopback-only is not enough
-- `KernelCommand` proto message unhandled (falls to `ErrUnknown`)
 - `AiRequest` proto message unhandled
-- C++ SDK has no connection or registration logic
-- Python SDK is completely empty
-- No metrics / observability
-- No at-least-once event delivery (EventAck unhandled)
-- PID file not locked (flock) — concurrent starts can race
+- WS gateway: 5s HTTP-level Slowloris protection not yet wired (no request timeout layer)
+- Namespace sandbox requires CAP_SYS_ADMIN or user-namespace support on hardened kernels
 
 ---
 
@@ -243,28 +247,26 @@ Current: events are fire-and-forget. A plugin that is slow or disconnected at th
 
 ---
 
-## Phase 5 — External Access
+## Phase 5 — External Access ✅
 
-### 5.1 WebSocket gateway
+### 5.1 WebSocket gateway ✅
 
 Per architecture: WebSocket is for external clients (browser, mobile) only. Internal IPC stays on UDS.
 
-- `src/api/websocket.rs` — Axum WebSocket handler: JWT in `?token=` query param, 5s handshake timeout (Slowloris protection), translate WS frames ↔ UDS binary frames
-- A WS client sends `PluginRegister` with `target="kernel"` via JSON or binary, gateway wraps it in a UDS frame and routes it
+- `src/api/websocket.rs` — Axum WebSocket handler
+- JWT via `Sec-WebSocket-Protocol: veyron, <jwt>` header (not URL — avoids log leakage)
+- Same 44-byte binary framing as UDS — transparent frame translation
+- WS clients participate in the same routing graph with synthetic conn_id (base 1,000,000,000)
 
-**Note:** WebSocket clients appear as "plugins" to the kernel with a synthetic `conn_id`. They participate in the same routing graph.
-
-**Effort:** 4–6 h
+**Note:** `ws.protocols(["veyron"])` responds with `Sec-WebSocket-Protocol: veyron`. Client JS: `new WebSocket(url, ["veyron", jwtToken])`.
 
 ---
 
-### 5.2 Linux namespace sandboxing for untrusted plugins
+### 5.2 Linux namespace sandboxing for untrusted plugins ✅
 
-For plugins not built in-house:
-- `PluginConfig` gains `sandbox: bool`
-- `spawn_internal` with sandbox: use `nix::unistd::clone` with `CLONE_NEWPID | CLONE_NEWNET | CLONE_NEWNS` flags — plugin gets isolated PID namespace (can't signal other processes), no network access, read-only view of filesystem except its data dir
-
-**Effort:** 4–8 h (Linux-specific, requires careful testing)
+- `PluginConfig` and `PluginDef` gain `sandbox: bool`
+- `spawn_internal` with `sandbox: true`: calls `unshare(CLONE_NEWPID | CLONE_NEWNET)` via `pre_exec` — plugin can't signal other processes, can't open network sockets
+- `#[cfg(target_os = "linux")]` — no-op on other platforms
 
 ---
 
@@ -292,31 +294,13 @@ Phase 5.2 (namespaces)       → needs PluginConfig changes from 2.6
 
 ---
 
-## Recommended Sprint Order
+## Sprint History (all complete ✅)
 
-**Sprint 1 (this week) — make it reliable:**
-1. 2.3 Backoff (30 min)
-2. 2.4 PID lock (30 min)
-3. 2.1 Watchdog (2–3 h)
-4. 2.2 Log capture (2–3 h)
-
-**Sprint 2 — security + events:**
-5. 2.5 HTTP auth middleware (1–2 h)
-6. 2.6 plugin_died event (1–2 h)
-7. 2.7 KernelCommand dispatch (1–2 h)
-
-**Sprint 3 — SDK completion:**
-8. 3.1 Python SDK (4–6 h)
-9. 3.2 C++ SDK client (4–6 h)
-
-**Sprint 4 — observability:**
-10. 4.1 Logging coverage (2 h)
-11. 4.2 Prometheus metrics (2–3 h)
-12. 4.3 EventStore (4–6 h)
-
-**Sprint 5 — external access:**
-13. 5.1 WebSocket gateway (4–6 h)
-14. 5.2 Namespace sandboxing (4–8 h)
+**Sprint 1 — reliability:** 2.1 watchdog, 2.2 log capture, 2.3 backoff, 2.4 PID lock
+**Sprint 2 — security + events:** 2.5 HTTP auth, 2.6 plugin_died, 2.7 KernelCommand
+**Sprint 3 — SDK completion:** 3.1 Python SDK, 3.2 C++ SDK client
+**Sprint 4 — observability:** 4.1 logging, 4.2 Prometheus metrics, 4.3 EventStore
+**Sprint 5 — external access:** 5.1 WebSocket gateway, 5.2 namespace sandboxing
 
 ---
 
@@ -344,8 +328,8 @@ Phase 5.2 (namespaces)       → needs PluginConfig changes from 2.6
 - Event published to offline plugin is re-delivered when plugin reconnects
 
 **Sprint 5 done when:**
-- Browser WebSocket client connects with `?token=<jwt>` and receives `system.plugin_joined` events
-- Plugin spawned with `sandbox: true` cannot `kill -9` any other process or open TCP sockets
+- Browser WebSocket client connects with `Sec-WebSocket-Protocol: veyron, <jwt>` and receives `system.plugin_joined` events ✅
+- Plugin spawned with `sandbox: true` cannot `kill -9` any other process or open TCP sockets ✅
 
 ---
 

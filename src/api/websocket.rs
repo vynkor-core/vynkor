@@ -1,12 +1,11 @@
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        Query, State,
+        State,
     },
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
-use serde::Deserialize;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,
@@ -28,20 +27,27 @@ pub struct WsGateway {
     pub jwt_validator: Option<Arc<JwtValidator>>,
 }
 
-#[derive(Deserialize)]
-pub struct WsQuery {
-    pub token: Option<String>,
+/// Extract JWT from `Sec-WebSocket-Protocol: veyron, <jwt>`.
+/// Token is the first comma-separated entry that isn't "veyron".
+/// Credentials stay in a request header, never in the URL.
+fn extract_ws_token(headers: &HeaderMap) -> &str {
+    headers
+        .get("sec-websocket-protocol")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split(',').map(str::trim).find(|p| *p != "veyron"))
+        .unwrap_or("")
 }
 
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
-    Query(q): Query<WsQuery>,
+    headers: HeaderMap,
     State(state): State<Arc<WsGateway>>,
 ) -> Response {
     if let Some(validator) = &state.jwt_validator {
-        let token = q.token.as_deref().unwrap_or("");
+        let token = extract_ws_token(&headers);
         if let Err(e) = validator.validate(token) {
-            warn!("WS: JWT rejected: {e}");
+            warn!("WS: JWT rejected");
+            let _ = e; // don't log token contents
             return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
         }
     }
@@ -50,7 +56,8 @@ pub async fn ws_handler(
     let router_tx = state.router_tx.clone();
     let disconnect_tx = state.disconnect_tx.clone();
 
-    ws.on_upgrade(move |socket| handle_socket(socket, conn_id, router_tx, disconnect_tx))
+    ws.protocols(["veyron"])
+        .on_upgrade(move |socket| handle_socket(socket, conn_id, router_tx, disconnect_tx))
 }
 
 async fn handle_socket(
