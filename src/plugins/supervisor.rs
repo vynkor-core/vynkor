@@ -1,6 +1,7 @@
+use crate::events::bus::EventBus;
 use crate::ipc::framing::Frame;
 use crate::plugins::registry::PluginRegistry;
-use crate::proto::veyron::{envelope, Envelope, Ping};
+use crate::proto::veyron::{envelope, Envelope, Event, Ping};
 use crate::utils::errors::VeyronError;
 use dashmap::DashMap;
 use prost::Message;
@@ -58,6 +59,8 @@ pub struct PluginSupervisor {
     event_rx: Arc<Mutex<mpsc::Receiver<ExitEvent>>>,
     log_buffers: Arc<DashMap<String, Arc<Mutex<VecDeque<String>>>>>,
     max_log_lines: usize,
+    event_bus: Option<Arc<EventBus>>,
+    plugin_registry: Option<Arc<PluginRegistry>>,
 }
 
 impl PluginSupervisor {
@@ -68,6 +71,15 @@ impl PluginSupervisor {
 
 
     pub fn with_log_lines(socket_path: &str, max_log_lines: usize) -> Self {
+        Self::with_events(socket_path, max_log_lines, None, None)
+    }
+
+    pub fn with_events(
+        socket_path: &str,
+        max_log_lines: usize,
+        event_bus: Option<Arc<EventBus>>,
+        plugin_registry: Option<Arc<PluginRegistry>>,
+    ) -> Self {
         let (event_tx, event_rx) = mpsc::channel::<ExitEvent>(64);
         PluginSupervisor {
             socket_path: socket_path.to_string(),
@@ -76,6 +88,8 @@ impl PluginSupervisor {
             event_rx: Arc::new(Mutex::new(event_rx)),
             log_buffers: Arc::new(DashMap::new()),
             max_log_lines,
+            event_bus,
+            plugin_registry,
         }
     }
 
@@ -227,6 +241,30 @@ impl PluginSupervisor {
                     None
                 }
             });
+
+            let will_restart = decision.is_some();
+            let restart_count = self
+                .entries
+                .get(&event.plugin_id)
+                .map(|e| e.restart_count)
+                .unwrap_or(0);
+
+            if let (Some(bus), Some(reg)) = (&self.event_bus, &self.plugin_registry) {
+                let payload = format!(
+                    r#"{{"plugin_id":"{}","restart_count":{},"will_restart":{}}}"#,
+                    event.plugin_id, restart_count, will_restart
+                );
+                bus.publish(
+                    Event {
+                        event_id: format!("sys-died-{}-{}", event.plugin_id, restart_count),
+                        event_type: "system.plugin_died".to_string(),
+                        payload_json: payload.into_bytes(),
+                        retry_count: 0,
+                    },
+                    reg,
+                )
+                .await;
+            }
 
             match decision {
                 Some((config, prev_count)) => {

@@ -5,13 +5,14 @@ use crate::ipc::framing::{target_as_str, Frame};
 use crate::ipc::messages::IncomingMessage;
 use crate::plugins::registry::PluginRegistry;
 use crate::proto::veyron::{
-    envelope, ActionResponse, ActionStatus, Envelope, ErrorCode, ErrorMessage, Event,
-    PluginRegisterAck, Pong,
+    envelope, ActionResponse, ActionStatus, CommandStatus, Envelope, ErrorCode, ErrorMessage,
+    Event, KernelCommandAck, PluginRegisterAck, Pong,
 };
+use crate::utils::config::load_config;
 use prost::Message;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tracing::warn;
@@ -21,11 +22,23 @@ static MSG_SEQ: AtomicU64 = AtomicU64::new(0);
 pub struct MessageRouter;
 
 impl MessageRouter {
+    #[allow(dead_code)]
     pub async fn run(
+        rx: mpsc::Receiver<IncomingMessage>,
+        registry: Arc<PluginRegistry>,
+        event_bus: Arc<EventBus>,
+        jwt_validator: Option<Arc<JwtValidator>>,
+    ) {
+        Self::run_with_context(rx, registry, event_bus, jwt_validator, Instant::now(), None).await
+    }
+
+    pub async fn run_with_context(
         mut rx: mpsc::Receiver<IncomingMessage>,
         registry: Arc<PluginRegistry>,
         event_bus: Arc<EventBus>,
         jwt_validator: Option<Arc<JwtValidator>>,
+        start_time: Instant,
+        config_path: Option<String>,
     ) {
         while let Some(msg) = rx.recv().await {
             let target = {
@@ -35,7 +48,15 @@ impl MessageRouter {
 
             match target.as_str() {
                 "kernel" => {
-                    Self::handle_kernel_message(msg, &registry, &event_bus, &jwt_validator).await;
+                    Self::handle_kernel_message(
+                        msg,
+                        &registry,
+                        &event_bus,
+                        &jwt_validator,
+                        start_time,
+                        config_path.as_deref(),
+                    )
+                    .await;
                 }
                 "*" => {
                     Self::broadcast(msg, &registry).await;
@@ -52,6 +73,8 @@ impl MessageRouter {
         registry: &PluginRegistry,
         event_bus: &EventBus,
         jwt_validator: &Option<Arc<JwtValidator>>,
+        start_time: Instant,
+        config_path: Option<&str>,
     ) {
         let envelope = match Envelope::decode(msg.frame.payload.as_slice()) {
             Ok(e) => e,
@@ -212,6 +235,57 @@ impl MessageRouter {
                     ..Default::default()
                 };
                 Self::send_envelope(&msg.write_tx, response).await;
+            }
+
+            Some(envelope::Payload::KernelCommand(cmd)) => {
+                let (status, data_json, error) = match cmd.command.as_str() {
+                    "health_check" => {
+                        let uptime_secs = start_time.elapsed().as_secs();
+                        let plugin_count = registry.list().len();
+                        let data = format!(
+                            r#"{{"uptime_secs":{},"plugin_count":{}}}"#,
+                            uptime_secs, plugin_count
+                        );
+                        (CommandStatus::CommandOk, data.into_bytes(), String::new())
+                    }
+                    "reload_config" => match config_path {
+                        Some(path) => match load_config(path) {
+                            Ok(cfg) => {
+                                let data = format!(
+                                    r#"{{"log_level":"{}","port":{}}}"#,
+                                    cfg.log_level, cfg.port
+                                );
+                                (CommandStatus::CommandOk, data.into_bytes(), String::new())
+                            }
+                            Err(e) => (
+                                CommandStatus::CommandError,
+                                vec![],
+                                format!("config reload failed: {e}"),
+                            ),
+                        },
+                        None => (
+                            CommandStatus::CommandError,
+                            vec![],
+                            "no config path configured".to_string(),
+                        ),
+                    },
+                    _ => (
+                        CommandStatus::CommandUnknown,
+                        vec![],
+                        format!("unknown command: {}", cmd.command),
+                    ),
+                };
+
+                let ack = Envelope {
+                    payload: Some(envelope::Payload::KernelCommandAck(KernelCommandAck {
+                        command_id: cmd.command_id,
+                        status: status as i32,
+                        data_json,
+                        error,
+                    })),
+                    ..Default::default()
+                };
+                Self::send_envelope(&msg.write_tx, ack).await;
             }
 
             _ => {

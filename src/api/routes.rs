@@ -6,12 +6,14 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+use crate::auth::jwt::JwtValidator;
 use crate::plugins::registry::PluginRegistry;
 use crate::plugins::supervisor::PluginSupervisor;
 
 pub struct AppState {
     pub registry: Arc<PluginRegistry>,
     pub supervisor: Arc<PluginSupervisor>,
+    pub jwt_validator: Option<Arc<JwtValidator>>,
 }
 
 #[derive(Serialize)]

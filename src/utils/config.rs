@@ -44,6 +44,9 @@ pub struct Config {
     pub watchdog_timeout_secs: u64,
     #[serde(default = "default_log_buffer_lines")]
     pub log_buffer_lines: usize,
+    /// Path this config was loaded from — used by reload_config kernel command.
+    #[serde(skip)]
+    pub config_file: Option<String>,
 }
 
 fn default_socket_path() -> String {
@@ -73,12 +76,14 @@ impl Default for Config {
             watchdog_interval_secs: default_watchdog_interval(),
             watchdog_timeout_secs: default_watchdog_timeout(),
             log_buffer_lines: default_log_buffer_lines(),
+            config_file: None,
         }
     }
 }
 
 pub fn load_config(path: &str) -> anyhow::Result<Config> {
     let content = std::fs::read_to_string(path)?;
-    let config: Config = serde_yaml::from_str(&content)?;
+    let mut config: Config = serde_yaml::from_str(&content)?;
+    config.config_file = Some(path.to_string());
     Ok(config)
 }

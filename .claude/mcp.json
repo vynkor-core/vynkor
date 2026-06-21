@@ -1,0 +1,25 @@
+{
+  "mcpServers": {
+    "rust-analyzer": {
+      "command": "rust-analyzer",
+      "args": []
+    },
+    "clangd": {
+      "command": "clangd",
+      "args": [
+        "--background-index",
+        "--compile-commands-dir=.",
+        "-j=4",
+        "--header-insertion=iwyu"
+      ]
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "."
+      ]
+    }
+  }
+}

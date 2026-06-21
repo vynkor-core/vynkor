@@ -66,11 +66,15 @@ impl Kernel {
             tracing::warn!("JWT auth disabled — set jwt_secret in config for production use");
         }
 
-        tokio::spawn(MessageRouter::run(
+        let kernel_start = std::time::Instant::now();
+        let config_path = config.config_file.clone();
+        tokio::spawn(MessageRouter::run_with_context(
             router_rx,
             Arc::clone(&registry),
             Arc::clone(&event_bus),
-            jwt_validator,
+            jwt_validator.clone(),
+            kernel_start,
+            config_path,
         ));
 
         // disconnect handler: unregister plugin + publish system.plugin_left
@@ -82,9 +86,11 @@ impl Kernel {
             disc_bus,
         ));
 
-        let supervisor = Arc::new(PluginSupervisor::with_log_lines(
+        let supervisor = Arc::new(PluginSupervisor::with_events(
             &config.socket_path,
             config.log_buffer_lines,
+            Some(Arc::clone(&event_bus)),
+            Some(Arc::clone(&registry)),
         ));
         let sup_loop = Arc::clone(&supervisor);
         tokio::spawn(async move { sup_loop.monitor_loop().await });
@@ -103,7 +109,12 @@ impl Kernel {
 
         PluginLoader::load_all(&config.plugins, &supervisor).await;
 
-        let api = ApiServer::new(config.port, Arc::clone(&registry), supervisor);
+        let api = ApiServer::new(
+            config.port,
+            Arc::clone(&registry),
+            supervisor,
+            jwt_validator.clone(),
+        );
         tokio::spawn(async move {
             if let Err(e) = api.run().await {
                 error!("HTTP API error: {e}");

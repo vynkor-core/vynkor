@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "model": "claude-opus-4-6",
+  "permissions": {
+    "read": {
+      "allow": [
+        "src/**",
+        "sdk/**",
+        "proto/**",
+        "tests/**",
+        "docs/**",
+        "Cargo.toml",
+        "Cargo.lock",
+        "CMakeLists.txt",
+        "config.yaml",
+        "*.md",
+        ".claude/**"
+      ],
+      "deny": [
+        "*.key",
+        "*.pem",
+        ".env",
+        ".env.*",
+        "secrets/**"
+      ]
+    },
+    "write": {
+      "allow": [
+        "src/**",
+        "sdk/**",
+        "proto/**",
+        "tests/**",
+        "docs/**",
+        "*.md",
+        "config.yaml"
+      ],
+      "deny": [
+        "Cargo.toml",
+        "Cargo.lock",
+        "CMakeLists.txt",
+        ".env*"
+      ]
+    },
+    "execute": {
+      "allow": [
+        "cargo build",
+        "cargo test",
+        "cargo check",
+        "cargo clippy",
+        "cargo fmt",
+        "cargo run",
+        "cmake",
+        "protoc",
+        "git",
+        "grep",
+        "find",
+        "ls"
+      ],
+      "deny": [
+        "rm -rf",
+        "sudo",
+        "curl -L"
+      ]
+    }
+  },
+  "memory": {
+    "enabled": true,
+    "file": ".claude/memory.md"
+  }
+}
