@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use veyron::ipc::framing::Frame;
-use veyron::plugins::registry::{PluginEntry, PluginRegistry, PluginState};
+use veyron::plugins::registry::{PluginRegistry, PluginState};
 use veyron::proto::veyron::PluginManifest;
 use veyron::utils::errors::VeyronError;
 

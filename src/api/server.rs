@@ -20,27 +20,25 @@ use crate::api::routes::{
 use crate::api::websocket::{ws_handler, WsGateway};
 use crate::auth::jwt::JwtValidator;
 use crate::ipc::messages::IncomingMessage;
-use crate::plugins::registry::PluginRegistry;
-use crate::plugins::supervisor::PluginSupervisor;
+use crate::plugins::manager::PluginManager;
 
+/// Convenience constructor for tests (no WebSocket support).
+#[allow(dead_code)]
 pub fn create_router(
-    registry: Arc<PluginRegistry>,
-    supervisor: Arc<PluginSupervisor>,
+    manager: Arc<PluginManager>,
     jwt_validator: Option<Arc<JwtValidator>>,
 ) -> Router {
-    create_router_full(registry, supervisor, jwt_validator, None, None)
+    create_router_full(manager, jwt_validator, None, None)
 }
 
 pub fn create_router_full(
-    registry: Arc<PluginRegistry>,
-    supervisor: Arc<PluginSupervisor>,
+    manager: Arc<PluginManager>,
     jwt_validator: Option<Arc<JwtValidator>>,
     ws_router_tx: Option<mpsc::Sender<IncomingMessage>>,
     ws_disconnect_tx: Option<mpsc::Sender<u64>>,
 ) -> Router {
     let state = Arc::new(AppState {
-        registry,
-        supervisor,
+        manager,
         jwt_validator: jwt_validator.clone(),
     });
 
@@ -86,8 +84,7 @@ pub fn create_router_full(
 
 pub struct ApiServer {
     port: u16,
-    registry: Arc<PluginRegistry>,
-    supervisor: Arc<PluginSupervisor>,
+    manager: Arc<PluginManager>,
     jwt_validator: Option<Arc<JwtValidator>>,
     ws_router_tx: Option<mpsc::Sender<IncomingMessage>>,
     ws_disconnect_tx: Option<mpsc::Sender<u64>>,
@@ -96,16 +93,14 @@ pub struct ApiServer {
 impl ApiServer {
     pub fn new(
         port: u16,
-        registry: Arc<PluginRegistry>,
-        supervisor: Arc<PluginSupervisor>,
+        manager: Arc<PluginManager>,
         jwt_validator: Option<Arc<JwtValidator>>,
         ws_router_tx: Option<mpsc::Sender<IncomingMessage>>,
         ws_disconnect_tx: Option<mpsc::Sender<u64>>,
     ) -> Self {
         Self {
             port,
-            registry,
-            supervisor,
+            manager,
             jwt_validator,
             ws_router_tx,
             ws_disconnect_tx,
@@ -114,8 +109,7 @@ impl ApiServer {
 
     pub async fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
         let app = create_router_full(
-            Arc::clone(&self.registry),
-            Arc::clone(&self.supervisor),
+            Arc::clone(&self.manager),
             self.jwt_validator.clone(),
             self.ws_router_tx.clone(),
             self.ws_disconnect_tx.clone(),

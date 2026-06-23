@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::plugins::registry::PluginRegistry;
+use crate::plugins::registry::{PluginEntry, PluginRegistry};
 use crate::plugins::supervisor::{PluginConfig, PluginProcess, PluginSupervisor};
 use crate::utils::errors::VeyronError;
 
@@ -16,24 +16,34 @@ impl PluginManager {
         Self { supervisor, registry }
     }
 
+    pub fn list(&self) -> Vec<PluginEntry> {
+        self.registry.list()
+    }
+
+    pub fn get(&self, plugin_id: &str) -> Option<PluginEntry> {
+        self.registry.get(plugin_id)
+    }
+
     pub async fn start(&self, config: PluginConfig) -> Result<PluginProcess, VeyronError> {
         self.supervisor.spawn_plugin(config).await
     }
 
+    /// Stops the supervised OS process (best-effort) and removes the IPC registration.
     pub async fn stop(&self, plugin_id: &str) -> Result<(), VeyronError> {
-        self.supervisor.stop_plugin(plugin_id).await
+        let _ = self.supervisor.stop_plugin(plugin_id).await;
+        self.registry.unregister(plugin_id);
+        Ok(())
     }
 
     pub async fn restart(&self, plugin_id: &str) -> Result<(), VeyronError> {
         self.supervisor.restart_plugin(plugin_id).await
     }
 
-    /// True if the plugin has a supervised OS process.
     pub fn is_supervised(&self, plugin_id: &str) -> bool {
         self.supervisor.is_running(plugin_id)
     }
 
-    /// True if the plugin is registered on the IPC socket.
+    #[allow(dead_code)]
     pub fn is_connected(&self, plugin_id: &str) -> bool {
         self.registry.get(plugin_id).is_some()
     }

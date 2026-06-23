@@ -1,4 +1,5 @@
-use crate::plugins::supervisor::{PluginConfig, PluginSupervisor, RestartPolicy};
+use crate::plugins::manager::PluginManager;
+use crate::plugins::supervisor::{PluginConfig, RestartPolicy};
 use crate::utils::config::PluginDef;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -10,7 +11,7 @@ impl PluginLoader {
     /// Spawn all plugins declared in `config.yaml` under the `plugins:` key.
     /// Failures are logged and skipped — a bad binary path won't prevent the
     /// kernel from serving other plugins.
-    pub async fn load_all(defs: &[PluginDef], supervisor: &Arc<PluginSupervisor>) {
+    pub async fn load_all(defs: &[PluginDef], manager: &Arc<PluginManager>) {
         if defs.is_empty() {
             return;
         }
@@ -31,7 +32,7 @@ impl PluginLoader {
                 max_restarts: def.max_restarts,
                 sandbox: def.sandbox,
             };
-            match supervisor.spawn_plugin(config).await {
+            match manager.start(config).await {
                 Ok(proc) => info!(id = %def.id, pid = proc.pid, "plugin spawned"),
                 Err(e) => warn!(id = %def.id, error = %e, "failed to spawn plugin — skipping"),
             }

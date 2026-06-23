@@ -80,7 +80,7 @@ async fn magic_mismatch_returns_error() {
 
 #[tokio::test]
 async fn crc32_mismatch_returns_error() {
-    let (mut writer, mut reader) = make_pair().await;
+    let (mut writer, _reader) = make_pair().await;
 
     // write a valid-looking frame but corrupt the CRC field
     let payload = b"data";

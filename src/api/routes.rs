@@ -7,12 +7,10 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::auth::jwt::JwtValidator;
-use crate::plugins::registry::PluginRegistry;
-use crate::plugins::supervisor::PluginSupervisor;
+use crate::plugins::manager::PluginManager;
 
 pub struct AppState {
-    pub registry: Arc<PluginRegistry>,
-    pub supervisor: Arc<PluginSupervisor>,
+    pub manager: Arc<PluginManager>,
     pub jwt_validator: Option<Arc<JwtValidator>>,
 }
 
@@ -26,7 +24,7 @@ pub struct PluginInfo {
 
 pub async fn list_plugins(State(state): State<Arc<AppState>>) -> Json<Vec<PluginInfo>> {
     let plugins = state
-        .registry
+        .manager
         .list()
         .into_iter()
         .map(|e| PluginInfo {
@@ -44,7 +42,7 @@ pub async fn get_plugin(
     Path(id): Path<String>,
 ) -> Result<Json<PluginInfo>, StatusCode> {
     state
-        .registry
+        .manager
         .get(&id)
         .map(|e| {
             Json(PluginInfo {
@@ -58,10 +56,10 @@ pub async fn get_plugin(
 }
 
 pub async fn stop_plugin(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> StatusCode {
-    if state.registry.get(&id).is_none() {
+    if state.manager.get(&id).is_none() {
         return StatusCode::NOT_FOUND;
     }
-    state.registry.unregister(&id);
+    let _ = state.manager.stop(&id).await;
     StatusCode::OK
 }
 
@@ -69,12 +67,11 @@ pub async fn restart_plugin(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> StatusCode {
-    if state.registry.get(&id).is_none() {
+    if state.manager.get(&id).is_none() {
         return StatusCode::NOT_FOUND;
     }
-    match state.supervisor.restart_plugin(&id).await {
+    match state.manager.restart(&id).await {
         Ok(()) => StatusCode::ACCEPTED,
-        // Plugin not in supervisor entries (connected on its own, not spawned)
         Err(_) => StatusCode::UNPROCESSABLE_ENTITY,
     }
 }
@@ -89,9 +86,9 @@ pub async fn get_plugin_logs(
     Path(id): Path<String>,
     Query(q): Query<LogsQuery>,
 ) -> Result<Json<Vec<String>>, StatusCode> {
-    if state.registry.get(&id).is_none() && !state.supervisor.is_running(&id) {
+    if state.manager.get(&id).is_none() && !state.manager.is_supervised(&id) {
         return Err(StatusCode::NOT_FOUND);
     }
     let n = q.lines.unwrap_or(100);
-    Ok(Json(state.supervisor.get_logs(&id, n).await))
+    Ok(Json(state.manager.logs(&id, n).await))
 }

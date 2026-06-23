@@ -6,6 +6,7 @@ use tower::ServiceExt;
 use veyron::api::server::create_router;
 use veyron::auth::jwt::{create_test_token, JwtValidator};
 use veyron::ipc::framing::Frame;
+use veyron::plugins::manager::PluginManager;
 use veyron::plugins::registry::PluginRegistry;
 use veyron::plugins::supervisor::PluginSupervisor;
 use veyron::proto::veyron::PluginManifest;
@@ -16,6 +17,13 @@ fn make_registry() -> Arc<PluginRegistry> {
 
 fn make_supervisor() -> Arc<PluginSupervisor> {
     Arc::new(PluginSupervisor::new("/tmp/veyron_test.sock"))
+}
+
+fn make_manager(
+    registry: Arc<PluginRegistry>,
+    supervisor: Arc<PluginSupervisor>,
+) -> Arc<PluginManager> {
+    Arc::new(PluginManager::new(supervisor, registry))
 }
 
 fn register(registry: &PluginRegistry, plugin_id: &str, conn_id: u64) {
@@ -39,7 +47,7 @@ async fn body_string(body: axum::body::Body) -> String {
 
 #[tokio::test]
 async fn health_returns_ok() {
-    let app = create_router(make_registry(), make_supervisor(), None);
+    let app = create_router(make_manager(make_registry(), make_supervisor()), None);
     let response = app
         .oneshot(
             Request::builder()
@@ -54,7 +62,7 @@ async fn health_returns_ok() {
 
 #[tokio::test]
 async fn plugins_returns_empty_array_when_no_plugins() {
-    let app = create_router(make_registry(), make_supervisor(), None);
+    let app = create_router(make_manager(make_registry(), make_supervisor()), None);
     let response = app
         .oneshot(
             Request::builder()
@@ -75,7 +83,7 @@ async fn plugins_returns_registered_plugins() {
     register(&registry, "weather", 1);
     register(&registry, "timer", 2);
 
-    let app = create_router(registry, make_supervisor(), None);
+    let app = create_router(make_manager(registry, make_supervisor()), None);
     let response = app
         .oneshot(
             Request::builder()
@@ -96,7 +104,7 @@ async fn get_plugin_by_id_returns_plugin() {
     let registry = make_registry();
     register(&registry, "echo", 1);
 
-    let app = create_router(registry, make_supervisor(), None);
+    let app = create_router(make_manager(registry, make_supervisor()), None);
     let response = app
         .oneshot(
             Request::builder()
@@ -113,7 +121,7 @@ async fn get_plugin_by_id_returns_plugin() {
 
 #[tokio::test]
 async fn get_plugin_by_id_returns_404_for_unknown() {
-    let app = create_router(make_registry(), make_supervisor(), None);
+    let app = create_router(make_manager(make_registry(), make_supervisor()), None);
     let response = app
         .oneshot(
             Request::builder()
@@ -132,7 +140,10 @@ async fn stop_plugin_returns_200_and_unregisters() {
     register(&registry, "stoppable", 1);
     assert!(registry.get("stoppable").is_some());
 
-    let app = create_router(Arc::clone(&registry), make_supervisor(), None);
+    let app = create_router(
+        make_manager(Arc::clone(&registry), make_supervisor()),
+        None,
+    );
     let response = app
         .oneshot(
             Request::builder()
@@ -152,7 +163,7 @@ async fn stop_plugin_returns_200_and_unregisters() {
 
 #[tokio::test]
 async fn stop_nonexistent_plugin_returns_404() {
-    let app = create_router(make_registry(), make_supervisor(), None);
+    let app = create_router(make_manager(make_registry(), make_supervisor()), None);
     let response = app
         .oneshot(
             Request::builder()
@@ -168,7 +179,7 @@ async fn stop_nonexistent_plugin_returns_404() {
 
 #[tokio::test]
 async fn restart_nonexistent_plugin_returns_404() {
-    let app = create_router(make_registry(), make_supervisor(), None);
+    let app = create_router(make_manager(make_registry(), make_supervisor()), None);
     let response = app
         .oneshot(
             Request::builder()
@@ -187,7 +198,10 @@ async fn restart_plugin_not_in_supervisor_returns_422() {
     let registry = make_registry();
     register(&registry, "self-connected", 1);
 
-    let app = create_router(Arc::clone(&registry), make_supervisor(), None);
+    let app = create_router(
+        make_manager(Arc::clone(&registry), make_supervisor()),
+        None,
+    );
     let response = app
         .oneshot(
             Request::builder()
@@ -209,7 +223,10 @@ async fn post_endpoint_requires_auth_when_jwt_secret_set() {
     let registry = make_registry();
     register(&registry, "guarded", 1);
 
-    let app = create_router(Arc::clone(&registry), make_supervisor(), Some(validator.clone()));
+    let app = create_router(
+        make_manager(Arc::clone(&registry), make_supervisor()),
+        Some(validator.clone()),
+    );
 
     // No token → 401
     let res = app
@@ -229,7 +246,7 @@ async fn post_endpoint_requires_auth_when_jwt_secret_set() {
     let token = create_test_token("admin", vec![], SECRET, 3600);
     let registry2 = make_registry();
     register(&registry2, "guarded", 1);
-    let app2 = create_router(registry2, make_supervisor(), Some(validator));
+    let app2 = create_router(make_manager(registry2, make_supervisor()), Some(validator));
     let res2 = app2
         .oneshot(
             Request::builder()
@@ -248,7 +265,10 @@ async fn post_endpoint_requires_auth_when_jwt_secret_set() {
 async fn read_only_endpoints_open_without_token() {
     const SECRET: &[u8] = b"test-secret";
     let validator = Arc::new(JwtValidator::new(SECRET));
-    let app = create_router(make_registry(), make_supervisor(), Some(validator));
+    let app = create_router(
+        make_manager(make_registry(), make_supervisor()),
+        Some(validator),
+    );
 
     let res = app
         .oneshot(

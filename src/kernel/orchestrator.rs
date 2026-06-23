@@ -16,6 +16,7 @@ use crate::ipc::framing::Frame;
 use crate::ipc::protocol::MessageRouter;
 use crate::ipc::server::UdsServer;
 use crate::plugins::loader::PluginLoader;
+use crate::plugins::manager::PluginManager;
 use crate::plugins::registry::PluginRegistry;
 use crate::plugins::supervisor::PluginSupervisor;
 use crate::proto::veyron::{envelope, Envelope, Event, PluginShutdown};
@@ -147,12 +148,11 @@ impl Kernel {
                 .await
         });
 
-        PluginLoader::load_all(&config.plugins, &supervisor).await;
-
+        let manager = Arc::new(PluginManager::new(supervisor, Arc::clone(&registry)));
+        PluginLoader::load_all(&config.plugins, &manager).await;
         let api = ApiServer::new(
             config.port,
-            Arc::clone(&registry),
-            supervisor,
+            manager,
             jwt_validator.clone(),
             Some(ws_router_tx),
             Some(ws_disconnect_tx),
