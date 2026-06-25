@@ -1,15 +1,15 @@
 use crate::auth::jwt::JwtValidator;
-use crate::auth::permissions::{action_to_permission, check_permission};
+use crate::auth::permissions::{action_to_permission, check_ipc_send, check_permission};
 use crate::events::bus::EventBus;
 use crate::events::store::EventStore;
 use crate::ipc::framing::{target_as_str, Frame};
 use crate::ipc::messages::IncomingMessage;
+use crate::kernel::commands::CommandHandler;
 use crate::plugins::registry::PluginRegistry;
 use crate::proto::veyron::{
-    envelope, ActionResponse, ActionStatus, CommandStatus, Envelope, ErrorCode,
+    envelope, ActionResponse, ActionStatus, Envelope, ErrorCode,
     ErrorMessage, Event, KernelCommandAck, PluginRegisterAck, Pong,
 };
-use crate::utils::config::load_config;
 use metrics::{counter, histogram};
 use prost::Message;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -270,50 +270,15 @@ impl MessageRouter {
             }
 
             Some(envelope::Payload::KernelCommand(cmd)) => {
-                let (status, data_json, error) = match cmd.command.as_str() {
-                    "health_check" => {
-                        let uptime_secs = start_time.elapsed().as_secs();
-                        let plugin_count = registry.list().len();
-                        let data = format!(
-                            r#"{{"uptime_secs":{},"plugin_count":{}}}"#,
-                            uptime_secs, plugin_count
-                        );
-                        (CommandStatus::CommandOk, data.into_bytes(), String::new())
-                    }
-                    "reload_config" => match config_path {
-                        Some(path) => match load_config(path) {
-                            Ok(cfg) => {
-                                let data = format!(
-                                    r#"{{"log_level":"{}","port":{}}}"#,
-                                    cfg.log_level, cfg.port
-                                );
-                                (CommandStatus::CommandOk, data.into_bytes(), String::new())
-                            }
-                            Err(e) => (
-                                CommandStatus::CommandError,
-                                vec![],
-                                format!("config reload failed: {e}"),
-                            ),
-                        },
-                        None => (
-                            CommandStatus::CommandError,
-                            vec![],
-                            "no config path configured".to_string(),
-                        ),
-                    },
-                    _ => (
-                        CommandStatus::CommandUnknown,
-                        vec![],
-                        format!("unknown command: {}", cmd.command),
-                    ),
-                };
+                let outcome =
+                    CommandHandler::dispatch(&cmd.command, registry, start_time, config_path);
 
                 let ack = Envelope {
                     payload: Some(envelope::Payload::KernelCommandAck(KernelCommandAck {
                         command_id: cmd.command_id,
-                        status: status as i32,
-                        data_json,
-                        error,
+                        status: outcome.status as i32,
+                        data_json: outcome.data_json,
+                        error: outcome.error,
                     })),
                     ..Default::default()
                 };
@@ -333,8 +298,25 @@ impl MessageRouter {
     }
 
     async fn forward(msg: IncomingMessage, plugin_id: &str, registry: &PluginRegistry) {
-        if !registry.is_registered(msg.conn_id) {
-            Self::send_error(&msg.write_tx, ErrorCode::ErrNotRegistered, "not registered").await;
+        let sender_id = match registry.get_by_conn_id(msg.conn_id) {
+            Some(entry) => entry.plugin_id.clone(),
+            None => {
+                Self::send_error(&msg.write_tx, ErrorCode::ErrNotRegistered, "not registered")
+                    .await;
+                return;
+            }
+        };
+
+        // Default-deny peer-to-peer IPC: sender must hold PERMISSION_IPC_SEND.
+        if check_ipc_send(registry, &sender_id).is_err() {
+            warn!(sender = %sender_id, target = %plugin_id, "ipc send denied");
+            counter!("ipc_send_denied_total").increment(1);
+            Self::send_error(
+                &msg.write_tx,
+                ErrorCode::ErrUnknown,
+                "PERMISSION_IPC_SEND required",
+            )
+            .await;
             return;
         }
 

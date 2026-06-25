@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package veyron;
 
-// v 1.0
+// v 1.1  (added PERMISSION_IPC_SEND = 10)
 
 // ═══════════════════════════════════════════
 // КОРНЕВОЙ КОНВЕРТ — каждое сообщение в этом
@@ -90,6 +90,7 @@ enum PermissionType {
   reserved 7;
   reserved "PERMISSION_AI";
   PERMISSION_BROWSER    = 9;  // управление браузером
+  PERMISSION_IPC_SEND   = 10; // отправка сообщений другим плагинам (peer-to-peer)
 }
 
 

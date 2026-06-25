@@ -1050,3 +1050,41 @@ After Phase 1.1, the critical path continues:
 | `vyn plugin install/list/remove` CLI | User-facing plugin management | 2 days |
 
 Phase 1.2 is estimated at 3-4 weeks and builds directly on Phase 1.1 infrastructure.
+
+---
+
+## 11. Phase 1.3 Targets (Hardening)
+
+Concrete, scoped deliverables for the next hardening pass. Each maps to a known gap
+in the post-Phase-1.1 audit (`AUDIT.md`). Status reflects work completed to date.
+
+| ID | Target | Rationale | Status | Effort |
+|----|--------|-----------|--------|--------|
+| T-01 | Move kernel-command semantics out of the IPC router | Transport layer must not hold business logic (`KernelCommand` dispatch) | ✅ Done — `src/kernel/commands.rs` | — |
+| T-02 | Default-deny peer-to-peer IPC via `PERMISSION_IPC_SEND` | Any registered plugin could unicast to any other | ✅ Done — gated in `forward()` | — |
+| T-03 | Permission-check broadcast (`target = "*"`) | Broadcast path is still unchecked | ☐ Open | 1 day |
+| T-04 | Per-plugin IPC allowlist in manifest | Coarse `PERMISSION_IPC_SEND` allows any target; needs per-target scoping | ☐ Open | 2 days |
+| T-05 | Audit logging for security events | Permission denials, CRC errors, oversized frames are unlogged | ◐ Partial — denials now counted/logged | 1-2 days |
+| T-06 | Cryptographic message integrity (MAC) | CRC-32 detects corruption, not tampering | ☐ Open | 3 days |
+| T-07 | Fuzz + soak harness | No fuzzing of frame/payload; no 24h soak | ☐ Open | 3 days |
+
+---
+
+## 12. Known Vulnerabilities
+
+Tracked security weaknesses. Severity is qualitative (impact × exploitability in the
+intended single-host, trusted-process deployment). "Fixed" entries retained for audit trail.
+
+| ID | Severity | Vulnerability | Vector | Status / Mitigation |
+|----|----------|---------------|--------|---------------------|
+| VULN-001 | High | Unauthenticated peer-to-peer IPC | Any registered plugin unicasts arbitrary `Envelope` to any other plugin | ✅ Fixed — default-deny, requires `PERMISSION_IPC_SEND` (`forward()`) |
+| VULN-002 | Medium | Unchecked broadcast | `target = "*"` reaches all plugins with no permission check | ⚠ Open — see T-03 |
+| VULN-003 | Medium | No socket-level authentication | Any local process can connect to UDS and claim any `plugin_id` | ◐ Mitigated by JWT when `jwt_secret` set; default config has none |
+| VULN-004 | Medium | First-claim plugin-ID squatting | Attacker registers `admin` before the real plugin; legit plugin then rejected | ⚠ Open — needs identity binding (JWT `sub` enforced only when auth on) |
+| VULN-005 | Low | Non-cryptographic integrity | CRC-32 is forgeable by a socket-level attacker | ⚠ Open — see T-06 |
+| VULN-006 | Low | UDS file permissions vs umask | Socket mode depends on umask if explicit chmod regressed | ✅ Mitigated — `0o600` set after bind (`server.rs`) |
+| VULN-007 | Low | Error-spam amplification | Malformed frames return errors without closing the connection; plugin can flood | ⚠ Open — needs per-conn error rate limit |
+| VULN-008 | Info | HTTP control plane unauthenticated by default | REST endpoints require JWT only when configured | ◐ Mitigated — bound to `127.0.0.1`; enable `jwt_secret` for shared hosts |
+
+**Reporting:** new findings get the next `VULN-NNN` id, a severity, and a row here before
+remediation begins. Fixed rows stay for traceability.

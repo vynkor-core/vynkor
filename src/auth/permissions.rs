@@ -21,6 +21,12 @@ pub fn check_permission(
     }
 }
 
+/// Gate peer-to-peer IPC: a plugin may only unicast to another plugin if it
+/// declared `PERMISSION_IPC_SEND`. Default-deny — undeclared senders are rejected.
+pub fn check_ipc_send(registry: &PluginRegistry, plugin_id: &str) -> Result<(), VeyronError> {
+    check_permission(registry, plugin_id, PermissionType::PermissionIpcSend)
+}
+
 pub fn action_to_permission(action: &str) -> Option<PermissionType> {
     match action {
         "http_get" | "http_post" | "http_put" | "http_delete" | "http_patch" => {

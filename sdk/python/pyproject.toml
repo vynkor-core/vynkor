@@ -8,7 +8,8 @@ version = "0.1.0"
 description = "Veyron plugin SDK for Python"
 requires-python = ">=3.9"
 dependencies = [
-    "protobuf>=4.0",
+    # pb2 regenerated with protoc 35.1 (gencode 7.35.1); runtime major must match.
+    "protobuf>=7.35.1",
 ]
 
 [project.optional-dependencies]

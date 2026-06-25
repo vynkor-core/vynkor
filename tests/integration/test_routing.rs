@@ -17,8 +17,15 @@ async fn plugin_a_sends_to_plugin_b_and_b_receives() {
         .await
         .unwrap();
 
+    // plugin_a needs PERMISSION_IPC_SEND to unicast to peers (default-deny)
     plugin_a
-        .register("plugin_a", PluginManifest::default())
+        .register(
+            "plugin_a",
+            PluginManifest {
+                permissions: vec!["PERMISSION_IPC_SEND".to_string()],
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
     plugin_b

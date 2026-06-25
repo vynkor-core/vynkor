@@ -18,6 +18,13 @@ fn dummy_manifest() -> PluginManifest {
     PluginManifest::default()
 }
 
+fn ipc_manifest() -> PluginManifest {
+    PluginManifest {
+        permissions: vec!["PERMISSION_IPC_SEND".to_string()],
+        ..Default::default()
+    }
+}
+
 fn make_write_pair() -> (mpsc::Sender<Frame>, mpsc::Receiver<Frame>) {
     mpsc::channel::<Frame>(16)
 }
@@ -130,15 +137,10 @@ async fn router_forwards_frame_to_target_plugin() {
     reg.register("plugin_b".to_string(), 2, dummy_manifest(), b_write_tx)
         .unwrap();
 
-    // plugin A (conn_id=1) is also registered so router allows forwarding
+    // plugin A (conn_id=1) holds PERMISSION_IPC_SEND so router allows forwarding
     let (a_write_tx, _a_write_rx) = make_write_pair();
-    reg.register(
-        "plugin_a".to_string(),
-        1,
-        dummy_manifest(),
-        a_write_tx.clone(),
-    )
-    .unwrap();
+    reg.register("plugin_a".to_string(), 1, ipc_manifest(), a_write_tx.clone())
+        .unwrap();
 
     let router_tx = spawn_router(Arc::clone(&reg), bus);
 
@@ -153,6 +155,39 @@ async fn router_forwards_frame_to_target_plugin() {
     let received = recv_frame(&mut b_write_rx).await;
     assert_eq!(received.payload, raw_payload);
     assert_eq!(target_as_str(&received), "plugin_b");
+}
+
+#[tokio::test]
+async fn router_denies_forward_without_ipc_permission() {
+    let reg = Arc::new(PluginRegistry::new());
+    let bus = Arc::new(EventBus::new());
+
+    // target plugin B registered
+    let (b_write_tx, mut b_write_rx) = make_write_pair();
+    reg.register("plugin_b".to_string(), 2, dummy_manifest(), b_write_tx)
+        .unwrap();
+
+    // sender plugin A lacks PERMISSION_IPC_SEND (default-deny)
+    let (a_write_tx, mut a_write_rx) = make_write_pair();
+    reg.register("plugin_a".to_string(), 1, dummy_manifest(), a_write_tx.clone())
+        .unwrap();
+
+    let router_tx = spawn_router(Arc::clone(&reg), bus);
+
+    let frame = plug_frame("plugin_b", b"blocked".to_vec());
+    router_tx
+        .send(incoming(1, frame, a_write_tx))
+        .await
+        .unwrap();
+
+    // sender gets an error frame; target receives nothing
+    let err = recv_frame(&mut a_write_rx).await;
+    let env = Envelope::decode(err.payload.as_slice()).unwrap();
+    assert!(matches!(
+        env.payload,
+        Some(envelope::Payload::Error(_))
+    ));
+    assert!(b_write_rx.try_recv().is_err());
 }
 
 #[tokio::test]
