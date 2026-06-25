@@ -1062,7 +1062,7 @@ in the post-Phase-1.1 audit (`AUDIT.md`). Status reflects work completed to date
 |----|--------|-----------|--------|--------|
 | T-01 | Move kernel-command semantics out of the IPC router | Transport layer must not hold business logic (`KernelCommand` dispatch) | ✅ Done — `src/kernel/commands.rs` | — |
 | T-02 | Default-deny peer-to-peer IPC via `PERMISSION_IPC_SEND` | Any registered plugin could unicast to any other | ✅ Done — gated in `forward()` | — |
-| T-03 | Permission-check broadcast (`target = "*"`) | Broadcast path is still unchecked | ☐ Open | 1 day |
+| T-03 | Permission-check broadcast (`target = "*"`) | Broadcast path was unchecked | ✅ Done — gated in `broadcast()` | — |
 | T-04 | Per-plugin IPC allowlist in manifest | Coarse `PERMISSION_IPC_SEND` allows any target; needs per-target scoping | ☐ Open | 2 days |
 | T-05 | Audit logging for security events | Permission denials, CRC errors, oversized frames are unlogged | ◐ Partial — denials now counted/logged | 1-2 days |
 | T-06 | Cryptographic message integrity (MAC) | CRC-32 detects corruption, not tampering | ☐ Open | 3 days |
@@ -1078,7 +1078,7 @@ intended single-host, trusted-process deployment). "Fixed" entries retained for 
 | ID | Severity | Vulnerability | Vector | Status / Mitigation |
 |----|----------|---------------|--------|---------------------|
 | VULN-001 | High | Unauthenticated peer-to-peer IPC | Any registered plugin unicasts arbitrary `Envelope` to any other plugin | ✅ Fixed — default-deny, requires `PERMISSION_IPC_SEND` (`forward()`) |
-| VULN-002 | Medium | Unchecked broadcast | `target = "*"` reaches all plugins with no permission check | ⚠ Open — see T-03 |
+| VULN-002 | Medium | Unchecked broadcast | `target = "*"` reaches all plugins with no permission check | ✅ Fixed — default-deny, requires `PERMISSION_IPC_SEND` (`broadcast()`) |
 | VULN-003 | Medium | No socket-level authentication | Any local process can connect to UDS and claim any `plugin_id` | ◐ Mitigated by JWT when `jwt_secret` set; default config has none |
 | VULN-004 | Medium | First-claim plugin-ID squatting | Attacker registers `admin` before the real plugin; legit plugin then rejected | ⚠ Open — needs identity binding (JWT `sub` enforced only when auth on) |
 | VULN-005 | Low | Non-cryptographic integrity | CRC-32 is forgeable by a socket-level attacker | ⚠ Open — see T-06 |

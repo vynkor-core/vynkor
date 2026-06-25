@@ -332,6 +332,28 @@ impl MessageRouter {
     }
 
     async fn broadcast(msg: IncomingMessage, registry: &PluginRegistry) {
+        let sender_id = match registry.get_by_conn_id(msg.conn_id) {
+            Some(entry) => entry.plugin_id.clone(),
+            None => {
+                Self::send_error(&msg.write_tx, ErrorCode::ErrNotRegistered, "not registered")
+                    .await;
+                return;
+            }
+        };
+
+        // Default-deny: broadcasting is peer-to-peer fan-out — same gate as unicast.
+        if check_ipc_send(registry, &sender_id).is_err() {
+            warn!(sender = %sender_id, "broadcast denied");
+            counter!("ipc_send_denied_total").increment(1);
+            Self::send_error(
+                &msg.write_tx,
+                ErrorCode::ErrUnknown,
+                "PERMISSION_IPC_SEND required",
+            )
+            .await;
+            return;
+        }
+
         let entries = registry.list();
         for entry in entries {
             if entry.conn_id == msg.conn_id {
