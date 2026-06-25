@@ -17,12 +17,8 @@ use std::process::Command;
 use tracing::{info, warn};
 use utils::config::{load_config, Config};
 
-const DEFAULT_CONFIG: &str = "config.yaml";
-
 #[tokio::main]
 async fn main() -> Result<()> {
-    utils::logging::init();
-
     let cli = Cli::parse();
 
     match cli.command {
@@ -32,16 +28,23 @@ async fn main() -> Result<()> {
             config,
             debug,
         } => {
-            let mut cfg = load_config(&config).unwrap_or_else(|e| {
-                warn!("failed to load config: {}, using defaults", e);
-                Config::default()
-            });
+            // Defer the load-failure warning until after logging is configured,
+            // so it honours the resolved log level.
+            let (mut cfg, load_err) = match load_config(&config) {
+                Ok(c) => (c, None),
+                Err(e) => (Config::default(), Some(e.to_string())),
+            };
 
             if let Some(p) = port {
                 cfg.port = p;
             }
             if debug {
                 cfg.log_level = "debug".to_string();
+            }
+
+            utils::logging::init(&cfg.log_level);
+            if let Some(e) = load_err {
+                warn!("failed to load config '{}': {}, using defaults", config, e);
             }
 
             if is_running(&cfg.pid_file)? {
@@ -53,22 +56,24 @@ async fn main() -> Result<()> {
             if foreground {
                 run_foreground(cfg).await?;
             } else {
-                daemonize_and_run(cfg)?;
+                daemonize_and_run(&cfg, &config, debug)?;
             }
         }
-        Commands::Stop => {
-            let cfg = load_config(DEFAULT_CONFIG).unwrap_or_default();
+        Commands::Stop { config } => {
+            let cfg = load_config(&config).unwrap_or_default();
+            utils::logging::init(&cfg.log_level);
             stop_kernel(&cfg.pid_file)?;
         }
-        Commands::Restart => {
-            let cfg = load_config(DEFAULT_CONFIG).unwrap_or_default();
+        Commands::Restart { config, debug } => {
+            let cfg = load_config(&config).unwrap_or_default();
+            utils::logging::init(&cfg.log_level);
             stop_kernel(&cfg.pid_file)?;
             std::thread::sleep(std::time::Duration::from_millis(500));
-            let cfg = load_config(DEFAULT_CONFIG).unwrap_or_default();
-            daemonize_and_run(cfg)?;
+            daemonize_and_run(&cfg, &config, debug)?;
         }
-        Commands::Status => {
-            let cfg = load_config(DEFAULT_CONFIG).unwrap_or_default();
+        Commands::Status { config } => {
+            let cfg = load_config(&config).unwrap_or_default();
+            utils::logging::init(&cfg.log_level);
             if is_running(&cfg.pid_file)? {
                 let pid = read_pid(&cfg.pid_file)?;
                 println!("veyron is running (PID: {})", pid);
@@ -76,8 +81,9 @@ async fn main() -> Result<()> {
                 println!("veyron is not running");
             }
         }
-        Commands::Logs { lines } => {
-            let cfg = load_config(DEFAULT_CONFIG).unwrap_or_default();
+        Commands::Logs { lines, config } => {
+            let cfg = load_config(&config).unwrap_or_default();
+            utils::logging::init(&cfg.log_level);
             show_logs(&cfg.log_file, lines)?;
         }
     }
@@ -140,15 +146,20 @@ fn stop_kernel(pid_file: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-fn daemonize_and_run(cfg: Config) -> Result<()> {
+fn daemonize_and_run(cfg: &Config, config_path: &str, debug: bool) -> Result<()> {
     let current_exe = std::env::current_exe()?;
-    let child = Command::new(&current_exe)
+    let mut command = Command::new(&current_exe);
+    command
         .arg("start")
         .arg("--foreground")
         .arg("--config")
-        .arg(DEFAULT_CONFIG)
+        .arg(config_path)
         .arg("--port")
-        .arg(cfg.port.to_string())
+        .arg(cfg.port.to_string());
+    if debug {
+        command.arg("--debug");
+    }
+    let child = command
         .stdout(std::fs::File::create(&cfg.log_file)?)
         .stderr(std::fs::File::create(&cfg.log_file)?)
         .spawn()?;

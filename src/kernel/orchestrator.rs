@@ -156,6 +156,7 @@ impl Kernel {
             jwt_validator.clone(),
             Some(ws_router_tx),
             Some(ws_disconnect_tx),
+            kernel_start,
         );
         tokio::spawn(async move {
             if let Err(e) = api.run().await {

@@ -8,14 +8,14 @@ use axum::{
 };
 use std::net::SocketAddr;
 use std::sync::{atomic::AtomicU64, Arc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tower_http::timeout::TimeoutLayer;
 use tracing::info;
 
 use crate::api::middleware::auth_middleware;
 use crate::api::routes::{
-    get_plugin, get_plugin_logs, list_plugins, restart_plugin, stop_plugin, AppState,
+    get_plugin, get_plugin_logs, health_check, list_plugins, restart_plugin, stop_plugin, AppState,
 };
 use crate::api::websocket::{ws_handler, WsGateway};
 use crate::auth::jwt::JwtValidator;
@@ -28,7 +28,7 @@ pub fn create_router(
     manager: Arc<PluginManager>,
     jwt_validator: Option<Arc<JwtValidator>>,
 ) -> Router {
-    create_router_full(manager, jwt_validator, None, None)
+    create_router_full(manager, jwt_validator, None, None, Instant::now())
 }
 
 pub fn create_router_full(
@@ -36,10 +36,12 @@ pub fn create_router_full(
     jwt_validator: Option<Arc<JwtValidator>>,
     ws_router_tx: Option<mpsc::Sender<IncomingMessage>>,
     ws_disconnect_tx: Option<mpsc::Sender<u64>>,
+    started_at: Instant,
 ) -> Router {
     let state = Arc::new(AppState {
         manager,
         jwt_validator: jwt_validator.clone(),
+        started_at,
     });
 
     let public = Router::new()
@@ -88,6 +90,7 @@ pub struct ApiServer {
     jwt_validator: Option<Arc<JwtValidator>>,
     ws_router_tx: Option<mpsc::Sender<IncomingMessage>>,
     ws_disconnect_tx: Option<mpsc::Sender<u64>>,
+    started_at: Instant,
 }
 
 impl ApiServer {
@@ -97,6 +100,7 @@ impl ApiServer {
         jwt_validator: Option<Arc<JwtValidator>>,
         ws_router_tx: Option<mpsc::Sender<IncomingMessage>>,
         ws_disconnect_tx: Option<mpsc::Sender<u64>>,
+        started_at: Instant,
     ) -> Self {
         Self {
             port,
@@ -104,6 +108,7 @@ impl ApiServer {
             jwt_validator,
             ws_router_tx,
             ws_disconnect_tx,
+            started_at,
         }
     }
 
@@ -113,6 +118,7 @@ impl ApiServer {
             self.jwt_validator.clone(),
             self.ws_router_tx.clone(),
             self.ws_disconnect_tx.clone(),
+            self.started_at,
         );
         let addr = SocketAddr::from(([127, 0, 0, 1], self.port));
         info!("HTTP API: http://localhost:{}", self.port);
@@ -120,10 +126,6 @@ impl ApiServer {
         axum::serve(listener, app).await?;
         Ok(())
     }
-}
-
-async fn health_check() -> &'static str {
-    "{\"status\":\"ok\"}"
 }
 
 async fn get_metrics() -> impl IntoResponse {

@@ -24,11 +24,26 @@ pub enum Commands {
         debug: bool,
     },
 
-    Stop,
-    Restart,
-    Status,
+    Stop {
+        #[arg(short, long, default_value = "config.yaml")]
+        config: String,
+    },
+    Restart {
+        #[arg(short, long, default_value = "config.yaml")]
+        config: String,
+
+        #[arg(short, long)]
+        debug: bool,
+    },
+    Status {
+        #[arg(short, long, default_value = "config.yaml")]
+        config: String,
+    },
     Logs {
         #[arg(short, long, default_value = "20")]
         lines: usize,
+
+        #[arg(short, long, default_value = "config.yaml")]
+        config: String,
     },
 }

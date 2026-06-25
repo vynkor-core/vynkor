@@ -61,6 +61,34 @@ async fn health_returns_ok() {
 }
 
 #[tokio::test]
+async fn health_reports_status_version_and_plugin_count() {
+    let registry = make_registry();
+    register(&registry, "alpha", 1);
+    register(&registry, "beta", 2);
+
+    let app = create_router(make_manager(registry, make_supervisor()), None);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = body_string(response.into_body()).await;
+    assert!(body.contains("\"status\":\"ok\""), "body: {body}");
+    assert!(body.contains("\"plugins\":2"), "body: {body}");
+    assert!(
+        body.contains(&format!("\"version\":\"{}\"", env!("CARGO_PKG_VERSION"))),
+        "body: {body}"
+    );
+    assert!(body.contains("\"uptime_secs\":"), "body: {body}");
+}
+
+#[tokio::test]
 async fn plugins_returns_empty_array_when_no_plugins() {
     let app = create_router(make_manager(make_registry(), make_supervisor()), None);
     let response = app
