@@ -263,6 +263,75 @@ async fn router_denies_broadcast_without_ipc_permission() {
 }
 
 #[tokio::test]
+async fn router_throttles_connection_after_error_burst() {
+    let reg = Arc::new(PluginRegistry::new());
+    let bus = Arc::new(EventBus::new());
+    let router_tx = spawn_router(Arc::clone(&reg), bus);
+
+    // wide channel so all error responses buffer without blocking the router
+    let (tx, mut rx) = mpsc::channel::<Frame>(64);
+
+    // 16 malformed kernel frames (invalid protobuf) -> 16 error responses
+    for _ in 0..16 {
+        let frame = make_frame("kernel", vec![0xff, 0xff, 0xff, 0xff]);
+        router_tx
+            .send(incoming(1, frame, tx.clone()))
+            .await
+            .unwrap();
+    }
+    for _ in 0..16 {
+        let f = recv_frame(&mut rx).await;
+        let env = Envelope::decode(f.payload.as_slice()).unwrap();
+        assert!(matches!(env.payload, Some(envelope::Payload::Error(_))));
+    }
+
+    // 17th crosses the budget -> dropped, no response
+    let frame = make_frame("kernel", vec![0xff, 0xff, 0xff, 0xff]);
+    router_tx
+        .send(incoming(1, frame, tx.clone()))
+        .await
+        .unwrap();
+    let throttled = timeout(Duration::from_millis(200), rx.recv()).await;
+    assert!(
+        throttled.is_err(),
+        "throttled connection must receive no further responses"
+    );
+}
+
+#[tokio::test]
+async fn router_resets_error_budget_on_success() {
+    let reg = Arc::new(PluginRegistry::new());
+    let bus = Arc::new(EventBus::new());
+    reg.register(
+        "pinger".to_string(),
+        1,
+        dummy_manifest(),
+        make_write_pair().0,
+    )
+    .unwrap();
+    let router_tx = spawn_router(Arc::clone(&reg), bus);
+
+    let (tx, mut rx) = mpsc::channel::<Frame>(64);
+
+    // alternate: malformed (error) then valid ping (success resets budget) x many.
+    // never accrues to the throttle threshold, so every ping still gets a pong.
+    for _ in 0..30 {
+        let bad = make_frame("kernel", vec![0xff, 0xff, 0xff, 0xff]);
+        router_tx.send(incoming(1, bad, tx.clone())).await.unwrap();
+        let _err = recv_frame(&mut rx).await;
+
+        let ping = kernel_frame(Envelope {
+            payload: Some(envelope::Payload::Ping(Ping { timestamp: 1 })),
+            ..Default::default()
+        });
+        router_tx.send(incoming(1, ping, tx.clone())).await.unwrap();
+        let pong = recv_frame(&mut rx).await;
+        let env = Envelope::decode(pong.payload.as_slice()).unwrap();
+        assert!(matches!(env.payload, Some(envelope::Payload::Pong(_))));
+    }
+}
+
+#[tokio::test]
 async fn router_responds_to_ping_with_pong() {
     let reg = Arc::new(PluginRegistry::new());
     let bus = Arc::new(EventBus::new());

@@ -12,6 +12,7 @@ use crate::proto::veyron::{
 };
 use metrics::{counter, histogram};
 use prost::Message;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -20,6 +21,10 @@ use tokio::time::timeout;
 use tracing::{info, warn};
 
 static MSG_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Consecutive protocol errors from one connection before its messages are
+/// throttled (dropped without a response). Reset on any successful message.
+const MAX_CONN_ERRORS: u32 = 16;
 
 pub struct MessageRouter;
 
@@ -52,13 +57,26 @@ impl MessageRouter {
         config_path: Option<String>,
         event_store: Option<Arc<EventStore>>,
     ) {
+        // Per-connection protocol-error budget. A connection that produces a burst
+        // of malformed/denied/unhandled messages (which each generate an error
+        // response) gets throttled: further messages are dropped without a reply,
+        // capping the amplification a single misbehaving plugin can cause (VULN-007).
+        // A successful message resets the budget, so transient errors don't accrue.
+        let mut error_counts: HashMap<u64, u32> = HashMap::new();
+
         while let Some(msg) = rx.recv().await {
+            let conn_id = msg.conn_id;
             let target = {
                 let frame = &msg.frame;
                 target_as_str(frame).to_string()
             };
 
-            match target.as_str() {
+            if error_counts.get(&conn_id).copied().unwrap_or(0) >= MAX_CONN_ERRORS {
+                counter!("ipc_throttled_messages_total").increment(1);
+                continue;
+            }
+
+            let errored = match target.as_str() {
                 "kernel" => {
                     counter!("messages_routed_total", "routing" => "kernel").increment(1);
                     Self::handle_kernel_message(
@@ -70,16 +88,32 @@ impl MessageRouter {
                         config_path.as_deref(),
                         event_store.as_deref(),
                     )
-                    .await;
+                    .await
                 }
                 "*" => {
                     counter!("messages_routed_total", "routing" => "broadcast").increment(1);
-                    Self::broadcast(msg, &registry).await;
+                    Self::broadcast(msg, &registry).await
                 }
                 plugin_id => {
                     counter!("messages_routed_total", "routing" => "forward").increment(1);
-                    Self::forward(msg, plugin_id, &registry).await;
+                    Self::forward(msg, plugin_id, &registry).await
                 }
+            };
+
+            if errored {
+                let count = error_counts.entry(conn_id).or_insert(0);
+                *count += 1;
+                if *count == MAX_CONN_ERRORS {
+                    warn!(
+                        conn_id,
+                        threshold = MAX_CONN_ERRORS,
+                        "connection exceeded protocol-error budget; throttling further messages"
+                    );
+                    counter!("ipc_throttled_connections_total").increment(1);
+                }
+            } else {
+                // Well-behaved message — clear any accrued error budget.
+                error_counts.remove(&conn_id);
             }
         }
     }
@@ -92,7 +126,7 @@ impl MessageRouter {
         start_time: Instant,
         config_path: Option<&str>,
         event_store: Option<&EventStore>,
-    ) {
+    ) -> bool {
         let envelope = match Envelope::decode(msg.frame.payload.as_slice()) {
             Ok(e) => e,
             Err(_) => {
@@ -102,7 +136,7 @@ impl MessageRouter {
                     "decode failed",
                 )
                 .await;
-                return;
+                return true;
             }
         };
 
@@ -110,7 +144,7 @@ impl MessageRouter {
         let is_register = matches!(envelope.payload, Some(envelope::Payload::PluginRegister(_)));
         if !is_register && !registry.is_registered(msg.conn_id) {
             Self::send_error(&msg.write_tx, ErrorCode::ErrNotRegistered, "not registered").await;
-            return;
+            return true;
         }
 
         match envelope.payload {
@@ -128,7 +162,7 @@ impl MessageRouter {
                                     "token plugin_id mismatch",
                                 )
                                 .await;
-                                return;
+                                return true;
                             }
                             // Token permissions take precedence over manifest declaration
                             manifest.permissions = claims.permissions;
@@ -136,7 +170,7 @@ impl MessageRouter {
                         Err(e) => {
                             Self::send_register_reject(&msg.write_tx, &format!("auth failed: {e}"))
                                 .await;
-                            return;
+                            return true;
                         }
                     }
                 }
@@ -192,6 +226,7 @@ impl MessageRouter {
                         )
                         .await;
                 }
+                false
             }
 
             Some(envelope::Payload::Ping(ping)) => {
@@ -207,6 +242,7 @@ impl MessageRouter {
                     ..Default::default()
                 };
                 Self::send_envelope(&msg.write_tx, pong).await;
+                false
             }
 
             Some(envelope::Payload::Pong(_)) => {
@@ -214,18 +250,21 @@ impl MessageRouter {
                 if let Some(entry) = registry.get_by_conn_id(msg.conn_id) {
                     registry.record_pong(&entry.plugin_id);
                 }
+                false
             }
 
             Some(envelope::Payload::Subscribe(sub)) => {
                 if let Some(entry) = registry.get_by_conn_id(msg.conn_id) {
                     event_bus.subscribe(&entry.plugin_id, sub.event_types);
                 }
+                false
             }
 
             Some(envelope::Payload::Unsubscribe(unsub)) => {
                 if let Some(entry) = registry.get_by_conn_id(msg.conn_id) {
                     event_bus.unsubscribe(&entry.plugin_id, unsub.event_types);
                 }
+                false
             }
 
             Some(envelope::Payload::ActionRequest(req)) => {
@@ -267,6 +306,7 @@ impl MessageRouter {
                 histogram!("action_request_duration_ms")
                     .record(action_start.elapsed().as_millis() as f64);
                 Self::send_envelope(&msg.write_tx, response).await;
+                false
             }
 
             Some(envelope::Payload::KernelCommand(cmd)) => {
@@ -283,27 +323,30 @@ impl MessageRouter {
                     ..Default::default()
                 };
                 Self::send_envelope(&msg.write_tx, ack).await;
+                false
             }
 
             Some(envelope::Payload::EventAck(ack)) => {
                 if let Some(store) = event_store {
                     store.mark_delivered(&ack.event_id);
                 }
+                false
             }
 
             _ => {
                 Self::send_error(&msg.write_tx, ErrorCode::ErrUnknown, "unhandled message").await;
+                true
             }
         }
     }
 
-    async fn forward(msg: IncomingMessage, plugin_id: &str, registry: &PluginRegistry) {
+    async fn forward(msg: IncomingMessage, plugin_id: &str, registry: &PluginRegistry) -> bool {
         let sender_id = match registry.get_by_conn_id(msg.conn_id) {
             Some(entry) => entry.plugin_id.clone(),
             None => {
                 Self::send_error(&msg.write_tx, ErrorCode::ErrNotRegistered, "not registered")
                     .await;
-                return;
+                return true;
             }
         };
 
@@ -317,27 +360,29 @@ impl MessageRouter {
                 "PERMISSION_IPC_SEND required",
             )
             .await;
-            return;
+            return true;
         }
 
         match registry.get(plugin_id) {
             Some(entry) => {
                 let _ = entry.write_tx.send(msg.frame).await;
+                false
             }
             None => {
                 warn!(target = %plugin_id, "forward: unknown target");
                 Self::send_error(&msg.write_tx, ErrorCode::ErrUnknown, "plugin not found").await;
+                true
             }
         }
     }
 
-    async fn broadcast(msg: IncomingMessage, registry: &PluginRegistry) {
+    async fn broadcast(msg: IncomingMessage, registry: &PluginRegistry) -> bool {
         let sender_id = match registry.get_by_conn_id(msg.conn_id) {
             Some(entry) => entry.plugin_id.clone(),
             None => {
                 Self::send_error(&msg.write_tx, ErrorCode::ErrNotRegistered, "not registered")
                     .await;
-                return;
+                return true;
             }
         };
 
@@ -351,7 +396,7 @@ impl MessageRouter {
                 "PERMISSION_IPC_SEND required",
             )
             .await;
-            return;
+            return true;
         }
 
         let entries = registry.list();
@@ -378,6 +423,7 @@ impl MessageRouter {
                 }
             }
         }
+        false
     }
 
     async fn send_register_reject(tx: &mpsc::Sender<Frame>, reason: &str) {

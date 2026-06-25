@@ -1064,7 +1064,7 @@ in the post-Phase-1.1 audit (`AUDIT.md`). Status reflects work completed to date
 | T-02 | Default-deny peer-to-peer IPC via `PERMISSION_IPC_SEND` | Any registered plugin could unicast to any other | ✅ Done — gated in `forward()` | — |
 | T-03 | Permission-check broadcast (`target = "*"`) | Broadcast path was unchecked | ✅ Done — gated in `broadcast()` | — |
 | T-04 | Per-plugin IPC allowlist in manifest | Coarse `PERMISSION_IPC_SEND` allows any target; needs per-target scoping | ☐ Open | 2 days |
-| T-05 | Audit logging for security events | Permission denials, CRC errors, oversized frames are unlogged | ◐ Partial — denials now counted/logged | 1-2 days |
+| T-05 | Audit logging for security events | Permission denials, CRC errors, oversized frames are unlogged | ✅ Done — denials, CRC/magic/oversized logged + countered (`connection.rs`, `protocol.rs`) | — |
 | T-06 | Cryptographic message integrity (MAC) | CRC-32 detects corruption, not tampering | ☐ Open | 3 days |
 | T-07 | Fuzz + soak harness | No fuzzing of frame/payload; no 24h soak | ☐ Open | 3 days |
 
@@ -1083,7 +1083,7 @@ intended single-host, trusted-process deployment). "Fixed" entries retained for 
 | VULN-004 | Medium | First-claim plugin-ID squatting | Attacker registers `admin` before the real plugin; legit plugin then rejected | ⚠ Open — needs identity binding (JWT `sub` enforced only when auth on) |
 | VULN-005 | Low | Non-cryptographic integrity | CRC-32 is forgeable by a socket-level attacker | ⚠ Open — see T-06 |
 | VULN-006 | Low | UDS file permissions vs umask | Socket mode depends on umask if explicit chmod regressed | ✅ Mitigated — `0o600` set after bind (`server.rs`) |
-| VULN-007 | Low | Error-spam amplification | Malformed frames return errors without closing the connection; plugin can flood | ⚠ Open — needs per-conn error rate limit |
+| VULN-007 | Low | Error-spam amplification | Malformed/denied frames return errors without closing the connection; plugin can flood | ✅ Fixed — per-connection error budget (16) throttles further messages (`run_with_context`) |
 | VULN-008 | Info | HTTP control plane unauthenticated by default | REST endpoints require JWT only when configured | ◐ Mitigated — bound to `127.0.0.1`; enable `jwt_secret` for shared hosts |
 
 **Reporting:** new findings get the next `VULN-NNN` id, a severity, and a row here before
