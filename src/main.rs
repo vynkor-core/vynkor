@@ -47,15 +47,19 @@ async fn main() -> Result<()> {
                 warn!("failed to load config '{}': {}, using defaults", config, e);
             }
 
-            if is_running(&cfg.pid_file)? {
-                let pid = read_pid(&cfg.pid_file)?;
-                warn!("kernel already running (PID: {})", pid);
-                return Ok(());
-            }
-
             if foreground {
+                // Foreground mode — including the child the daemon launcher spawns
+                // with --foreground — is guarded by the exclusive PID-file flock in
+                // run_foreground. Do NOT run is_running() here: the daemon parent
+                // writes the child's PID before the child starts, so the child would
+                // probe its own live PID, conclude "already running", and abort.
                 run_foreground(cfg).await?;
             } else {
+                if is_running(&cfg.pid_file)? {
+                    let pid = read_pid(&cfg.pid_file)?;
+                    warn!("kernel already running (PID: {})", pid);
+                    return Ok(());
+                }
                 daemonize_and_run(&cfg, &config, debug)?;
             }
         }
