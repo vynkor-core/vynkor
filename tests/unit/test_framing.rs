@@ -2,7 +2,8 @@ use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio::net::UnixStream;
 use veyron::ipc::framing::{
-    read_frame, read_frame_with_timeout, target_as_str, write_frame, Frame, MAX_PAYLOAD_SIZE,
+    read_frame, read_frame_with_timeout, target_as_str, write_frame, write_frame_raw, Frame,
+    MAX_PAYLOAD_SIZE,
 };
 use veyron::utils::errors::VeyronError;
 
@@ -193,6 +194,25 @@ async fn write_frame_rejects_payload_too_large() {
     let (mut w, _r) = make_pair().await;
     let huge = vec![0u8; MAX_PAYLOAD_SIZE + 1];
     let result = write_frame(&mut w, "x", 0, &huge).await;
+    assert!(
+        matches!(result, Err(VeyronError::PayloadTooLarge(_))),
+        "expected PayloadTooLarge, got {:?}",
+        result
+    );
+}
+
+#[tokio::test]
+async fn write_frame_raw_rejects_payload_too_large() {
+    let (mut w, _r) = make_pair().await;
+    let frame = Frame {
+        magic: 0x5652,
+        flags: 0,
+        length: (MAX_PAYLOAD_SIZE + 1) as u32,
+        target: [0u8; 32],
+        crc32: 0,
+        payload: vec![0u8; MAX_PAYLOAD_SIZE + 1],
+    };
+    let result = write_frame_raw(&mut w, &frame).await;
     assert!(
         matches!(result, Err(VeyronError::PayloadTooLarge(_))),
         "expected PayloadTooLarge, got {:?}",

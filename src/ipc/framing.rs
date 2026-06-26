@@ -57,6 +57,12 @@ pub async fn write_frame_raw<W>(stream: &mut W, frame: &Frame) -> Result<(), Vey
 where
     W: AsyncWrite + Unpin,
 {
+    // Symmetry with read_frame: never put a frame on the wire that the peer
+    // would reject as oversized (which would cost them their connection).
+    if frame.payload.len() > MAX_PAYLOAD_SIZE {
+        return Err(VeyronError::PayloadTooLarge(frame.payload.len()));
+    }
+
     let mut header = [0u8; HEADER_SIZE];
     header[0..2].copy_from_slice(&frame.magic.to_be_bytes());
     header[2..4].copy_from_slice(&frame.flags.to_be_bytes());

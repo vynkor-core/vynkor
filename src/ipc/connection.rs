@@ -89,8 +89,16 @@ impl ConnectionHandler {
 
 async fn write_loop(mut write_half: OwnedWriteHalf, mut rx: mpsc::Receiver<Frame>) {
     while let Some(frame) = rx.recv().await {
-        if write_frame_raw(&mut write_half, &frame).await.is_err() {
-            break;
+        match write_frame_raw(&mut write_half, &frame).await {
+            Ok(()) => {}
+            // An oversized frame is a kernel-side fault — drop that frame but keep
+            // the connection; tearing it down would punish the plugin for our bug.
+            Err(VeyronError::PayloadTooLarge(n)) => {
+                warn!(bytes = n, "dropping oversized outbound frame");
+                counter!("ipc_frame_errors_total", "error" => "oversized_outbound").increment(1);
+            }
+            // Real I/O error (peer gone): stop the write loop.
+            Err(_) => break,
         }
     }
 }
