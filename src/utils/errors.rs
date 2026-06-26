@@ -12,6 +12,7 @@ pub enum VeyronError {
     PayloadTooLarge(usize),
     PluginNotFound(String),
     PluginAlreadyRegistered(String),
+    InvalidPluginId(String),
     PermissionDenied(String),
     Timeout,
     Internal(String),
@@ -29,6 +30,9 @@ impl fmt::Display for VeyronError {
             VeyronError::PluginNotFound(id) => write!(f, "plugin not found: {}", id),
             VeyronError::PluginAlreadyRegistered(id) => {
                 write!(f, "plugin already registered: {}", id)
+            }
+            VeyronError::InvalidPluginId(reason) => {
+                write!(f, "invalid plugin id: {}", reason)
             }
             VeyronError::PermissionDenied(perm) => write!(f, "permission denied: {}", perm),
             VeyronError::Timeout => write!(f, "operation timed out"),

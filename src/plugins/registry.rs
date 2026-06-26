@@ -42,6 +42,8 @@ impl PluginRegistry {
         manifest: PluginManifest,
         write_tx: mpsc::Sender<Frame>,
     ) -> Result<(), VeyronError> {
+        validate_plugin_id(&plugin_id)?;
+
         if self.by_plugin_id.contains_key(&plugin_id) {
             return Err(VeyronError::PluginAlreadyRegistered(plugin_id));
         }
@@ -116,4 +118,34 @@ impl Default for PluginRegistry {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Validate an incoming plugin id. Rejecting bad ids at registration prevents:
+/// JSON injection (ids are embedded into event payloads), routing confusion
+/// (reserved "kernel"/"*" targets), and silent truncation (ids must fit the
+/// 32-byte frame target field).
+pub fn validate_plugin_id(id: &str) -> Result<(), VeyronError> {
+    const MAX_LEN: usize = 32; // frame target field width
+
+    if id.is_empty() {
+        return Err(VeyronError::InvalidPluginId("must not be empty".into()));
+    }
+    if id.len() > MAX_LEN {
+        return Err(VeyronError::InvalidPluginId(format!(
+            "too long ({} bytes, max {MAX_LEN})",
+            id.len()
+        )));
+    }
+    if id == "kernel" || id == "*" {
+        return Err(VeyronError::InvalidPluginId(format!("'{id}' is reserved")));
+    }
+    if !id
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+    {
+        return Err(VeyronError::InvalidPluginId(
+            "only ASCII letters, digits, '.', '-', '_' are allowed".into(),
+        ));
+    }
+    Ok(())
 }

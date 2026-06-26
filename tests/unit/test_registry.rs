@@ -38,6 +38,39 @@ fn register_then_get_returns_entry() {
 }
 
 #[test]
+fn register_rejects_invalid_plugin_ids() {
+    let reg = PluginRegistry::new();
+
+    let long = "x".repeat(33);
+    let bad: Vec<&str> = vec![
+        "",                            // empty
+        "kernel",                      // reserved routing target
+        "*",                           // reserved broadcast target
+        r#"evil","admin":true,"x":""#, // JSON-injection attempt
+        "has space",                   // disallowed char
+        "tab\tthing",                  // control char
+        &long,                         // exceeds 32-byte target field
+    ];
+
+    for id in bad {
+        let res = reg.register(id.to_string(), 1, dummy_manifest(), dummy_write_tx());
+        assert!(
+            matches!(res, Err(VeyronError::InvalidPluginId(_))),
+            "id {id:?} must be rejected, got {res:?}"
+        );
+    }
+
+    // conn_id 1 was never consumed (all rejected pre-insert); a valid id registers
+    reg.register(
+        "ok.plugin-1_v2".to_string(),
+        1,
+        dummy_manifest(),
+        dummy_write_tx(),
+    )
+    .expect("a well-formed id must register");
+}
+
+#[test]
 fn duplicate_plugin_id_rejected() {
     let reg = PluginRegistry::new();
 
