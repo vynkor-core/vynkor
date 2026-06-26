@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package veyron;
 
-// v 1.1  (added PERMISSION_IPC_SEND = 10)
+// v 1.2  (frame MAC: session_nonce, ERR_MAC_MISSING/INVALID)
 
 // ═══════════════════════════════════════════
 // КОРНЕВОЙ КОНВЕРТ — каждое сообщение в этом
@@ -54,8 +54,9 @@ message PluginRegister {
 
 message PluginRegisterAck {
   bool    accepted       = 1;
-  string  reject_reason  = 2; 
+  string  reject_reason  = 2;
   repeated string granted_permissions = 3;
+  bytes   session_nonce  = 4;  // 16 random bytes; HKDF salt for the frame MAC key
 }
 
 message PluginShutdown {
@@ -200,4 +201,6 @@ enum ErrorCode {
   ERR_RATE_LIMITED      = 3;  // слишком много запросов
   ERR_INTERNAL          = 4;  // внутренняя ошибка ядра
   ERR_DESERIALIZATION   = 5;  // не удалось разобрать сообщение
+  ERR_MAC_MISSING       = 6;  // registered conn sent an un-MAC'd frame while secured
+  ERR_MAC_INVALID       = 7;  // frame MAC verification failed (tampering)
 }

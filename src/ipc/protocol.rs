@@ -208,6 +208,7 @@ impl MessageRouter {
                             accepted: true,
                             reject_reason: String::new(),
                             granted_permissions: granted,
+                            session_nonce: Vec::new(),
                         }
                     }
                     Err(e) => {
@@ -216,6 +217,7 @@ impl MessageRouter {
                             accepted: false,
                             reject_reason: e.to_string(),
                             granted_permissions: vec![],
+                            session_nonce: Vec::new(),
                         }
                     }
                 };
@@ -454,6 +456,7 @@ impl MessageRouter {
             accepted: false,
             reject_reason: reason.to_string(),
             granted_permissions: vec![],
+            session_nonce: Vec::new(),
         };
         let env = Envelope {
             payload: Some(envelope::Payload::PluginRegisterAck(ack)),
