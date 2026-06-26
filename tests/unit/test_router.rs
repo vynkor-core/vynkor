@@ -47,6 +47,7 @@ fn make_frame(target: &str, payload: Vec<u8>) -> Frame {
         target: t,
         crc32: crc,
         payload,
+        mac: None,
     }
 }
 

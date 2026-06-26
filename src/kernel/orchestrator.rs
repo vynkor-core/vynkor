@@ -237,6 +237,7 @@ impl Kernel {
             target,
             crc32: crc,
             payload,
+            mac: None,
         };
 
         for entry in entries {

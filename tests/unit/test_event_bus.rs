@@ -15,6 +15,7 @@ fn empty_frame() -> Frame {
         target: [0u8; 32],
         crc32: 0,
         payload: vec![],
+        mac: None,
     }
 }
 

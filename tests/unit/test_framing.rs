@@ -87,6 +87,47 @@ async fn target_padded_to_32_bytes_in_frame() {
 }
 
 #[tokio::test]
+async fn mac_frame_round_trips_with_tag() {
+    use veyron::ipc::framing::{write_frame_raw, FLAG_MAC_PRESENT};
+    let (mut w, mut r) = make_pair().await;
+
+    let payload = b"secured".to_vec();
+    let crc = crc32fast::hash(&payload);
+    let mut target = [0u8; 32];
+    target[..6].copy_from_slice(b"kernel");
+    let frame = Frame {
+        magic: 0x5652,
+        flags: FLAG_MAC_PRESENT,
+        length: payload.len() as u32,
+        target,
+        crc32: crc,
+        payload: payload.clone(),
+        mac: Some([7u8; 32]),
+    };
+    write_frame_raw(&mut w, &frame).await.unwrap();
+    drop(w);
+
+    let got = read_frame(&mut r).await.unwrap();
+    assert_eq!(got.flags & FLAG_MAC_PRESENT, FLAG_MAC_PRESENT);
+    assert_eq!(
+        got.length as usize,
+        payload.len(),
+        "length excludes the tag"
+    );
+    assert_eq!(got.payload, payload);
+    assert_eq!(got.mac, Some([7u8; 32]));
+}
+
+#[tokio::test]
+async fn non_mac_frame_has_no_tag() {
+    let (mut w, mut r) = make_pair().await;
+    write_frame(&mut w, "x", 0, b"plain").await.unwrap();
+    drop(w);
+    let got = read_frame(&mut r).await.unwrap();
+    assert_eq!(got.mac, None);
+}
+
+#[tokio::test]
 async fn target_as_str_trims_null_padding() {
     let mut frame = Frame {
         magic: 0x5652,
@@ -95,6 +136,7 @@ async fn target_as_str_trims_null_padding() {
         target: [0u8; 32],
         crc32: 0,
         payload: vec![],
+        mac: None,
     };
     frame.target[..6].copy_from_slice(b"kernel");
     assert_eq!(target_as_str(&frame), "kernel");
@@ -211,6 +253,7 @@ async fn write_frame_raw_rejects_payload_too_large() {
         target: [0u8; 32],
         crc32: 0,
         payload: vec![0u8; MAX_PAYLOAD_SIZE + 1],
+        mac: None,
     };
     let result = write_frame_raw(&mut w, &frame).await;
     assert!(

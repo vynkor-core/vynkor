@@ -368,6 +368,7 @@ impl PluginSupervisor {
                             target,
                             crc32: crc,
                             payload,
+                            mac: None,
                         };
                         let _ = reg_entry.write_tx.send(frame).await;
                     }

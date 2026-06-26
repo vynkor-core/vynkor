@@ -163,6 +163,7 @@ async fn connection_handler_can_send_frame_back() {
             },
             crc32: crc32fast::hash(response_payload),
             payload: response_payload.to_vec(),
+            mac: None,
         })
         .await
         .expect("send to write_tx must succeed");

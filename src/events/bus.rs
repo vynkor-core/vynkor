@@ -195,6 +195,7 @@ fn build_frame(payload: &[u8], target: &str) -> Frame {
         target: t,
         crc32: crc,
         payload: payload.to_vec(),
+        mac: None,
     }
 }
 

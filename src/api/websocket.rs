@@ -145,6 +145,7 @@ fn parse_frame(data: &[u8]) -> Result<Frame, &'static str> {
         target,
         crc32,
         payload,
+        mac: None,
     })
 }
 

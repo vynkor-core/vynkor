@@ -6,6 +6,9 @@ pub const MAX_PAYLOAD_SIZE: usize = 1_048_576;
 const MAGIC: u16 = 0x5652;
 const HEADER_SIZE: usize = 44;
 
+/// `flags` bit indicating a 32-byte HMAC tag is appended after the payload.
+pub const FLAG_MAC_PRESENT: u16 = 0x0001;
+
 /// Once a frame has started arriving, the rest of the header + payload must
 /// complete within this window. Bounds slow-loris stalls (a peer that sends a
 /// header declaring a large payload then dribbles or stops). Idle connections
@@ -20,6 +23,20 @@ pub struct Frame {
     pub target: [u8; 32],
     pub crc32: u32,
     pub payload: Vec<u8>,
+    /// 32-byte HMAC tag, present iff `flags & FLAG_MAC_PRESENT != 0`.
+    pub mac: Option<[u8; 32]>,
+}
+
+/// Serialize the 44-byte frame header exactly as it goes on the wire. Used by
+/// both `write_frame_raw` and MAC computation so the tag covers the real bytes.
+pub fn serialize_header(frame: &Frame) -> [u8; HEADER_SIZE] {
+    let mut header = [0u8; HEADER_SIZE];
+    header[0..2].copy_from_slice(&frame.magic.to_be_bytes());
+    header[2..4].copy_from_slice(&frame.flags.to_be_bytes());
+    header[4..8].copy_from_slice(&frame.length.to_be_bytes());
+    header[8..40].copy_from_slice(&frame.target);
+    header[40..44].copy_from_slice(&frame.crc32.to_be_bytes());
+    header
 }
 
 #[allow(dead_code)]
@@ -63,15 +80,13 @@ where
         return Err(VeyronError::PayloadTooLarge(frame.payload.len()));
     }
 
-    let mut header = [0u8; HEADER_SIZE];
-    header[0..2].copy_from_slice(&frame.magic.to_be_bytes());
-    header[2..4].copy_from_slice(&frame.flags.to_be_bytes());
-    header[4..8].copy_from_slice(&frame.length.to_be_bytes());
-    header[8..40].copy_from_slice(&frame.target);
-    header[40..44].copy_from_slice(&frame.crc32.to_be_bytes());
+    let header = serialize_header(frame);
 
     stream.write_all(&header).await?;
     stream.write_all(&frame.payload).await?;
+    if let Some(tag) = &frame.mac {
+        stream.write_all(tag).await?;
+    }
     Ok(())
 }
 
@@ -136,6 +151,14 @@ where
         return Err(VeyronError::FrameCrcMismatch);
     }
 
+    let mac = if flags & FLAG_MAC_PRESENT != 0 {
+        let mut tag = [0u8; 32];
+        stream.read_exact(&mut tag).await?;
+        Some(tag)
+    } else {
+        None
+    };
+
     Ok(Frame {
         magic,
         flags,
@@ -143,6 +166,7 @@ where
         target,
         crc32,
         payload,
+        mac,
     })
 }
 

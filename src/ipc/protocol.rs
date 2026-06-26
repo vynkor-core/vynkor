@@ -436,6 +436,7 @@ impl MessageRouter {
                 target: msg.frame.target,
                 crc32: msg.frame.crc32,
                 payload: msg.frame.payload.clone(),
+                mac: None,
             };
             match timeout(WRITE_SEND_TIMEOUT, entry.write_tx.send(frame)).await {
                 Ok(_) => {}
@@ -491,6 +492,7 @@ impl MessageRouter {
             },
             crc32: crc,
             payload,
+            mac: None,
         };
         let _ = tx.send(frame).await;
     }
