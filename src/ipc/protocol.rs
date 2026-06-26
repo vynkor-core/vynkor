@@ -56,6 +56,7 @@ impl MessageRouter {
             Instant::now(),
             None,
             None,
+            None,
         )
         .await
     }
@@ -68,6 +69,7 @@ impl MessageRouter {
         start_time: Instant,
         config_path: Option<String>,
         event_store: Option<Arc<EventStore>>,
+        mac_secret: Option<Arc<Vec<u8>>>,
     ) {
         // Per-connection protocol-error budget. A connection that produces a burst
         // of malformed/denied/unhandled messages (which each generate an error
@@ -99,6 +101,7 @@ impl MessageRouter {
                         start_time,
                         config_path.as_deref(),
                         event_store.as_deref(),
+                        &mac_secret,
                     )
                     .await
                 }
@@ -141,6 +144,7 @@ impl MessageRouter {
         start_time: Instant,
         config_path: Option<&str>,
         event_store: Option<&EventStore>,
+        mac_secret: &Option<Arc<Vec<u8>>>,
     ) -> bool {
         let envelope = match Envelope::decode(msg.frame.payload.as_slice()) {
             Ok(e) => e,
@@ -197,6 +201,17 @@ impl MessageRouter {
                     msg.write_tx.clone(),
                 );
 
+                // When auth is on, mint a per-registration nonce; the plugin and
+                // kernel both derive the frame-MAC key from it.
+                let session_nonce: Vec<u8> = if mac_secret.is_some() && result.is_ok() {
+                    use rand::RngCore;
+                    let mut n = vec![0u8; crate::auth::frame_mac::SESSION_NONCE_LEN];
+                    rand::thread_rng().fill_bytes(&mut n);
+                    n
+                } else {
+                    Vec::new()
+                };
+
                 let ack = match &result {
                     Ok(()) => {
                         let granted = registry
@@ -209,7 +224,7 @@ impl MessageRouter {
                             accepted: true,
                             reject_reason: String::new(),
                             granted_permissions: granted,
-                            session_nonce: Vec::new(),
+                            session_nonce: session_nonce.clone(),
                         }
                     }
                     Err(e) => {
@@ -228,6 +243,21 @@ impl MessageRouter {
                     ..Default::default()
                 };
                 Self::send_envelope(&msg.write_tx, response).await;
+
+                // Enable the frame MAC for this connection: derive the key, store
+                // it for inbound verification, and tell the write loop (ordered
+                // after the ack just sent) to start tagging outbound frames.
+                if let (Some(secret), true) = (&mac_secret, result.is_ok()) {
+                    let key = crate::auth::frame_mac::derive_session_key(
+                        secret,
+                        &session_nonce,
+                        &plugin_id,
+                    );
+                    if let Ok(mut cell) = msg.session_key.lock() {
+                        *cell = Some(key);
+                    }
+                    let _ = msg.write_tx.send(Outbound::EnableMac(key)).await;
+                }
 
                 if result.is_ok() {
                     event_bus

@@ -102,6 +102,12 @@ impl Kernel {
 
         let kernel_start = std::time::Instant::now();
         let config_path = config.config_file.clone();
+        // Frame-MAC key material: the same secret used for JWT, or None when
+        // running without auth (then frames are CRC-only, unchanged).
+        let mac_secret = config
+            .jwt_secret
+            .as_ref()
+            .map(|s| Arc::new(s.as_bytes().to_vec()));
         tokio::spawn(MessageRouter::run_with_context(
             router_rx,
             Arc::clone(&registry),
@@ -110,6 +116,7 @@ impl Kernel {
             kernel_start,
             config_path,
             event_store.clone(),
+            mac_secret,
         ));
 
         // disconnect handler: unregister plugin + publish system.plugin_left

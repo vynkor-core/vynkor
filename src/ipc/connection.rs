@@ -60,6 +60,7 @@ impl ConnectionHandler {
 
     /// Shared key cell for this connection. The router stores the derived key
     /// here on registration so the read loop can verify subsequent frames.
+    #[allow(dead_code)]
     pub fn session_key_cell(&self) -> SessionKeyCell {
         self.session_key.clone()
     }
