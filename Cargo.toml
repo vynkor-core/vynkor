@@ -34,6 +34,11 @@ serde_yaml = "0.9"
 jsonwebtoken = "9"
 chrono = "0.4"
 
+hmac = "0.12"
+sha2 = "0.10"
+hkdf = "0.12"
+rand = "0.8"
+
 nix = { version = "0.28", features = ["signal", "process", "fs", "sched", "resource"] }
 
 clap = { version = "4.6", features = ["derive"] }
