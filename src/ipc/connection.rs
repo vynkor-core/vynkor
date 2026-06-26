@@ -63,8 +63,20 @@ impl ConnectionHandler {
                     break;
                 }
                 Err(VeyronError::PayloadTooLarge(n)) => {
-                    warn!(conn_id = self.conn_id, bytes = n, "oversized frame rejected");
+                    warn!(
+                        conn_id = self.conn_id,
+                        bytes = n,
+                        "oversized frame rejected"
+                    );
                     counter!("ipc_frame_errors_total", "error" => "oversized").increment(1);
+                    break;
+                }
+                Err(VeyronError::FrameReadTimeout) => {
+                    warn!(
+                        conn_id = self.conn_id,
+                        "frame read timed out — dropping connection"
+                    );
+                    counter!("ipc_frame_errors_total", "error" => "timeout").increment(1);
                     break;
                 }
                 Err(_) => break, // IO errors / EOF — normal disconnect

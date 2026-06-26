@@ -8,6 +8,7 @@ pub enum VeyronError {
     Proto(prost::DecodeError),
     FrameMagicMismatch,
     FrameCrcMismatch,
+    FrameReadTimeout,
     PayloadTooLarge(usize),
     PluginNotFound(String),
     PluginAlreadyRegistered(String),
@@ -23,6 +24,7 @@ impl fmt::Display for VeyronError {
             VeyronError::Proto(e) => write!(f, "proto decode error: {}", e),
             VeyronError::FrameMagicMismatch => write!(f, "frame magic mismatch"),
             VeyronError::FrameCrcMismatch => write!(f, "frame crc mismatch"),
+            VeyronError::FrameReadTimeout => write!(f, "timed out reading frame body"),
             VeyronError::PayloadTooLarge(n) => write!(f, "payload too large: {} bytes", n),
             VeyronError::PluginNotFound(id) => write!(f, "plugin not found: {}", id),
             VeyronError::PluginAlreadyRegistered(id) => {

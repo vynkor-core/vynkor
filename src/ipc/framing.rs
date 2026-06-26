@@ -1,9 +1,16 @@
 use crate::utils::errors::VeyronError;
+use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 pub const MAX_PAYLOAD_SIZE: usize = 1_048_576;
 const MAGIC: u16 = 0x5652;
 const HEADER_SIZE: usize = 44;
+
+/// Once a frame has started arriving, the rest of the header + payload must
+/// complete within this window. Bounds slow-loris stalls (a peer that sends a
+/// header declaring a large payload then dribbles or stops). Idle connections
+/// waiting for the next frame are NOT subject to it.
+const FRAME_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone)]
 pub struct Frame {
@@ -66,8 +73,35 @@ pub async fn read_frame<R>(stream: &mut R) -> Result<Frame, VeyronError>
 where
     R: AsyncRead + Unpin,
 {
+    read_frame_with_timeout(stream, FRAME_READ_TIMEOUT).await
+}
+
+pub async fn read_frame_with_timeout<R>(
+    stream: &mut R,
+    frame_timeout: Duration,
+) -> Result<Frame, VeyronError>
+where
+    R: AsyncRead + Unpin,
+{
+    // Block indefinitely for the first byte — an idle connection between frames
+    // must not be torn down. Once a byte arrives, a frame is in progress and the
+    // remainder is bounded by frame_timeout.
+    let mut first = [0u8; 1];
+    stream.read_exact(&mut first).await?;
+
+    match tokio::time::timeout(frame_timeout, read_frame_body(stream, first[0])).await {
+        Ok(result) => result,
+        Err(_) => Err(VeyronError::FrameReadTimeout),
+    }
+}
+
+async fn read_frame_body<R>(stream: &mut R, first_byte: u8) -> Result<Frame, VeyronError>
+where
+    R: AsyncRead + Unpin,
+{
     let mut header = [0u8; HEADER_SIZE];
-    stream.read_exact(&mut header).await?;
+    header[0] = first_byte;
+    stream.read_exact(&mut header[1..]).await?;
 
     let magic = u16::from_be_bytes([header[0], header[1]]);
     if magic != MAGIC {

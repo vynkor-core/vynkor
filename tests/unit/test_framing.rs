@@ -1,9 +1,53 @@
+use std::time::Duration;
+use tokio::io::AsyncWriteExt;
 use tokio::net::UnixStream;
-use veyron::ipc::framing::{read_frame, target_as_str, write_frame, Frame, MAX_PAYLOAD_SIZE};
+use veyron::ipc::framing::{
+    read_frame, read_frame_with_timeout, target_as_str, write_frame, Frame, MAX_PAYLOAD_SIZE,
+};
 use veyron::utils::errors::VeyronError;
 
 async fn make_pair() -> (UnixStream, UnixStream) {
     UnixStream::pair().expect("UnixStream::pair failed")
+}
+
+/// Build a valid 44-byte frame header declaring `len` payload bytes.
+fn header_declaring(len: u32) -> [u8; 44] {
+    let mut h = [0u8; 44];
+    h[0..2].copy_from_slice(&0x5652u16.to_be_bytes()); // magic
+    h[4..8].copy_from_slice(&len.to_be_bytes()); // length
+    h[8..14].copy_from_slice(b"kernel"); // target
+    h // flags + crc left zero
+}
+
+#[tokio::test]
+async fn stalled_payload_times_out() {
+    let (mut writer, mut reader) = make_pair().await;
+    // header promises 100 payload bytes, but we send none and keep the stream open
+    writer.write_all(&header_declaring(100)).await.unwrap();
+
+    let res = read_frame_with_timeout(&mut reader, Duration::from_millis(150)).await;
+    assert!(
+        matches!(res, Err(VeyronError::FrameReadTimeout)),
+        "stalled payload must time out, got {res:?}"
+    );
+    drop(writer);
+}
+
+#[tokio::test]
+async fn idle_connection_does_not_time_out() {
+    let (writer, mut reader) = make_pair().await;
+    // nothing written: no frame has started, so the read must keep waiting past
+    // the frame timeout window (the timeout covers an in-progress frame only).
+    let outer = tokio::time::timeout(
+        Duration::from_millis(200),
+        read_frame_with_timeout(&mut reader, Duration::from_millis(50)),
+    )
+    .await;
+    assert!(
+        outer.is_err(),
+        "idle read must not return — no frame started"
+    );
+    drop(writer);
 }
 
 #[tokio::test]
