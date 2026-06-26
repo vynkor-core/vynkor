@@ -102,9 +102,11 @@ fn is_running(pid_file: &std::path::Path) -> Result<bool> {
         Ok(p) => p,
         Err(_) => return Ok(false),
     };
-    use nix::sys::signal::{kill, Signal};
+    use nix::sys::signal::kill;
     use nix::unistd::Pid;
-    match kill(Pid::from_raw(pid), Signal::SIGCONT) {
+    // Signal 0 (None) is a pure existence/permission probe — it does not
+    // deliver a signal. (SIGCONT would resume a Ctrl-Z'd kernel as a side effect.)
+    match kill(Pid::from_raw(pid), None) {
         Ok(_) => Ok(true),
         Err(nix::errno::Errno::ESRCH) => {
             let _ = fs::remove_file(pid_file);
