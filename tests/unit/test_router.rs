@@ -163,6 +163,62 @@ async fn router_forwards_frame_to_target_plugin() {
 }
 
 #[tokio::test]
+async fn slow_target_does_not_stall_router() {
+    let reg = Arc::new(PluginRegistry::new());
+    let bus = Arc::new(EventBus::new());
+
+    // slow target: capacity-1 channel, pre-filled and never drained. Keep the
+    // receiver alive so the channel stays open and full (send blocks → times out).
+    let (slow_tx, _slow_rx) = mpsc::channel::<Frame>(1);
+    slow_tx
+        .send(make_frame("x", b"prefill".to_vec()))
+        .await
+        .unwrap();
+    reg.register("slow".to_string(), 2, dummy_manifest(), slow_tx)
+        .unwrap();
+
+    // fast target: drained normally
+    let (fast_tx, mut fast_rx) = make_write_pair();
+    reg.register("fast".to_string(), 3, dummy_manifest(), fast_tx)
+        .unwrap();
+
+    // sender holds PERMISSION_IPC_SEND
+    let (a_tx, _a_rx) = make_write_pair();
+    reg.register("sender".to_string(), 1, ipc_manifest(), a_tx.clone())
+        .unwrap();
+
+    let router_tx = spawn_router(Arc::clone(&reg), bus);
+
+    // frame to the stuck target (router must give up after the send timeout)...
+    router_tx
+        .send(incoming(
+            1,
+            plug_frame("slow", b"to-slow".to_vec()),
+            a_tx.clone(),
+        ))
+        .await
+        .unwrap();
+    // ...then a frame to a healthy target.
+    router_tx
+        .send(incoming(
+            1,
+            plug_frame("fast", b"to-fast".to_vec()),
+            a_tx.clone(),
+        ))
+        .await
+        .unwrap();
+
+    // With an unbounded send the router would block on "slow" forever and "fast"
+    // would never arrive. The bounded send must let it through promptly.
+    let f = timeout(Duration::from_millis(500), fast_rx.recv())
+        .await
+        .expect("fast target must receive despite a stuck slow target")
+        .expect("channel open");
+    assert_eq!(f.payload, b"to-fast");
+    assert_eq!(target_as_str(&f), "fast");
+}
+
+#[tokio::test]
 async fn router_denies_forward_without_ipc_permission() {
     let reg = Arc::new(PluginRegistry::new());
     let bus = Arc::new(EventBus::new());

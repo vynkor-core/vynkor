@@ -32,6 +32,11 @@ const MAX_CONN_ERRORS: u32 = 16;
 /// connection is no longer registered.
 const MAX_TRACKED_ERROR_CONNS: usize = 8192;
 
+/// Max time the router will wait to hand a frame to a plugin's write channel
+/// (capacity-bounded). A plugin that does not drain its channel must not stall
+/// the single-threaded router for everyone else — its frame is dropped instead.
+const WRITE_SEND_TIMEOUT: Duration = Duration::from_millis(50);
+
 pub struct MessageRouter;
 
 impl MessageRouter {
@@ -374,7 +379,16 @@ impl MessageRouter {
 
         match registry.get(plugin_id) {
             Some(entry) => {
-                let _ = entry.write_tx.send(msg.frame).await;
+                // Bounded send: a slow target must not block the router. Dropping
+                // one frame for a non-draining plugin is not the sender's fault, so
+                // this is not counted against the sender's error budget.
+                if timeout(WRITE_SEND_TIMEOUT, entry.write_tx.send(msg.frame))
+                    .await
+                    .is_err()
+                {
+                    warn!(target = %plugin_id, "forward timeout: slow target, frame dropped");
+                    counter!("ipc_forward_timeouts_total").increment(1);
+                }
                 false
             }
             None => {
@@ -421,7 +435,7 @@ impl MessageRouter {
                 crc32: msg.frame.crc32,
                 payload: msg.frame.payload.clone(),
             };
-            match timeout(Duration::from_millis(50), entry.write_tx.send(frame)).await {
+            match timeout(WRITE_SEND_TIMEOUT, entry.write_tx.send(frame)).await {
                 Ok(_) => {}
                 Err(_) => {
                     warn!(
