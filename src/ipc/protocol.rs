@@ -2,13 +2,14 @@ use crate::auth::jwt::JwtValidator;
 use crate::auth::permissions::{action_to_permission, check_ipc_send, check_permission};
 use crate::events::bus::EventBus;
 use crate::events::store::EventStore;
+use crate::ipc::connection::{out_frame, Outbound};
 use crate::ipc::framing::{target_as_str, Frame};
 use crate::ipc::messages::IncomingMessage;
 use crate::kernel::commands::CommandHandler;
 use crate::plugins::registry::PluginRegistry;
 use crate::proto::veyron::{
-    envelope, ActionResponse, ActionStatus, Envelope, ErrorCode,
-    ErrorMessage, Event, KernelCommandAck, PluginRegisterAck, Pong,
+    envelope, ActionResponse, ActionStatus, Envelope, ErrorCode, ErrorMessage, Event,
+    KernelCommandAck, PluginRegisterAck, Pong,
 };
 use metrics::{counter, histogram};
 use prost::Message;
@@ -384,9 +385,12 @@ impl MessageRouter {
                 // Bounded send: a slow target must not block the router. Dropping
                 // one frame for a non-draining plugin is not the sender's fault, so
                 // this is not counted against the sender's error budget.
-                if timeout(WRITE_SEND_TIMEOUT, entry.write_tx.send(msg.frame))
-                    .await
-                    .is_err()
+                if timeout(
+                    WRITE_SEND_TIMEOUT,
+                    entry.write_tx.send(out_frame(msg.frame)),
+                )
+                .await
+                .is_err()
                 {
                     warn!(target = %plugin_id, "forward timeout: slow target, frame dropped");
                     counter!("ipc_forward_timeouts_total").increment(1);
@@ -438,7 +442,7 @@ impl MessageRouter {
                 payload: msg.frame.payload.clone(),
                 mac: None,
             };
-            match timeout(WRITE_SEND_TIMEOUT, entry.write_tx.send(frame)).await {
+            match timeout(WRITE_SEND_TIMEOUT, entry.write_tx.send(out_frame(frame))).await {
                 Ok(_) => {}
                 Err(_) => {
                     warn!(
@@ -452,7 +456,7 @@ impl MessageRouter {
         false
     }
 
-    async fn send_register_reject(tx: &mpsc::Sender<Frame>, reason: &str) {
+    async fn send_register_reject(tx: &mpsc::Sender<Outbound>, reason: &str) {
         let ack = PluginRegisterAck {
             accepted: false,
             reject_reason: reason.to_string(),
@@ -466,7 +470,7 @@ impl MessageRouter {
         Self::send_envelope(tx, env).await;
     }
 
-    async fn send_envelope(tx: &mpsc::Sender<Frame>, mut env: Envelope) {
+    async fn send_envelope(tx: &mpsc::Sender<Outbound>, mut env: Envelope) {
         let ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -494,10 +498,10 @@ impl MessageRouter {
             payload,
             mac: None,
         };
-        let _ = tx.send(frame).await;
+        let _ = tx.send(out_frame(frame)).await;
     }
 
-    async fn send_error(tx: &mpsc::Sender<Frame>, code: ErrorCode, message: &str) {
+    async fn send_error(tx: &mpsc::Sender<Outbound>, code: ErrorCode, message: &str) {
         let env = Envelope {
             payload: Some(envelope::Payload::Error(ErrorMessage {
                 code: code as i32,
@@ -508,5 +512,4 @@ impl MessageRouter {
         };
         Self::send_envelope(tx, env).await;
     }
-
 }

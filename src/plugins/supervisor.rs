@@ -1,19 +1,20 @@
 use crate::events::bus::EventBus;
+use crate::ipc::connection::out_frame;
 use crate::ipc::framing::Frame;
 use crate::plugins::registry::PluginRegistry;
 use crate::proto::veyron::{envelope, Envelope, Event, Ping};
 use crate::utils::errors::VeyronError;
 use dashmap::DashMap;
+use metrics::counter;
 use prost::Message;
 use std::collections::VecDeque;
 use std::path::PathBuf;
+use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncBufReadExt, BufReader};
-use std::process::Stdio;
 use tokio::process::Command;
 use tokio::sync::{mpsc, Mutex};
-use metrics::counter;
 use tracing::{info, warn};
 
 #[allow(dead_code)]
@@ -75,7 +76,6 @@ impl PluginSupervisor {
         Self::with_log_lines(socket_path, 1000)
     }
 
-
     pub fn with_log_lines(socket_path: &str, max_log_lines: usize) -> Self {
         Self::with_events(socket_path, max_log_lines, None, None)
     }
@@ -134,7 +134,8 @@ impl PluginSupervisor {
         if config.sandbox {
             use std::os::unix::process::CommandExt;
             unsafe {
-                cmd.as_std_mut().pre_exec(crate::plugins::runner::sandbox_pre_exec);
+                cmd.as_std_mut()
+                    .pre_exec(crate::plugins::runner::sandbox_pre_exec);
             }
         }
 
@@ -148,7 +149,8 @@ impl PluginSupervisor {
         let log_buf = Arc::new(Mutex::new(VecDeque::<String>::with_capacity(
             self.max_log_lines,
         )));
-        self.log_buffers.insert(plugin_id.clone(), Arc::clone(&log_buf));
+        self.log_buffers
+            .insert(plugin_id.clone(), Arc::clone(&log_buf));
 
         let max_lines = self.max_log_lines;
 
@@ -338,10 +340,7 @@ impl PluginSupervisor {
                     if last_pong.elapsed() > deadline {
                         warn!(plugin_id = %plugin_id, "watchdog: plugin unresponsive, sending SIGKILL");
                         let nix_pid = nix::unistd::Pid::from_raw(pid as i32);
-                        let _ = nix::sys::signal::kill(
-                            nix_pid,
-                            nix::sys::signal::Signal::SIGKILL,
-                        );
+                        let _ = nix::sys::signal::kill(nix_pid, nix::sys::signal::Signal::SIGKILL);
                         registry.record_pong(&plugin_id);
                         continue;
                     }
@@ -370,7 +369,7 @@ impl PluginSupervisor {
                             payload,
                             mac: None,
                         };
-                        let _ = reg_entry.write_tx.send(frame).await;
+                        let _ = reg_entry.write_tx.send(out_frame(frame)).await;
                     }
                 }
             }

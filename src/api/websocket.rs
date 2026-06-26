@@ -14,6 +14,7 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 use crate::auth::jwt::JwtValidator;
+use crate::ipc::connection::{Outbound, SessionKeyCell};
 use crate::ipc::framing::{Frame, MAX_PAYLOAD_SIZE};
 use crate::ipc::messages::IncomingMessage;
 
@@ -68,7 +69,10 @@ async fn handle_socket(
 ) {
     info!(conn_id = conn_id, "WS client connected");
 
-    let (write_tx, mut write_rx) = mpsc::channel::<Frame>(64);
+    let (write_tx, mut write_rx) = mpsc::channel::<Outbound>(64);
+    // WebSocket transport does not implement the frame MAC (out of scope); the
+    // cell stays empty and these connections are never MAC-enforced.
+    let session_key: SessionKeyCell = std::sync::Arc::new(std::sync::Mutex::new(None));
 
     loop {
         tokio::select! {
@@ -81,6 +85,7 @@ async fn handle_socket(
                                     conn_id,
                                     frame,
                                     write_tx: write_tx.clone(),
+                                    session_key: session_key.clone(),
                                 };
                                 if router_tx.send(incoming).await.is_err() {
                                     break;
@@ -97,13 +102,14 @@ async fn handle_socket(
                     Some(Ok(_)) => {} // ping/pong/text ignored
                 }
             }
-            frame = write_rx.recv() => {
-                match frame {
-                    Some(f) => {
+            item = write_rx.recv() => {
+                match item {
+                    Some(Outbound::Frame(f)) => {
                         if socket.send(Message::Binary(frame_to_bytes(&f))).await.is_err() {
                             break;
                         }
                     }
+                    Some(Outbound::EnableMac(_)) => {} // WS does not tag frames
                     None => break,
                 }
             }

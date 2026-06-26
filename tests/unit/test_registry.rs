@@ -1,12 +1,11 @@
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use veyron::ipc::framing::Frame;
 use veyron::plugins::registry::{PluginRegistry, PluginState};
 use veyron::proto::veyron::PluginManifest;
 use veyron::utils::errors::VeyronError;
 
-fn dummy_write_tx() -> mpsc::Sender<Frame> {
-    mpsc::channel::<Frame>(1).0
+fn dummy_write_tx() -> mpsc::Sender<veyron::ipc::connection::Outbound> {
+    mpsc::channel::<veyron::ipc::connection::Outbound>(1).0
 }
 
 fn dummy_manifest() -> PluginManifest {

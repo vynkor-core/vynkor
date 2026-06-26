@@ -152,7 +152,7 @@ async fn connection_handler_can_send_frame_back() {
     // use the write_tx from IncomingMessage to send back
     let response_payload = b"response";
     msg.write_tx
-        .send(Frame {
+        .send(veyron::ipc::connection::out_frame(Frame {
             magic: 0x5652,
             flags: 0,
             length: response_payload.len() as u32,
@@ -164,7 +164,7 @@ async fn connection_handler_can_send_frame_back() {
             crc32: crc32fast::hash(response_payload),
             payload: response_payload.to_vec(),
             mac: None,
-        })
+        }))
         .await
         .expect("send to write_tx must succeed");
 

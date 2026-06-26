@@ -1,9 +1,10 @@
 use prost::Message;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 use veyron::events::bus::EventBus;
+use veyron::ipc::connection::{out_frame, Outbound};
 use veyron::ipc::framing::{target_as_str, Frame};
 use veyron::ipc::messages::IncomingMessage;
 use veyron::ipc::protocol::MessageRouter;
@@ -25,8 +26,8 @@ fn ipc_manifest() -> PluginManifest {
     }
 }
 
-fn make_write_pair() -> (mpsc::Sender<Frame>, mpsc::Receiver<Frame>) {
-    mpsc::channel::<Frame>(16)
+fn make_write_pair() -> (mpsc::Sender<Outbound>, mpsc::Receiver<Outbound>) {
+    mpsc::channel::<Outbound>(16)
 }
 
 fn encode_envelope(env: Envelope) -> Vec<u8> {
@@ -59,11 +60,12 @@ fn plug_frame(target: &str, payload: Vec<u8>) -> Frame {
     make_frame(target, payload)
 }
 
-fn incoming(conn_id: u64, frame: Frame, write_tx: mpsc::Sender<Frame>) -> IncomingMessage {
+fn incoming(conn_id: u64, frame: Frame, write_tx: mpsc::Sender<Outbound>) -> IncomingMessage {
     IncomingMessage {
         conn_id,
         frame,
         write_tx,
+        session_key: Arc::new(Mutex::new(None)),
     }
 }
 
@@ -76,11 +78,15 @@ fn spawn_router(
     tx
 }
 
-async fn recv_frame(rx: &mut mpsc::Receiver<Frame>) -> Frame {
-    timeout(Duration::from_secs(2), rx.recv())
+async fn recv_frame(rx: &mut mpsc::Receiver<Outbound>) -> Frame {
+    let item = timeout(Duration::from_secs(2), rx.recv())
         .await
         .expect("recv timed out")
-        .expect("channel closed")
+        .expect("channel closed");
+    match item {
+        Outbound::Frame(f) => *f,
+        _ => panic!("expected Outbound::Frame"),
+    }
 }
 
 fn decode_envelope(frame: &Frame) -> Envelope {
@@ -170,9 +176,9 @@ async fn slow_target_does_not_stall_router() {
 
     // slow target: capacity-1 channel, pre-filled and never drained. Keep the
     // receiver alive so the channel stays open and full (send blocks → times out).
-    let (slow_tx, _slow_rx) = mpsc::channel::<Frame>(1);
+    let (slow_tx, _slow_rx) = mpsc::channel::<Outbound>(1);
     slow_tx
-        .send(make_frame("x", b"prefill".to_vec()))
+        .send(out_frame(make_frame("x", b"prefill".to_vec())))
         .await
         .unwrap();
     reg.register("slow".to_string(), 2, dummy_manifest(), slow_tx)
@@ -211,10 +217,7 @@ async fn slow_target_does_not_stall_router() {
 
     // With an unbounded send the router would block on "slow" forever and "fast"
     // would never arrive. The bounded send must let it through promptly.
-    let f = timeout(Duration::from_millis(500), fast_rx.recv())
-        .await
-        .expect("fast target must receive despite a stuck slow target")
-        .expect("channel open");
+    let f = recv_frame(&mut fast_rx).await;
     assert_eq!(f.payload, b"to-fast");
     assert_eq!(target_as_str(&f), "fast");
 }
@@ -326,7 +329,7 @@ async fn router_throttles_connection_after_error_burst() {
     let router_tx = spawn_router(Arc::clone(&reg), bus);
 
     // wide channel so all error responses buffer without blocking the router
-    let (tx, mut rx) = mpsc::channel::<Frame>(64);
+    let (tx, mut rx) = mpsc::channel::<Outbound>(64);
 
     // 16 malformed kernel frames (invalid protobuf) -> 16 error responses
     for _ in 0..16 {
@@ -368,7 +371,7 @@ async fn router_resets_error_budget_on_success() {
     .unwrap();
     let router_tx = spawn_router(Arc::clone(&reg), bus);
 
-    let (tx, mut rx) = mpsc::channel::<Frame>(64);
+    let (tx, mut rx) = mpsc::channel::<Outbound>(64);
 
     // alternate: malformed (error) then valid ping (success resets budget) x many.
     // never accrues to the throttle threshold, so every ping still gets a pong.

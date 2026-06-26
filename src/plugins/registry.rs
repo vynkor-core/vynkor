@@ -1,4 +1,4 @@
-use crate::ipc::framing::Frame;
+use crate::ipc::connection::Outbound;
 use crate::proto::veyron::PluginManifest;
 use crate::utils::errors::VeyronError;
 use dashmap::DashMap;
@@ -15,7 +15,7 @@ pub struct PluginEntry {
     pub plugin_id: String,
     pub conn_id: u64,
     pub manifest: PluginManifest,
-    pub write_tx: mpsc::Sender<Frame>,
+    pub write_tx: mpsc::Sender<Outbound>,
     pub registered_at: u64,
     pub state: PluginState,
 }
@@ -40,7 +40,7 @@ impl PluginRegistry {
         plugin_id: String,
         conn_id: u64,
         manifest: PluginManifest,
-        write_tx: mpsc::Sender<Frame>,
+        write_tx: mpsc::Sender<Outbound>,
     ) -> Result<(), VeyronError> {
         validate_plugin_id(&plugin_id)?;
 
@@ -86,7 +86,8 @@ impl PluginRegistry {
     }
 
     pub fn record_pong(&self, plugin_id: &str) {
-        self.pong_times.insert(plugin_id.to_string(), Instant::now());
+        self.pong_times
+            .insert(plugin_id.to_string(), Instant::now());
     }
 
     pub fn last_pong(&self, plugin_id: &str) -> Option<Instant> {

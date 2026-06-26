@@ -27,7 +27,7 @@ fn register_plugin(
     registry: &PluginRegistry,
     plugin_id: &str,
     conn_id: u64,
-) -> mpsc::Receiver<Frame> {
+) -> mpsc::Receiver<veyron::ipc::connection::Outbound> {
     let (tx, rx) = mpsc::channel(16);
     registry
         .register(
@@ -49,7 +49,11 @@ fn make_event(event_type: &str) -> Event {
     }
 }
 
-fn decode_event_from_frame(frame: Frame) -> Event {
+fn decode_event_from_frame(item: veyron::ipc::connection::Outbound) -> Event {
+    let frame = match item {
+        veyron::ipc::connection::Outbound::Frame(f) => *f,
+        _ => panic!("expected Outbound::Frame"),
+    };
     let env = Envelope::decode(frame.payload.as_slice()).expect("decode envelope");
     match env.payload {
         Some(envelope::Payload::Event(e)) => e,
@@ -66,8 +70,11 @@ async fn slow_subscriber_does_not_block_publish_to_others() {
 
     // slow subscriber: capacity-1 channel, pre-filled and never drained (keep the
     // receiver alive so the channel stays open and full).
-    let (slow_tx, _slow_rx) = mpsc::channel::<Frame>(1);
-    slow_tx.send(empty_frame()).await.unwrap();
+    let (slow_tx, _slow_rx) = mpsc::channel::<veyron::ipc::connection::Outbound>(1);
+    slow_tx
+        .send(veyron::ipc::connection::out_frame(empty_frame()))
+        .await
+        .unwrap();
     registry
         .register("slow".to_string(), 1, PluginManifest::default(), slow_tx)
         .unwrap();

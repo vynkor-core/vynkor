@@ -12,6 +12,7 @@ use crate::api::server::ApiServer;
 use crate::auth::jwt::JwtValidator;
 use crate::events::bus::{run_retry_worker, EventBus};
 use crate::events::store::EventStore;
+use crate::ipc::connection::out_frame;
 use crate::ipc::framing::Frame;
 use crate::ipc::protocol::MessageRouter;
 use crate::ipc::server::UdsServer;
@@ -147,10 +148,8 @@ impl Kernel {
 
         let watchdog_sup = Arc::clone(&supervisor);
         let watchdog_reg = Arc::clone(&registry);
-        let watchdog_interval =
-            std::time::Duration::from_secs(config.watchdog_interval_secs);
-        let watchdog_timeout =
-            std::time::Duration::from_secs(config.watchdog_timeout_secs);
+        let watchdog_interval = std::time::Duration::from_secs(config.watchdog_interval_secs);
+        let watchdog_timeout = std::time::Duration::from_secs(config.watchdog_timeout_secs);
         tokio::spawn(async move {
             watchdog_sup
                 .watchdog_loop(watchdog_reg, watchdog_interval, watchdog_timeout)
@@ -241,7 +240,7 @@ impl Kernel {
         };
 
         for entry in entries {
-            let _ = entry.write_tx.send(frame.clone()).await;
+            let _ = entry.write_tx.send(out_frame(frame.clone())).await;
         }
 
         tokio::time::sleep(Duration::from_millis(200)).await;

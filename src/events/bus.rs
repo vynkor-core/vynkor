@@ -1,4 +1,5 @@
 use crate::events::store::EventStore;
+use crate::ipc::connection::out_frame;
 use crate::ipc::framing::Frame;
 use crate::plugins::registry::PluginRegistry;
 use crate::proto::veyron::{envelope, Envelope, Event};
@@ -126,7 +127,11 @@ impl EventBus {
                 Some(entry) => {
                     let frame = build_frame(&payload, &plugin_id);
                     // Bounded send: a slow subscriber must not stall the publisher.
-                    match tokio::time::timeout(EVENT_SEND_TIMEOUT, entry.write_tx.send(frame)).await
+                    match tokio::time::timeout(
+                        EVENT_SEND_TIMEOUT,
+                        entry.write_tx.send(out_frame(frame)),
+                    )
+                    .await
                     {
                         Ok(Ok(())) => {}
                         Ok(Err(_)) => {
