@@ -1,6 +1,7 @@
 mod test_api;
 mod test_errors;
 mod test_event_bus;
+mod test_event_store;
 mod test_framing;
 mod test_jwt;
 mod test_kernel;

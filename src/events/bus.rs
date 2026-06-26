@@ -164,6 +164,9 @@ pub async fn run_retry_worker(
     registry: Arc<PluginRegistry>,
 ) {
     const MAX_RETRIES: u32 = 5;
+    // Keep terminal (delivered/dead) events around for a while for debugging,
+    // then drop them so events.db does not grow without bound.
+    const RETENTION_SECS: u64 = 3600;
     loop {
         tokio::time::sleep(Duration::from_secs(5)).await;
         let pending = store.pending_older_than(10);
@@ -171,6 +174,10 @@ pub async fn run_retry_worker(
             let event_id = event.event_id.clone();
             store.increment_retry_or_dead(&event_id, MAX_RETRIES);
             bus.redeliver(event, &registry).await;
+        }
+        let pruned = store.prune(RETENTION_SECS);
+        if pruned > 0 {
+            debug!(count = pruned, "EventStore: pruned terminal events");
         }
     }
 }

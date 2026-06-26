@@ -92,6 +92,31 @@ impl EventStore {
         }
     }
 
+    /// Delete terminal events (delivered or dead) whose created_at is older than
+    /// `retention_secs`. Keeps the table bounded — without this, delivered/dead
+    /// rows accumulate forever. Pending events are never pruned. Returns the
+    /// number of rows removed.
+    pub fn prune(&self, retention_secs: u64) -> usize {
+        let cutoff = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            .saturating_sub(retention_secs) as i64;
+
+        let conn = self.conn.lock().unwrap();
+        match conn.execute(
+            "DELETE FROM events \
+             WHERE status IN ('delivered', 'dead') AND created_at <= ?1",
+            params![cutoff],
+        ) {
+            Ok(n) => n,
+            Err(e) => {
+                warn!(error = %e, "EventStore: prune failed");
+                0
+            }
+        }
+    }
+
     /// Increment retry_count by 1. If count reaches max_retries, mark the event 'dead'.
     pub fn increment_retry_or_dead(&self, event_id: &str, max_retries: u32) {
         let conn = self.conn.lock().unwrap();
