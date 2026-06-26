@@ -290,6 +290,31 @@ async fn post_endpoint_requires_auth_when_jwt_secret_set() {
 }
 
 #[tokio::test]
+async fn logs_endpoint_requires_auth_when_jwt_secret_set() {
+    const SECRET: &[u8] = b"test-secret";
+    let validator = Arc::new(JwtValidator::new(SECRET));
+    let registry = make_registry();
+    register(&registry, "guarded", 1);
+
+    let app = create_router(
+        make_manager(Arc::clone(&registry), make_supervisor()),
+        Some(validator),
+    );
+
+    // logs can leak sensitive output — must be rejected without a token
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/plugins/guarded/logs")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
 async fn read_only_endpoints_open_without_token() {
     const SECRET: &[u8] = b"test-secret";
     let validator = Arc::new(JwtValidator::new(SECRET));

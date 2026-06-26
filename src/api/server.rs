@@ -48,10 +48,12 @@ pub fn create_router_full(
         .route("/health", get(health_check))
         .route("/metrics", get(get_metrics))
         .route("/plugins", get(list_plugins))
-        .route("/plugins/:id", get(get_plugin))
-        .route("/plugins/:id/logs", get(get_plugin_logs));
+        .route("/plugins/:id", get(get_plugin));
 
+    // Plugin logs can contain sensitive output, and stop/restart mutate state —
+    // all require auth when a jwt_secret is configured.
     let protected = Router::new()
+        .route("/plugins/:id/logs", get(get_plugin_logs))
         .route("/plugins/:id/stop", post(stop_plugin))
         .route("/plugins/:id/restart", post(restart_plugin))
         .route_layer(middleware::from_fn_with_state(
