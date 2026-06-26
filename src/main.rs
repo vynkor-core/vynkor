@@ -47,6 +47,8 @@ async fn main() -> Result<()> {
                 warn!("failed to load config '{}': {}, using defaults", config, e);
             }
 
+            ensure_auth_configured(&cfg)?;
+
             if foreground {
                 // Foreground mode — including the child the daemon launcher spawns
                 // with --foreground — is guarded by the exclusive PID-file flock in
@@ -71,6 +73,7 @@ async fn main() -> Result<()> {
         Commands::Restart { config, debug } => {
             let cfg = load_config(&config).unwrap_or_default();
             utils::logging::init(&cfg.log_level);
+            ensure_auth_configured(&cfg)?;
             // Capture the PID before stop_kernel removes the pid file, so we can
             // confirm the actual process is gone rather than guessing with a sleep.
             let old_pid = read_pid(&cfg.pid_file).ok();
@@ -106,6 +109,18 @@ async fn main() -> Result<()> {
 }
 
 // ---- helpers ----
+
+/// Fail fast (before spawning anything) if the kernel would start without auth
+/// and the operator has not explicitly opted in to that.
+fn ensure_auth_configured(cfg: &Config) -> Result<()> {
+    if cfg.jwt_secret.is_none() && !cfg.allow_no_auth {
+        anyhow::bail!(
+            "refusing to start without authentication — set `jwt_secret` in config, \
+             or set `allow_no_auth: true` to run without auth (insecure)"
+        );
+    }
+    Ok(())
+}
 
 fn is_running(pid_file: &std::path::Path) -> Result<bool> {
     let pid = match read_pid(pid_file) {

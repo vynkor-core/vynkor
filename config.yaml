@@ -3,3 +3,11 @@ log_level: debug
 pid_file: /tmp/veyron.pid
 log_file: /tmp/veyron.log
 data_dir: /tmp/veyron
+
+# Authentication is required to start. For production, set a JWT secret:
+#   jwt_secret: "<a long random secret>"
+#
+# This dev config opts out of auth instead. INSECURE: any local process can
+# register as any plugin and reach the control plane. Do NOT use in production —
+# set jwt_secret and remove allow_no_auth.
+allow_no_auth: true

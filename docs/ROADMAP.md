@@ -1079,7 +1079,7 @@ intended single-host, trusted-process deployment). "Fixed" entries retained for 
 |----|----------|---------------|--------|---------------------|
 | VULN-001 | High | Unauthenticated peer-to-peer IPC | Any registered plugin unicasts arbitrary `Envelope` to any other plugin | ✅ Fixed — default-deny, requires `PERMISSION_IPC_SEND` (`forward()`) |
 | VULN-002 | Medium | Unchecked broadcast | `target = "*"` reaches all plugins with no permission check | ✅ Fixed — default-deny, requires `PERMISSION_IPC_SEND` (`broadcast()`) |
-| VULN-003 | Medium | No socket-level authentication | Any local process can connect to UDS and claim any `plugin_id` | ◐ Mitigated by JWT when `jwt_secret` set; default config has none |
+| VULN-003 | Medium | No socket-level authentication | Any local process can connect to UDS and claim any `plugin_id` | ✅ Mitigated — kernel now refuses to start without `jwt_secret` unless `allow_no_auth: true` is set deliberately (secure by default) |
 | VULN-004 | Medium | First-claim plugin-ID squatting | Attacker registers `admin` before the real plugin; legit plugin then rejected | ⚠ Open — needs identity binding (JWT `sub` enforced only when auth on) |
 | VULN-005 | Low | Non-cryptographic integrity | CRC-32 is forgeable by a socket-level attacker | ⚠ Open — see T-06 |
 | VULN-006 | Low | UDS file permissions vs umask | Socket mode depends on umask if explicit chmod regressed | ✅ Mitigated — `0o600` set after bind (`server.rs`) |

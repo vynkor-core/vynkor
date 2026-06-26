@@ -37,6 +37,10 @@ pub struct Config {
     pub socket_path: String,
     #[serde(default)]
     pub jwt_secret: Option<String>,
+    /// Explicit opt-out: allow the kernel to start with no JWT auth. Insecure —
+    /// any local process can register as any plugin. Must be set deliberately.
+    #[serde(default)]
+    pub allow_no_auth: bool,
     /// Plugins to auto-spawn on kernel start. Empty by default.
     #[serde(default)]
     pub plugins: Vec<PluginDef>,
@@ -74,6 +78,7 @@ impl Default for Config {
             data_dir: PathBuf::from("/var/lib/veyron"),
             socket_path: default_socket_path(),
             jwt_secret: None,
+            allow_no_auth: false,
             plugins: vec![],
             watchdog_interval_secs: default_watchdog_interval(),
             watchdog_timeout_secs: default_watchdog_timeout(),

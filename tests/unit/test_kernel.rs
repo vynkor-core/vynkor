@@ -12,8 +12,23 @@ fn test_config(socket: &str, port: u16) -> Config {
         port,
         pid_file: "/tmp/veyron_kernel_test.pid".into(),
         log_file: "/tmp/veyron_kernel_test.log".into(),
+        allow_no_auth: true, // tests exercise the no-auth path deliberately
         ..Config::default()
     }
+}
+
+#[tokio::test]
+async fn kernel_refuses_to_start_without_auth() {
+    let mut cfg = test_config("/tmp/veyron_kernel_noauth.sock", 19199);
+    // no JWT secret and no explicit opt-out → must refuse
+    cfg.jwt_secret = None;
+    cfg.allow_no_auth = false;
+
+    let result = Kernel::run_with_shutdown(cfg, async {}).await;
+    assert!(
+        result.is_err(),
+        "kernel must refuse to start without auth or an explicit opt-out"
+    );
 }
 
 #[tokio::test]

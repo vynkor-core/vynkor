@@ -12,6 +12,7 @@ pub fn test_config(socket: &str, port: u16) -> Config {
         port,
         pid_file: "/tmp/veyron_integ_test.pid".into(),
         log_file: "/tmp/veyron_integ_test.log".into(),
+        allow_no_auth: true, // tests exercise the no-auth path deliberately
         ..Config::default()
     }
 }

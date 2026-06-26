@@ -87,7 +87,16 @@ impl Kernel {
             Arc::new(JwtValidator::new(s.as_bytes()))
         });
         if jwt_validator.is_none() {
-            tracing::warn!("JWT auth disabled — set jwt_secret in config for production use");
+            if !config.allow_no_auth {
+                anyhow::bail!(
+                    "refusing to start without authentication: set `jwt_secret`, or set \
+                     `allow_no_auth: true` in config to run without auth (insecure)"
+                );
+            }
+            tracing::warn!(
+                "JWT auth DISABLED (allow_no_auth) — any local process can register as any \
+                 plugin; do not use in production"
+            );
         }
 
         let kernel_start = std::time::Instant::now();
