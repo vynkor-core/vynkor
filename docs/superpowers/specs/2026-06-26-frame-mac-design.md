@@ -145,7 +145,7 @@ When `jwt_secret` is configured:
 | `PluginRegister` (pre-registration) | `MAC_PRESENT` may be 0; JWT authenticates it |
 | Any frame from a **registered** connection | MUST have `MAC_PRESENT = 1` and a valid tag |
 | Registered frame with `MAC_PRESENT = 0` | Rejected — `ErrorCode::ErrMacMissing` |
-| Registered frame with bad tag | Rejected — `ErrorCode::ErrMacInvalid`; counted; connection dropped after the existing per-connection error budget |
+| Registered frame with bad tag | **Immediate connection drop** — `ErrorCode::ErrMacInvalid`. A well-formed frame with an invalid tag is active tampering/forgery, not a transient error, so it bypasses the per-connection error budget and tears down the connection at once (error sent best-effort, then the read loop closes). Counted via metrics. |
 
 When `allow_no_auth` (no `jwt_secret`): MAC is never expected; all frames are
 CRC-only (`MAC_PRESENT = 0`). A frame that arrives with `MAC_PRESENT = 1` in this
@@ -223,7 +223,8 @@ the router can verify inbound frames and tag outbound ones for that connection.
 
 **Unit — router:**
 - Registered connection sending an unMAC'd frame (auth on) → `ErrMacMissing`.
-- Registered connection sending a bad tag → `ErrMacInvalid`, error budget hit.
+- Registered connection sending a bad tag → `ErrMacInvalid`, connection dropped
+  immediately (does not consume/await the error budget).
 - Valid MAC'd frame routes normally.
 
 **Integration — kernel ↔ Rust SDK:**
