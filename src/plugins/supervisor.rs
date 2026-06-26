@@ -64,6 +64,9 @@ pub struct PluginSupervisor {
     max_log_lines: usize,
     event_bus: Option<Arc<EventBus>>,
     plugin_registry: Option<Arc<PluginRegistry>>,
+    /// Plugins whose next exit is a manual restart (POST /restart) and must be
+    /// respawned regardless of restart_policy / max_restarts.
+    forced_restarts: Arc<DashMap<String, ()>>,
 }
 
 impl PluginSupervisor {
@@ -93,6 +96,7 @@ impl PluginSupervisor {
             max_log_lines,
             event_bus,
             plugin_registry,
+            forced_restarts: Arc::new(DashMap::new()),
         }
     }
 
@@ -208,12 +212,16 @@ impl PluginSupervisor {
             .remove(plugin_id)
             .ok_or_else(|| VeyronError::PluginNotFound(plugin_id.to_string()))?;
 
+        // Explicit stop overrides any pending manual restart.
+        self.forced_restarts.remove(plugin_id);
         let pid = nix::unistd::Pid::from_raw(entry.1.pid as i32);
         let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGTERM);
         Ok(())
     }
 
     // Sends SIGTERM without removing the entry so monitor_loop restarts the plugin.
+    // Marks the plugin for forced restart so it respawns even under a Never /
+    // OnFailure policy or after max_restarts — a manual restart overrides policy.
     pub async fn restart_plugin(&self, plugin_id: &str) -> Result<(), VeyronError> {
         let pid = self
             .entries
@@ -221,6 +229,7 @@ impl PluginSupervisor {
             .map(|e| e.pid)
             .ok_or_else(|| VeyronError::PluginNotFound(plugin_id.to_string()))?;
 
+        self.forced_restarts.insert(plugin_id.to_string(), ());
         let nix_pid = nix::unistd::Pid::from_raw(pid as i32);
         let _ = nix::sys::signal::kill(nix_pid, nix::sys::signal::Signal::SIGTERM);
         Ok(())
@@ -239,14 +248,17 @@ impl PluginSupervisor {
     pub async fn monitor_loop(self: &Arc<Self>) {
         let mut rx = self.event_rx.lock().await;
         while let Some(event) = rx.recv().await {
+            // A manual restart (POST /restart) forces respawn regardless of policy.
+            let forced = self.forced_restarts.remove(&event.plugin_id).is_some();
             let decision = self.entries.get(&event.plugin_id).and_then(|entry| {
-                let should = match entry.config.restart_policy {
-                    RestartPolicy::Never => false,
-                    RestartPolicy::Always => entry.restart_count < entry.config.max_restarts,
-                    RestartPolicy::OnFailure => {
-                        !event.success && entry.restart_count < entry.config.max_restarts
-                    }
-                };
+                let should = forced
+                    || match entry.config.restart_policy {
+                        RestartPolicy::Never => false,
+                        RestartPolicy::Always => entry.restart_count < entry.config.max_restarts,
+                        RestartPolicy::OnFailure => {
+                            !event.success && entry.restart_count < entry.config.max_restarts
+                        }
+                    };
                 if should {
                     Some((entry.config.clone(), entry.restart_count))
                 } else {

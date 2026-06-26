@@ -116,6 +116,38 @@ async fn restart_policy_never_does_not_restart() {
 }
 
 #[tokio::test]
+async fn manual_restart_overrides_never_policy() {
+    let sup = Arc::new(PluginSupervisor::new("/tmp/veyron_test.sock"));
+
+    // long-running plugin with Never policy: it never exits on its own, so the
+    // only exit comes from the manual restart's SIGTERM.
+    sup.spawn_plugin(sleep_config("manual_never"))
+        .await
+        .unwrap();
+
+    let sup_clone = Arc::clone(&sup);
+    tokio::spawn(async move {
+        sup_clone.monitor_loop().await;
+    });
+
+    // explicit restart must respawn despite Never policy
+    sup.restart_plugin("manual_never").await.unwrap();
+    sleep(Duration::from_millis(600)).await; // SIGTERM + backoff(1)=200ms + respawn
+
+    assert!(
+        sup.is_running("manual_never"),
+        "plugin must be respawned after manual restart"
+    );
+    let count = sup.restart_count("manual_never").unwrap_or(0);
+    assert!(
+        count >= 1,
+        "manual restart must respawn despite Never policy, got {count}"
+    );
+
+    sup.stop_plugin("manual_never").await.ok();
+}
+
+#[tokio::test]
 async fn max_restarts_honored() {
     let sup = Arc::new(PluginSupervisor::new("/tmp/veyron_test.sock"));
 
