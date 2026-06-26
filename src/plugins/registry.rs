@@ -46,6 +46,16 @@ impl PluginRegistry {
             return Err(VeyronError::PluginAlreadyRegistered(plugin_id));
         }
 
+        // One registration per connection. Without this, a connection that sends
+        // a second PluginRegister with a different id would overwrite its
+        // by_conn_id mapping and orphan the first entry — it would leak in
+        // by_plugin_id forever (disconnect only cleans the id the conn maps to).
+        if self.by_conn_id.contains_key(&conn_id) {
+            return Err(VeyronError::PluginAlreadyRegistered(format!(
+                "connection {conn_id} already has a registered plugin"
+            )));
+        }
+
         let registered_at = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()

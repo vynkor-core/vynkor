@@ -54,6 +54,39 @@ fn duplicate_plugin_id_rejected() {
 }
 
 #[test]
+fn second_registration_on_same_conn_rejected_without_orphaning() {
+    let reg = PluginRegistry::new();
+
+    reg.register("first".to_string(), 7, dummy_manifest(), dummy_write_tx())
+        .expect("first register must succeed");
+
+    // same conn_id, different plugin_id — must be rejected
+    let result = reg.register("second".to_string(), 7, dummy_manifest(), dummy_write_tx());
+    assert!(
+        matches!(result, Err(VeyronError::PluginAlreadyRegistered(_))),
+        "re-registration on a live conn must be rejected, got {:?}",
+        result
+    );
+
+    // "second" must not exist; "first" must still be intact and reachable by conn
+    assert!(
+        reg.get("second").is_none(),
+        "rejected id must not be stored"
+    );
+    assert!(reg.get("first").is_some(), "original must survive");
+    assert_eq!(
+        reg.get_by_conn_id(7).map(|e| e.plugin_id),
+        Some("first".to_string()),
+        "conn must still map to the original plugin"
+    );
+
+    // disconnect cleans up fully — no orphan left behind
+    reg.unregister("first");
+    assert!(reg.get("first").is_none());
+    assert!(reg.list().is_empty(), "no orphaned entries after cleanup");
+}
+
+#[test]
 fn unregister_removes_from_both_indexes() {
     let reg = PluginRegistry::new();
 
