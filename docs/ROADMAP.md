@@ -1085,6 +1085,12 @@ intended single-host, trusted-process deployment). "Fixed" entries retained for 
 | VULN-006 | Low | UDS file permissions vs umask | Socket mode depends on umask if explicit chmod regressed | ✅ Mitigated — `0o600` set after bind (`server.rs`) |
 | VULN-007 | Low | Error-spam amplification | Malformed/denied frames return errors without closing the connection; plugin can flood | ✅ Fixed — per-connection error budget (16) throttles further messages (`run_with_context`) |
 | VULN-008 | Info | HTTP control plane unauthenticated by default | REST endpoints require JWT only when configured | ◐ Mitigated — bound to `127.0.0.1`; enable `jwt_secret` for shared hosts |
+| VULN-009 | High | JSON injection via `plugin_id` | Unvalidated `plugin_id` embedded unescaped into `system.plugin_joined/left/died` payloads; a crafted id spoofs/injects fields subscribers parse | ✅ Fixed — `validate_plugin_id()` at registration: `[A-Za-z0-9._-]`, ≤32 bytes, non-reserved |
+| VULN-010 | Medium | Plugin logs exposed without auth | `GET /plugins/:id/logs` was public; log output may contain secrets/PII | ✅ Fixed — moved to the auth-protected route group (`server.rs`) |
+
+**Note:** VULN-004 (plugin-id squatting) is partly mitigated by VULN-009's id validation
+(reserved names `kernel`/`*` and malformed ids can no longer be claimed); full identity
+binding still requires `jwt_secret` so the token `sub` is enforced against the declared id.
 
 **Reporting:** new findings get the next `VULN-NNN` id, a severity, and a row here before
 remediation begins. Fixed rows stay for traceability.
