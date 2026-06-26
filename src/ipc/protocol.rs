@@ -26,6 +26,12 @@ static MSG_SEQ: AtomicU64 = AtomicU64::new(0);
 /// throttled (dropped without a response). Reset on any successful message.
 const MAX_CONN_ERRORS: u32 = 16;
 
+/// Cap on the per-connection error-budget map. The router never sees
+/// disconnects, so entries for connections that errored and then dropped would
+/// otherwise accumulate. When the map exceeds this, prune entries whose
+/// connection is no longer registered.
+const MAX_TRACKED_ERROR_CONNS: usize = 8192;
+
 pub struct MessageRouter;
 
 impl MessageRouter {
@@ -101,6 +107,9 @@ impl MessageRouter {
             };
 
             if errored {
+                if error_counts.len() >= MAX_TRACKED_ERROR_CONNS {
+                    error_counts.retain(|cid, _| registry.is_registered(*cid));
+                }
                 let count = error_counts.entry(conn_id).or_insert(0);
                 *count += 1;
                 if *count == MAX_CONN_ERRORS {
