@@ -71,8 +71,18 @@ async fn main() -> Result<()> {
         Commands::Restart { config, debug } => {
             let cfg = load_config(&config).unwrap_or_default();
             utils::logging::init(&cfg.log_level);
+            // Capture the PID before stop_kernel removes the pid file, so we can
+            // confirm the actual process is gone rather than guessing with a sleep.
+            let old_pid = read_pid(&cfg.pid_file).ok();
             stop_kernel(&cfg.pid_file)?;
-            std::thread::sleep(std::time::Duration::from_millis(500));
+            if let Some(pid) = old_pid {
+                if !wait_pid_gone(pid, std::time::Duration::from_secs(5)) {
+                    anyhow::bail!(
+                        "restart aborted: kernel (PID {pid}) still alive after stop — \
+                         refusing to start a second instance"
+                    );
+                }
+            }
             daemonize_and_run(&cfg, &config, debug)?;
         }
         Commands::Status { config } => {
@@ -113,6 +123,23 @@ fn is_running(pid_file: &std::path::Path) -> Result<bool> {
             Ok(false)
         }
         Err(_) => Ok(false),
+    }
+}
+
+/// Poll a specific PID until it no longer exists (ESRCH) or the timeout elapses.
+/// Returns true if the process is gone. Uses signal 0 (no signal delivered).
+fn wait_pid_gone(pid: i32, timeout: std::time::Duration) -> bool {
+    use nix::sys::signal::kill;
+    use nix::unistd::Pid;
+    let start = std::time::Instant::now();
+    loop {
+        if let Err(nix::errno::Errno::ESRCH) = kill(Pid::from_raw(pid), None) {
+            return true;
+        }
+        if start.elapsed() >= timeout {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
     }
 }
 
