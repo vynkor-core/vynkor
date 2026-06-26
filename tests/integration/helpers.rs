@@ -45,3 +45,31 @@ pub async fn start_kernel(
 
     (shutdown_tx, registry, event_bus)
 }
+
+/// Like `start_kernel` but with JWT auth + frame MAC enabled (`jwt_secret` set).
+pub async fn start_kernel_secured(
+    socket: &str,
+    port: u16,
+    secret: &str,
+) -> (oneshot::Sender<()>, Arc<PluginRegistry>, Arc<EventBus>) {
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let mut cfg = test_config(socket, port);
+    cfg.allow_no_auth = false;
+    cfg.jwt_secret = Some(secret.to_string());
+
+    let registry = Arc::new(PluginRegistry::new());
+    let event_bus = Arc::new(EventBus::new());
+    let reg = Arc::clone(&registry);
+    let bus = Arc::clone(&event_bus);
+
+    tokio::spawn(async move {
+        Kernel::run_with_components(cfg, reg, bus, async {
+            let _ = shutdown_rx.await;
+        })
+        .await
+        .unwrap();
+    });
+
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    (shutdown_tx, registry, event_bus)
+}
