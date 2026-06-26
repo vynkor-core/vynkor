@@ -73,17 +73,23 @@ impl EventStore {
             Err(_) => return vec![],
         };
 
-        stmt.query_map(params![threshold], |row| {
+        let rows = stmt.query_map(params![threshold], |row| {
             Ok(Event {
                 event_id: row.get(0)?,
                 event_type: row.get(1)?,
                 payload_json: row.get(2)?,
                 retry_count: row.get::<_, i64>(3)? as u32,
             })
-        })
-        .unwrap_or_else(|_| panic!("query_map failed"))
-        .filter_map(|r| r.ok())
-        .collect()
+        });
+        // Graceful on error: a failed query must not panic — it runs while the
+        // conn Mutex is held, which would poison it and brick the whole store.
+        match rows {
+            Ok(mapped) => mapped.filter_map(|r| r.ok()).collect(),
+            Err(e) => {
+                warn!(error = %e, "EventStore: pending query failed");
+                vec![]
+            }
+        }
     }
 
     /// Increment retry_count by 1. If count reaches max_retries, mark the event 'dead'.
