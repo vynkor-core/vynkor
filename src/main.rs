@@ -165,10 +165,12 @@ fn daemonize_and_run(cfg: &Config, config_path: &str, debug: bool) -> Result<()>
     if debug {
         command.arg("--debug");
     }
-    let child = command
-        .stdout(std::fs::File::create(&cfg.log_file)?)
-        .stderr(std::fs::File::create(&cfg.log_file)?)
-        .spawn()?;
+    // One open file shared (dup) across stdout+stderr so the two streams share a
+    // single write offset and interleave correctly. Two separate File::create
+    // handles would each start at offset 0 and clobber each other's output.
+    let log = std::fs::File::create(&cfg.log_file)?;
+    let log_err = log.try_clone()?;
+    let child = command.stdout(log).stderr(log_err).spawn()?;
     let pid = child.id() as i32;
     write_pid(&cfg.pid_file, pid)?;
     info!("kernel started in background with PID {}", pid);
