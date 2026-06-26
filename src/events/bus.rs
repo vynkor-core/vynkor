@@ -3,11 +3,17 @@ use crate::ipc::framing::Frame;
 use crate::plugins::registry::PluginRegistry;
 use crate::proto::veyron::{envelope, Envelope, Event};
 use dashmap::DashMap;
+use metrics::counter;
 use prost::Message;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, warn};
+
+/// Event delivery is fire-and-forget: if a subscriber does not drain its write
+/// channel within this window, the event is dropped rather than blocking the
+/// publisher (and every other subscriber on the same publish).
+const EVENT_SEND_TIMEOUT: Duration = Duration::from_millis(50);
 
 pub struct EventBus {
     // event_type → set of plugin_ids
@@ -119,7 +125,25 @@ impl EventBus {
             match registry.get(&plugin_id) {
                 Some(entry) => {
                     let frame = build_frame(&payload, &plugin_id);
-                    let _ = entry.write_tx.send(frame).await;
+                    // Bounded send: a slow subscriber must not stall the publisher.
+                    match tokio::time::timeout(EVENT_SEND_TIMEOUT, entry.write_tx.send(frame)).await
+                    {
+                        Ok(Ok(())) => {}
+                        Ok(Err(_)) => {
+                            // receiver dropped — plugin is disconnecting
+                            counter!("events_dropped_total", "reason" => "channel_closed")
+                                .increment(1);
+                        }
+                        Err(_) => {
+                            warn!(
+                                plugin_id = %plugin_id,
+                                event_type = %event_type,
+                                "event dropped: subscriber write channel full"
+                            );
+                            counter!("events_dropped_total", "reason" => "slow_subscriber")
+                                .increment(1);
+                        }
+                    }
                 }
                 None => {
                     warn!(
@@ -127,6 +151,7 @@ impl EventBus {
                         event_type = %event_type,
                         "event dropped: subscriber not in registry"
                     );
+                    counter!("events_dropped_total", "reason" => "unregistered").increment(1);
                 }
             }
         }

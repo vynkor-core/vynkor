@@ -1,10 +1,22 @@
 use prost::Message;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc;
 use veyron::events::bus::EventBus;
 use veyron::ipc::framing::Frame;
 use veyron::plugins::registry::PluginRegistry;
 use veyron::proto::veyron::{envelope, Envelope, Event, PluginManifest};
+
+fn empty_frame() -> Frame {
+    Frame {
+        magic: 0,
+        flags: 0,
+        length: 0,
+        target: [0u8; 32],
+        crc32: 0,
+        payload: vec![],
+    }
+}
 
 fn make_registry() -> Arc<PluginRegistry> {
     Arc::new(PluginRegistry::new())
@@ -45,6 +57,41 @@ fn decode_event_from_frame(frame: Frame) -> Event {
 }
 
 // ── tests ────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn slow_subscriber_does_not_block_publish_to_others() {
+    let bus = EventBus::new();
+    let registry = make_registry();
+
+    // slow subscriber: capacity-1 channel, pre-filled and never drained (keep the
+    // receiver alive so the channel stays open and full).
+    let (slow_tx, _slow_rx) = mpsc::channel::<Frame>(1);
+    slow_tx.send(empty_frame()).await.unwrap();
+    registry
+        .register("slow".to_string(), 1, PluginManifest::default(), slow_tx)
+        .unwrap();
+
+    // healthy subscriber
+    let mut fast_rx = register_plugin(&registry, "fast", 2);
+
+    bus.subscribe("slow", vec!["e".to_string()]);
+    bus.subscribe("fast", vec!["e".to_string()]);
+
+    // publish must complete promptly (the stuck subscriber is dropped after the
+    // send timeout) — with an unbounded send it would block forever.
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        bus.publish(make_event("e"), &registry),
+    )
+    .await
+    .expect("publish must not block on a stuck subscriber");
+
+    let frame = tokio::time::timeout(Duration::from_millis(500), fast_rx.recv())
+        .await
+        .expect("fast subscriber must receive")
+        .expect("channel open");
+    assert_eq!(decode_event_from_frame(frame).event_type, "e");
+}
 
 #[tokio::test]
 async fn publish_delivers_event_to_subscriber() {
