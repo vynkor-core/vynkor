@@ -27,6 +27,26 @@ pub fn check_ipc_send(registry: &PluginRegistry, plugin_id: &str) -> Result<(), 
     check_permission(registry, plugin_id, PermissionType::PermissionIpcSend)
 }
 
+/// Gate per-target IPC (T-04): sender must list the target in `ipc_targets`.
+/// Empty allowlist = deny-all, even with PERMISSION_IPC_SEND.
+pub fn check_ipc_target(
+    registry: &PluginRegistry,
+    sender_id: &str,
+    target_id: &str,
+) -> Result<(), VeyronError> {
+    let entry = registry
+        .get(sender_id)
+        .ok_or_else(|| VeyronError::PluginNotFound(sender_id.to_string()))?;
+
+    if entry.manifest.ipc_targets.iter().any(|t| t == target_id) {
+        Ok(())
+    } else {
+        Err(VeyronError::PermissionDenied(format!(
+            "{sender_id} ipc_targets does not include {target_id}"
+        )))
+    }
+}
+
 pub fn action_to_permission(action: &str) -> Option<PermissionType> {
     match action {
         "http_get" | "http_post" | "http_put" | "http_delete" | "http_patch" => {

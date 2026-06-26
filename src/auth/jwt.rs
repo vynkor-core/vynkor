@@ -6,6 +6,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub struct PluginClaims {
     pub sub: String,
     pub permissions: Vec<String>,
+    #[serde(default)]
+    pub ipc_targets: Vec<String>,
     pub exp: usize,
     pub iat: usize,
 }
@@ -49,6 +51,7 @@ pub fn create_test_token(
     let claims = PluginClaims {
         sub: plugin_id.to_string(),
         permissions,
+        ipc_targets: vec![],
         exp: (now + exp_offset_secs).max(0) as usize,
         iat: now as usize,
     };

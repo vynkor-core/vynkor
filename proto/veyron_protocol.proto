@@ -74,6 +74,9 @@ message PluginManifest {
   repeated string  events       = 3;  // события на которые хочет подписаться
   bool             needs_gpu    = 5;  // нужен ли GPU (stt/tts)
   uint32           priority     = 6;  // приоритет 1–10 (влияет на планировщик)
+  // Per-plugin IPC allowlist (T-04). Plugin may only unicast to plugin_ids
+  // listed here. Empty list = deny-all (even with PERMISSION_IPC_SEND).
+  repeated string  ipc_targets  = 7;
 
   reserved 4;
   reserved "needs_ai";

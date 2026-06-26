@@ -1,5 +1,5 @@
 use crate::auth::jwt::JwtValidator;
-use crate::auth::permissions::{action_to_permission, check_ipc_send, check_permission};
+use crate::auth::permissions::{action_to_permission, check_ipc_send, check_ipc_target, check_permission};
 use crate::events::bus::EventBus;
 use crate::events::store::EventStore;
 use crate::ipc::connection::{out_frame, Outbound};
@@ -183,8 +183,9 @@ impl MessageRouter {
                                 .await;
                                 return true;
                             }
-                            // Token permissions take precedence over manifest declaration
+                            // Token fields take precedence over manifest declaration
                             manifest.permissions = claims.permissions;
+                            manifest.ipc_targets = claims.ipc_targets;
                         }
                         Err(e) => {
                             Self::send_register_reject(&msg.write_tx, &format!("auth failed: {e}"))
@@ -405,6 +406,20 @@ impl MessageRouter {
                 &msg.write_tx,
                 ErrorCode::ErrUnknown,
                 "PERMISSION_IPC_SEND required",
+            )
+            .await;
+            return true;
+        }
+
+        // Per-target allowlist (T-04): ipc_targets must explicitly list the target.
+        // Empty ipc_targets = deny-all even with PERMISSION_IPC_SEND.
+        if check_ipc_target(registry, &sender_id, plugin_id).is_err() {
+            warn!(sender = %sender_id, target = %plugin_id, "ipc target not in allowlist");
+            counter!("ipc_send_denied_total").increment(1);
+            Self::send_error(
+                &msg.write_tx,
+                ErrorCode::ErrUnknown,
+                "target not in ipc_targets allowlist",
             )
             .await;
             return true;

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use veyron::auth::permissions::{action_to_permission, check_permission};
+use veyron::auth::permissions::{action_to_permission, check_ipc_target, check_permission};
 use veyron::plugins::registry::PluginRegistry;
 use veyron::proto::veyron::{PermissionType, PluginManifest};
 
@@ -15,6 +15,23 @@ fn registry_with(plugin_id: &str, permissions: Vec<&str>) -> Arc<PluginRegistry>
         .register(plugin_id.to_string(), 1, manifest, tx)
         .unwrap();
     registry
+}
+
+fn registry_with_ipc(
+    plugin_id: &str,
+    conn_id: u64,
+    ipc_targets: Vec<&str>,
+    registry: &Arc<PluginRegistry>,
+) {
+    let (tx, _rx) = mpsc::channel(1);
+    let manifest = PluginManifest {
+        permissions: vec!["PERMISSION_IPC_SEND".to_string()],
+        ipc_targets: ipc_targets.iter().map(|s| s.to_string()).collect(),
+        ..Default::default()
+    };
+    registry
+        .register(plugin_id.to_string(), conn_id, manifest, tx)
+        .unwrap();
 }
 
 #[test]
@@ -65,4 +82,34 @@ fn action_write_file_maps_to_files_write() {
 #[test]
 fn unknown_action_maps_to_none() {
     assert_eq!(action_to_permission("fly_to_moon"), None);
+}
+
+// ── T-04: per-plugin IPC allowlist ───────────────────────────────────────────
+
+#[test]
+fn ipc_target_denied_when_allowlist_empty() {
+    let reg = Arc::new(PluginRegistry::new());
+    registry_with_ipc("sender", 1, vec![], &reg);
+    // ipc_send granted but ipc_targets empty → deny-all
+    assert!(check_ipc_target(&reg, "sender", "anyone").is_err());
+}
+
+#[test]
+fn ipc_target_allowed_when_in_allowlist() {
+    let reg = Arc::new(PluginRegistry::new());
+    registry_with_ipc("sender", 1, vec!["allowed_plugin"], &reg);
+    assert!(check_ipc_target(&reg, "sender", "allowed_plugin").is_ok());
+}
+
+#[test]
+fn ipc_target_denied_when_not_in_allowlist() {
+    let reg = Arc::new(PluginRegistry::new());
+    registry_with_ipc("sender", 1, vec!["allowed_plugin"], &reg);
+    assert!(check_ipc_target(&reg, "sender", "other_plugin").is_err());
+}
+
+#[test]
+fn ipc_target_denied_for_unknown_sender() {
+    let reg = Arc::new(PluginRegistry::new());
+    assert!(check_ipc_target(&reg, "ghost", "anyone").is_err());
 }

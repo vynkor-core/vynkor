@@ -15,6 +15,7 @@ fn dummy_manifest() -> PluginManifest {
         events: vec![],
         needs_gpu: false,
         priority: 1,
+        ipc_targets: vec![],
     }
 }
 

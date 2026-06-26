@@ -26,6 +26,14 @@ fn ipc_manifest() -> PluginManifest {
     }
 }
 
+fn ipc_manifest_with_targets(targets: Vec<&str>) -> PluginManifest {
+    PluginManifest {
+        permissions: vec!["PERMISSION_IPC_SEND".to_string()],
+        ipc_targets: targets.iter().map(|s| s.to_string()).collect(),
+        ..Default::default()
+    }
+}
+
 fn make_write_pair() -> (mpsc::Sender<Outbound>, mpsc::Receiver<Outbound>) {
     mpsc::channel::<Outbound>(16)
 }
@@ -144,12 +152,12 @@ async fn router_forwards_frame_to_target_plugin() {
     reg.register("plugin_b".to_string(), 2, dummy_manifest(), b_write_tx)
         .unwrap();
 
-    // plugin A (conn_id=1) holds PERMISSION_IPC_SEND so router allows forwarding
+    // plugin A (conn_id=1): ipc_send + plugin_b in allowlist
     let (a_write_tx, _a_write_rx) = make_write_pair();
     reg.register(
         "plugin_a".to_string(),
         1,
-        ipc_manifest(),
+        ipc_manifest_with_targets(vec!["plugin_b"]),
         a_write_tx.clone(),
     )
     .unwrap();
@@ -189,9 +197,9 @@ async fn slow_target_does_not_stall_router() {
     reg.register("fast".to_string(), 3, dummy_manifest(), fast_tx)
         .unwrap();
 
-    // sender holds PERMISSION_IPC_SEND
+    // sender: ipc_send + both targets in allowlist
     let (a_tx, _a_rx) = make_write_pair();
-    reg.register("sender".to_string(), 1, ipc_manifest(), a_tx.clone())
+    reg.register("sender".to_string(), 1, ipc_manifest_with_targets(vec!["slow", "fast"]), a_tx.clone())
         .unwrap();
 
     let router_tx = spawn_router(Arc::clone(&reg), bus);
@@ -473,6 +481,73 @@ async fn router_sends_error_for_unknown_target_plugin() {
         "expected ErrorMessage for unknown target, got {:?}",
         env.payload
     );
+}
+
+// ── T-04: per-plugin IPC allowlist ───────────────────────────────────────────
+
+#[tokio::test]
+async fn router_denies_forward_with_empty_ipc_targets() {
+    let reg = Arc::new(PluginRegistry::new());
+    let bus = Arc::new(EventBus::new());
+
+    let (b_tx, mut b_rx) = make_write_pair();
+    reg.register("plugin_b".to_string(), 2, dummy_manifest(), b_tx).unwrap();
+
+    // sender: ipc_send granted but ipc_targets empty → deny-all
+    let (a_tx, mut a_rx) = make_write_pair();
+    reg.register("plugin_a".to_string(), 1, ipc_manifest_with_targets(vec![]), a_tx.clone()).unwrap();
+
+    let router_tx = spawn_router(Arc::clone(&reg), bus);
+    router_tx.send(incoming(1, plug_frame("plugin_b", b"blocked".to_vec()), a_tx)).await.unwrap();
+
+    let err = recv_frame(&mut a_rx).await;
+    let env = Envelope::decode(err.payload.as_slice()).unwrap();
+    assert!(matches!(env.payload, Some(envelope::Payload::Error(_))));
+    assert!(b_rx.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn router_allows_forward_to_listed_ipc_target() {
+    let reg = Arc::new(PluginRegistry::new());
+    let bus = Arc::new(EventBus::new());
+
+    let (b_tx, mut b_rx) = make_write_pair();
+    reg.register("plugin_b".to_string(), 2, dummy_manifest(), b_tx).unwrap();
+
+    // sender: ipc_send + plugin_b in allowlist
+    let (a_tx, _a_rx) = make_write_pair();
+    reg.register("plugin_a".to_string(), 1, ipc_manifest_with_targets(vec!["plugin_b"]), a_tx.clone()).unwrap();
+
+    let router_tx = spawn_router(Arc::clone(&reg), bus);
+    let payload = b"hello".to_vec();
+    router_tx.send(incoming(1, plug_frame("plugin_b", payload.clone()), a_tx)).await.unwrap();
+
+    let received = recv_frame(&mut b_rx).await;
+    assert_eq!(received.payload, payload);
+}
+
+#[tokio::test]
+async fn router_denies_forward_to_unlisted_ipc_target() {
+    let reg = Arc::new(PluginRegistry::new());
+    let bus = Arc::new(EventBus::new());
+
+    let (b_tx, mut b_rx) = make_write_pair();
+    reg.register("plugin_b".to_string(), 2, dummy_manifest(), b_tx).unwrap();
+    let (c_tx, mut c_rx) = make_write_pair();
+    reg.register("plugin_c".to_string(), 3, dummy_manifest(), c_tx).unwrap();
+
+    // sender: ipc_send + only plugin_b allowed, not plugin_c
+    let (a_tx, mut a_rx) = make_write_pair();
+    reg.register("plugin_a".to_string(), 1, ipc_manifest_with_targets(vec!["plugin_b"]), a_tx.clone()).unwrap();
+
+    let router_tx = spawn_router(Arc::clone(&reg), bus);
+    router_tx.send(incoming(1, plug_frame("plugin_c", b"blocked".to_vec()), a_tx)).await.unwrap();
+
+    let err = recv_frame(&mut a_rx).await;
+    let env = Envelope::decode(err.payload.as_slice()).unwrap();
+    assert!(matches!(env.payload, Some(envelope::Payload::Error(_))));
+    assert!(b_rx.try_recv().is_err());
+    assert!(c_rx.try_recv().is_err());
 }
 
 #[tokio::test]
