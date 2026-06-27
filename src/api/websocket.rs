@@ -84,7 +84,7 @@ async fn handle_socket(
                         match parse_frame(&data) {
                             Ok(frame) => {
                                 // Verify MAC on inbound frames once session key is active.
-                                let key = *session_key.lock().unwrap();
+                                let key = *session_key.lock().unwrap_or_else(|p| p.into_inner());
                                 if let Some(k) = key {
                                     let valid = frame.flags & FLAG_MAC_PRESENT != 0
                                         && match &frame.mac {

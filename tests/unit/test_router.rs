@@ -5,7 +5,7 @@ use tokio::sync::mpsc;
 use tokio::time::timeout;
 use veyron::events::bus::EventBus;
 use veyron::ipc::connection::{out_frame, Outbound};
-use veyron::ipc::framing::{target_as_str, Frame};
+use veyron::ipc::framing::{target_as_str, Frame, FLAG_MAC_PRESENT};
 use veyron::ipc::messages::IncomingMessage;
 use veyron::ipc::protocol::MessageRouter;
 use veyron::plugins::registry::PluginRegistry;
@@ -17,13 +17,6 @@ use veyron::proto::veyron::{
 
 fn dummy_manifest() -> PluginManifest {
     PluginManifest::default()
-}
-
-fn ipc_manifest() -> PluginManifest {
-    PluginManifest {
-        permissions: vec!["PERMISSION_IPC_SEND".to_string()],
-        ..Default::default()
-    }
 }
 
 fn ipc_manifest_with_targets(targets: Vec<&str>) -> PluginManifest {
@@ -279,9 +272,14 @@ async fn router_broadcasts_star_to_all_except_sender() {
     let (b_tx, mut b_rx) = make_write_pair();
     let (c_tx, mut c_rx) = make_write_pair();
 
-    // sender holds PERMISSION_IPC_SEND; broadcast is gated like unicast
-    reg.register("plugin_a".to_string(), 1, ipc_manifest(), a_tx.clone())
-        .unwrap();
+    // sender holds PERMISSION_IPC_SEND and lists both recipients in ipc_targets
+    reg.register(
+        "plugin_a".to_string(),
+        1,
+        ipc_manifest_with_targets(vec!["plugin_b", "plugin_c"]),
+        a_tx.clone(),
+    )
+    .unwrap();
     reg.register("plugin_b".to_string(), 2, dummy_manifest(), b_tx)
         .unwrap();
     reg.register("plugin_c".to_string(), 3, dummy_manifest(), c_tx)
@@ -592,6 +590,160 @@ async fn router_denies_forward_to_unlisted_ipc_target() {
     assert!(matches!(env.payload, Some(envelope::Payload::Error(_))));
     assert!(b_rx.try_recv().is_err());
     assert!(c_rx.try_recv().is_err());
+}
+
+// ── T-19: mutex poison hardening (VULN-013) ─────────────────────────────────
+
+/// VULN-013: if the SessionKeyCell mutex is poisoned before registration,
+/// `if let Ok(...)` silently skips key installation — MAC verification is
+/// never activated and the connection proceeds unprotected.
+/// After the fix, the key must be installed despite the prior poison.
+#[tokio::test]
+async fn poisoned_session_key_cell_still_installs_mac_key() {
+    use veyron::ipc::messages::IncomingMessage;
+
+    // Poison the mutex on a dedicated OS thread, then join to confirm.
+    let cell: Arc<Mutex<Option<[u8; 32]>>> = Arc::new(Mutex::new(None));
+    let cell_for_poison = Arc::clone(&cell);
+    let _ = std::thread::spawn(move || {
+        let _guard = cell_for_poison.lock().unwrap();
+        panic!("intentionally poison the mutex");
+    })
+    .join();
+    assert!(cell.lock().is_err(), "precondition: mutex must be poisoned");
+
+    // Router with a mac_secret so it will derive + install a session key.
+    let reg = Arc::new(PluginRegistry::new());
+    let bus = Arc::new(EventBus::new());
+    let mac_secret = Arc::new(b"t19-test-secret-key-32bytesXXXXX".to_vec());
+
+    let (router_tx, rx) = mpsc::channel::<IncomingMessage>(16);
+    tokio::spawn(MessageRouter::run_with_context(
+        rx,
+        Arc::clone(&reg),
+        Arc::clone(&bus),
+        None,
+        std::time::Instant::now(),
+        None,
+        None,
+        Some(Arc::clone(&mac_secret)),
+    ));
+
+    let (write_tx, mut write_rx) = make_write_pair();
+    let env = Envelope {
+        payload: Some(envelope::Payload::PluginRegister(PluginRegister {
+            plugin_id: "poison-test-plugin".to_string(),
+            manifest: Some(dummy_manifest()),
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+
+    router_tx
+        .send(IncomingMessage {
+            conn_id: 42,
+            frame: kernel_frame(env),
+            write_tx: write_tx.clone(),
+            session_key: Arc::clone(&cell),
+        })
+        .await
+        .unwrap();
+
+    // Ack confirms registration was accepted.
+    let frame = recv_frame(&mut write_rx).await;
+    let ack_env = decode_envelope(&frame);
+    match ack_env.payload {
+        Some(envelope::Payload::PluginRegisterAck(PluginRegisterAck {
+            accepted,
+            session_nonce,
+            ..
+        })) => {
+            assert!(accepted, "registration must be accepted");
+            assert!(!session_nonce.is_empty(), "nonce must be present when mac_secret set");
+        }
+        other => panic!("expected PluginRegisterAck, got {:?}", other),
+    }
+
+    // Key must be installed despite the earlier poison — recover with unwrap_or_else.
+    let installed = cell.lock().unwrap_or_else(|p| p.into_inner());
+    assert!(
+        installed.is_some(),
+        "session key must be installed even when mutex was previously poisoned"
+    );
+}
+
+// ── T-18: broadcast security (VULN-012, VULN-015) ───────────────────────────
+
+/// VULN-012: sender with PERMISSION_IPC_SEND but empty ipc_targets must not
+/// deliver a broadcast to any recipient — the per-target allowlist check must
+/// apply inside the broadcast send loop, same as in forward().
+#[tokio::test]
+async fn broadcast_denied_with_empty_ipc_targets() {
+    let reg = Arc::new(PluginRegistry::new());
+    let bus = Arc::new(EventBus::new());
+
+    let (b_tx, mut b_rx) = make_write_pair();
+    reg.register("plugin_b".to_string(), 2, dummy_manifest(), b_tx)
+        .unwrap();
+
+    // sender: ipc_send granted but ipc_targets empty → deny-all
+    let (a_tx, _a_rx) = make_write_pair();
+    reg.register(
+        "plugin_a".to_string(),
+        1,
+        ipc_manifest_with_targets(vec![]),
+        a_tx.clone(),
+    )
+    .unwrap();
+
+    let router_tx = spawn_router(Arc::clone(&reg), bus);
+    let frame = make_frame("*", b"secret".to_vec());
+    router_tx.send(incoming(1, frame, a_tx)).await.unwrap();
+
+    // plugin_b must receive nothing
+    let result = timeout(Duration::from_millis(150), b_rx.recv()).await;
+    assert!(
+        result.is_err(),
+        "broadcast from plugin with empty ipc_targets must not deliver to any recipient"
+    );
+}
+
+/// VULN-015: broadcast must strip FLAG_MAC_PRESENT from the cloned frame's
+/// flags so that the recipient's write_loop re-tags it under its own session
+/// key rather than forwarding a stale/wrong tag.
+#[tokio::test]
+async fn broadcast_strips_flag_mac_present() {
+    let reg = Arc::new(PluginRegistry::new());
+    let bus = Arc::new(EventBus::new());
+
+    let (b_tx, mut b_rx) = make_write_pair();
+    reg.register("plugin_b".to_string(), 2, dummy_manifest(), b_tx)
+        .unwrap();
+
+    // sender: ipc_send + plugin_b in allowlist
+    let (a_tx, _a_rx) = make_write_pair();
+    reg.register(
+        "plugin_a".to_string(),
+        1,
+        ipc_manifest_with_targets(vec!["plugin_b"]),
+        a_tx.clone(),
+    )
+    .unwrap();
+
+    let router_tx = spawn_router(Arc::clone(&reg), bus);
+
+    // send a frame that has FLAG_MAC_PRESENT set in flags but mac: None
+    let mut frame = make_frame("*", b"data".to_vec());
+    frame.flags |= FLAG_MAC_PRESENT;
+
+    router_tx.send(incoming(1, frame, a_tx)).await.unwrap();
+
+    let received = recv_frame(&mut b_rx).await;
+    assert_eq!(
+        received.flags & FLAG_MAC_PRESENT,
+        0,
+        "broadcast must strip FLAG_MAC_PRESENT from cloned frame"
+    );
 }
 
 #[tokio::test]

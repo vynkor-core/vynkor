@@ -99,12 +99,13 @@ async fn client_send_recv_roundtrip_via_broadcast() {
         .await
         .unwrap();
 
-    // sender needs PERMISSION_IPC_SEND to broadcast (default-deny)
+    // sender needs PERMISSION_IPC_SEND + ipc_targets listing the receiver
     sender
         .register(
             "sdk_sender",
             PluginManifest {
                 permissions: vec!["PERMISSION_IPC_SEND".to_string()],
+                ipc_targets: vec!["sdk_receiver".to_string()],
                 ..Default::default()
             },
         )

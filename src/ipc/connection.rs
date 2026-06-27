@@ -70,7 +70,7 @@ impl ConnectionHandler {
         loop {
             match read_frame(&mut self.read_half).await {
                 Ok(frame) => {
-                    let key = *self.session_key.lock().unwrap();
+                    let key = *self.session_key.lock().unwrap_or_else(|p| p.into_inner());
                     if let Some(k) = key {
                         // Secured connection: every frame must carry a valid MAC.
                         // A well-formed frame with a bad/missing tag is active

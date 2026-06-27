@@ -256,9 +256,9 @@ impl MessageRouter {
                         &session_nonce,
                         &plugin_id,
                     );
-                    if let Ok(mut cell) = msg.session_key.lock() {
-                        *cell = Some(key);
-                    }
+                    // Recover from mutex poison: a poisoned cell must still get the key —
+                    // silent swallow would leave the connection without MAC enforcement (VULN-013).
+                    *msg.session_key.lock().unwrap_or_else(|p| p.into_inner()) = Some(key);
                     let _ = msg.write_tx.send(Outbound::EnableMac(key)).await;
                 }
 
@@ -480,9 +480,16 @@ impl MessageRouter {
             if entry.conn_id == msg.conn_id {
                 continue; // skip sender
             }
+            // Per-target allowlist check: mirrors forward(). Empty ipc_targets = deny-all.
+            if check_ipc_target(registry, &sender_id, &entry.plugin_id).is_err() {
+                counter!("ipc_send_denied_total").increment(1);
+                continue;
+            }
+            // Strip FLAG_MAC_PRESENT: the recipient's write_loop re-tags with its own
+            // session key. Forwarding the sender's flag without a fresh tag corrupts the stream.
             let frame = Frame {
                 magic: msg.frame.magic,
-                flags: msg.frame.flags,
+                flags: msg.frame.flags & !crate::ipc::framing::FLAG_MAC_PRESENT,
                 length: msg.frame.length,
                 target: msg.frame.target,
                 crc32: msg.frame.crc32,
