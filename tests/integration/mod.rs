@@ -5,4 +5,5 @@ mod test_mac;
 mod test_ping;
 mod test_registration;
 mod test_routing;
+mod test_soak;
 mod test_websocket;

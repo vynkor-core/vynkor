@@ -1,10 +1,13 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::sync::oneshot;
 use veyron::events::bus::EventBus;
 use veyron::kernel::Kernel;
 use veyron::plugins::registry::PluginRegistry;
+use veyron::proto::veyron::PluginManifest;
 use veyron::utils::config::Config;
+use veyron_sdk::VeyronClient;
 
 pub fn test_config(socket: &str, port: u16) -> Config {
     Config {
@@ -44,6 +47,87 @@ pub async fn start_kernel(
     tokio::time::sleep(Duration::from_millis(30)).await;
 
     (shutdown_tx, registry, event_bus)
+}
+
+/// Soak stats collected across all worker tasks.
+pub struct SoakStats {
+    pub total_pings: u64,
+    pub successful_pings: u64,
+    pub panics: u64,
+}
+
+/// Run a stability soak for `duration_secs` seconds against a kernel on `socket`.
+///
+/// Spawns `SOAK_WORKERS` concurrent tasks; each loops: connect → register → ping
+/// until the deadline, then disconnects. Counters are shared via atomics.
+pub async fn run_soak(socket: &str, port: u16, duration_secs: u64) -> SoakStats {
+    const SOAK_WORKERS: usize = 8;
+
+    let (shutdown_tx, _registry, _bus) = start_kernel(socket, port).await;
+
+    let total = Arc::new(AtomicU64::new(0));
+    let success = Arc::new(AtomicU64::new(0));
+    let panics = Arc::new(AtomicU64::new(0));
+
+    let deadline = tokio::time::Instant::now()
+        + Duration::from_secs(duration_secs);
+
+    let mut handles = Vec::new();
+    for i in 0..SOAK_WORKERS {
+        let sock = socket.to_string();
+        let tot = Arc::clone(&total);
+        let suc = Arc::clone(&success);
+        let _pan = Arc::clone(&panics);
+
+        let handle = tokio::spawn(async move {
+            let plugin_id = format!("soak-worker-{i}");
+            loop {
+                if tokio::time::Instant::now() >= deadline {
+                    break;
+                }
+                let mut client = match VeyronClient::connect(&sock).await {
+                    Ok(c) => c,
+                    Err(_) => {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                        continue;
+                    }
+                };
+                let _ = client
+                    .register(&plugin_id, PluginManifest::default())
+                    .await;
+
+                while tokio::time::Instant::now() < deadline {
+                    tot.fetch_add(1, Ordering::Relaxed);
+                    match tokio::time::timeout(
+                        Duration::from_secs(2),
+                        client.ping(),
+                    )
+                    .await
+                    {
+                        Ok(Ok(_)) => {
+                            suc.fetch_add(1, Ordering::Relaxed);
+                        }
+                        _ => break, // reconnect on error or timeout
+                    }
+                }
+            }
+        });
+        handles.push(handle);
+    }
+
+    for h in handles {
+        if h.await.is_err() {
+            panics.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    let _ = shutdown_tx.send(());
+
+    SoakStats {
+        total_pings: total.load(Ordering::Relaxed),
+        successful_pings: success.load(Ordering::Relaxed),
+        panics: panics.load(Ordering::Relaxed),
+    }
 }
 
 /// Like `start_kernel` but with JWT auth + frame MAC enabled (`jwt_secret` set).

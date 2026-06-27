@@ -20,7 +20,7 @@ audit (`AUDIT.md`). Status reflects work completed to date.
 | T-04 | Per-plugin IPC allowlist in manifest | Coarse `PERMISSION_IPC_SEND` allows any target; needs per-target scoping | ✅ Done — `ipc_targets` field in `PluginManifest`; `check_ipc_target()` in `forward()`; JWT claims wire through | — |
 | T-05 | Audit logging for security events | Permission denials, CRC errors, oversized frames are unlogged | ✅ Done — denials, CRC/magic/oversized logged + countered (`connection.rs`, `protocol.rs`) | — |
 | T-06 | Cryptographic message integrity (MAC) | CRC-32 detects corruption, not tampering | ✅ Done — per-connection HMAC-SHA256 ([design](docs/superpowers/specs/2026-06-26-frame-mac-design.md), [plan](docs/superpowers/plans/2026-06-26-frame-mac.md)) | — |
-| T-07 | Fuzz + soak harness | No fuzzing of frame/payload; no 24h soak | ☐ Open | 3 days |
+| T-07 | Fuzz + soak harness | No fuzzing of frame/payload; no 24h soak | ✅ Done — `fuzz/` with 3 libFuzzer targets (`fuzz_frame_parse`, `fuzz_envelope_decode`, `fuzz_router_pipeline`) + seed corpus; soak test in `tests/integration/test_soak.rs` (parameterized via `VEYRON_SOAK_SECS`, default 5 s CI / set 86400 for 24 h) | — |
 
 ---
 

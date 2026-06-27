@@ -3,7 +3,7 @@
 **/target/
 **/*.rs.bk
 Cargo.lock
-
+fuzz/corpus/*
 # c++
 build/
 bin/
