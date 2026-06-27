@@ -79,7 +79,7 @@ impl Kernel {
         let (router_tx, router_rx) = mpsc::channel(1024);
         let ws_router_tx = router_tx.clone();
         let (_server_handle, disconnect_rx) =
-            UdsServer::start(Path::new(&config.socket_path), router_tx).await?;
+            UdsServer::start(Path::new(&config.socket_path), router_tx, config.max_connections).await?;
         let (ws_disconnect_tx, ws_disconnect_rx) = mpsc::channel::<u64>(64);
         info!("UDS server listening on {}", config.socket_path);
 

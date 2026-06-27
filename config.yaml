@@ -12,6 +12,10 @@ data_dir: /tmp/veyron
 # set jwt_secret and remove allow_no_auth.
 allow_no_auth: true
 
+# Maximum concurrent UDS plugin connections (default: 1024).
+# Connections beyond this limit are rejected immediately (peer sees EOF).
+# max_connections: 1024
+
 # Plugins to auto-spawn on kernel start. Each entry maps to a supervised
 # OS process. The process must connect back to `socket_path` and complete
 # the PluginRegister handshake.

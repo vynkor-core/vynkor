@@ -21,6 +21,7 @@ use crate::ipc::framing::{serialize_header, Frame, FLAG_MAC_PRESENT, MAX_PAYLOAD
 use crate::ipc::messages::IncomingMessage;
 
 const FRAME_HEADER_SIZE: usize = 44;
+const MAX_WS_PARSE_ERRORS: u32 = 16;
 pub const WS_CONN_ID_BASE: u64 = 1_000_000_000;
 
 pub struct WsGateway {
@@ -71,6 +72,7 @@ async fn handle_socket(
 ) {
     info!(conn_id = conn_id, "WS client connected");
 
+    let mut ws_parse_errors: u32 = 0;
     let (write_tx, mut write_rx) = mpsc::channel::<Outbound>(64);
     let session_key: SessionKeyCell = std::sync::Arc::new(std::sync::Mutex::new(None));
     // Key stored locally for tagging outbound frames; populated via Outbound::EnableMac.
@@ -110,7 +112,22 @@ async fn handle_socket(
                                     break;
                                 }
                             }
-                            Err(e) => warn!(conn_id = conn_id, "WS: bad frame: {e}"),
+                            Err(e) => {
+                                ws_parse_errors += 1;
+                                warn!(
+                                    conn_id = conn_id,
+                                    errors = ws_parse_errors,
+                                    "WS: bad frame: {e}"
+                                );
+                                counter!("ipc_frame_errors_total", "error" => "parse").increment(1);
+                                if ws_parse_errors >= MAX_WS_PARSE_ERRORS {
+                                    warn!(
+                                        conn_id = conn_id,
+                                        "WS: parse error budget exhausted — closing connection"
+                                    );
+                                    break;
+                                }
+                            }
                         }
                     }
                     Some(Ok(Message::Close(_))) | None => break,

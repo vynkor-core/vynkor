@@ -277,3 +277,38 @@ async fn ws_untagged_frames_rejected_on_secured_kernel() {
 
     let _ = _shutdown.send(());
 }
+
+#[tokio::test]
+async fn ws_closed_after_max_parse_errors() {
+    let (_shutdown, _reg, _bus) =
+        start_kernel("/tmp/veyron_ws_parse_err.sock", 19321).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let (mut ws, _) = tokio_tungstenite::connect_async("ws://127.0.0.1:19321/ws")
+        .await
+        .expect("WS connect failed");
+
+    // 44 bytes with bad magic — parse_frame returns Err on each
+    let bad_frame = vec![0xFFu8; 44];
+    for _ in 0..16 {
+        if ws.send(WsMsg::Binary(bad_frame.clone())).await.is_err() {
+            // connection already closed before we sent all 16 — budget works
+            let _ = _shutdown.send(());
+            return;
+        }
+        // small yield so the server processes each frame before the next arrives
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+
+    // After 16 bad frames the server must close the connection
+    let result = timeout(Duration::from_secs(2), ws.next()).await;
+    let closed = match result {
+        Err(_) => false, // still open — test fails
+        Ok(None) => true,
+        Ok(Some(Err(_))) => true,
+        Ok(Some(Ok(WsMsg::Close(_)))) => true,
+        Ok(Some(Ok(_))) => false,
+    };
+    assert!(closed, "WS connection must close after 16 parse errors");
+    let _ = _shutdown.send(());
+}

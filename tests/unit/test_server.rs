@@ -21,7 +21,7 @@ async fn server_accepts_connection_and_receives_frame() {
     let path = tmp_socket();
     let (tx, mut rx) = mpsc::channel::<IncomingMessage>(16);
 
-    let (_handle, _disc) = UdsServer::start(&path, tx)
+    let (_handle, _disc) = UdsServer::start(&path, tx, 1024)
         .await
         .expect("server must start");
 
@@ -46,7 +46,7 @@ async fn server_assigns_unique_conn_ids_to_multiple_connections() {
     let path = tmp_socket();
     let (tx, mut rx) = mpsc::channel::<IncomingMessage>(16);
 
-    let (_handle, _disc) = UdsServer::start(&path, tx)
+    let (_handle, _disc) = UdsServer::start(&path, tx, 1024)
         .await
         .expect("server must start");
 
@@ -81,7 +81,7 @@ async fn server_cleans_up_stale_socket_on_start() {
 
     let (tx, _rx) = mpsc::channel::<IncomingMessage>(16);
     // must not fail even though file exists
-    let result = UdsServer::start(&path, tx).await;
+    let result = UdsServer::start(&path, tx, 1024).await;
     assert!(
         result.is_ok(),
         "server must start even with stale socket file"
@@ -95,7 +95,7 @@ async fn server_detects_client_disconnect() {
     let path = tmp_socket();
     let (tx, mut rx) = mpsc::channel::<IncomingMessage>(16);
 
-    let (_handle, _disc) = UdsServer::start(&path, tx).await.unwrap();
+    let (_handle, _disc) = UdsServer::start(&path, tx, 1024).await.unwrap();
 
     {
         let mut client = UnixStream::connect(&path).await.unwrap();
@@ -137,7 +137,7 @@ async fn connection_handler_can_send_frame_back() {
     let path = tmp_socket();
     let (tx, mut rx) = mpsc::channel::<IncomingMessage>(16);
 
-    let (_handle, _disc) = UdsServer::start(&path, tx).await.unwrap();
+    let (_handle, _disc) = UdsServer::start(&path, tx, 1024).await.unwrap();
 
     let mut client = UnixStream::connect(&path).await.unwrap();
     write_frame(&mut client, "kernel", 0, b"request")

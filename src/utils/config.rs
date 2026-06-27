@@ -50,6 +50,9 @@ pub struct Config {
     pub watchdog_timeout_secs: u64,
     #[serde(default = "default_log_buffer_lines")]
     pub log_buffer_lines: usize,
+    /// Maximum concurrent UDS plugin connections. Excess connections are dropped immediately.
+    #[serde(default = "default_max_connections")]
+    pub max_connections: usize,
     /// Path this config was loaded from — used by reload_config kernel command.
     #[serde(skip)]
     pub config_file: Option<String>,
@@ -67,6 +70,9 @@ fn default_watchdog_timeout() -> u64 {
 fn default_log_buffer_lines() -> usize {
     1000
 }
+fn default_max_connections() -> usize {
+    1024
+}
 
 impl Default for Config {
     fn default() -> Self {
@@ -83,6 +89,7 @@ impl Default for Config {
             watchdog_interval_secs: default_watchdog_interval(),
             watchdog_timeout_secs: default_watchdog_timeout(),
             log_buffer_lines: default_log_buffer_lines(),
+            max_connections: default_max_connections(),
             config_file: None,
         }
     }

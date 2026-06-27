@@ -13,7 +13,7 @@ async fn start_kernel(socket_path: &'static str) {
     let registry = Arc::new(PluginRegistry::new());
     let event_bus = Arc::new(EventBus::new());
     let (router_tx, router_rx) = tokio::sync::mpsc::channel(64);
-    let (_srv, _disc) = UdsServer::start(Path::new(socket_path), router_tx)
+    let (_srv, _disc) = UdsServer::start(Path::new(socket_path), router_tx, 1024)
         .await
         .unwrap();
     tokio::spawn(MessageRouter::run(router_rx, registry, event_bus, None));
