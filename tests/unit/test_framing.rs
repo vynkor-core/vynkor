@@ -70,7 +70,7 @@ async fn frame_round_trip_produces_identical_frame() {
     assert_eq!(frame.flags, flags);
     assert_eq!(frame.length as usize, payload.len());
     assert_eq!(frame.payload, payload);
-    assert_eq!(target_as_str(&frame), target);
+    assert_eq!(target_as_str(&frame), Some(target));
 }
 
 #[tokio::test]
@@ -139,7 +139,24 @@ async fn target_as_str_trims_null_padding() {
         mac: None,
     };
     frame.target[..6].copy_from_slice(b"kernel");
-    assert_eq!(target_as_str(&frame), "kernel");
+    assert_eq!(target_as_str(&frame), Some("kernel"));
+}
+
+#[tokio::test]
+async fn target_as_str_returns_none_on_invalid_utf8() {
+    let mut frame = Frame {
+        magic: 0x5652,
+        flags: 0,
+        length: 0,
+        target: [0u8; 32],
+        crc32: 0,
+        payload: vec![],
+        mac: None,
+    };
+    // 0xFF 0xFE is not valid UTF-8
+    frame.target[0] = 0xFF;
+    frame.target[1] = 0xFE;
+    assert_eq!(target_as_str(&frame), None);
 }
 
 #[tokio::test]

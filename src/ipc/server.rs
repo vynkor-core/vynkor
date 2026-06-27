@@ -23,7 +23,19 @@ impl UdsServer {
     ) -> Result<(JoinHandle<()>, tokio::sync::mpsc::Receiver<u64>), VeyronError> {
         let _ = std::fs::remove_file(socket_path);
 
-        let listener = UnixListener::bind(socket_path)?;
+        // Set restrictive umask before bind so the socket is created with 0o600
+        // permissions atomically, closing the TOCTOU window between bind() and
+        // a separate chmod() call (VULN-017). The explicit set_permissions() call
+        // below is kept as defence-in-depth.
+        #[cfg(unix)]
+        let old_umask = nix::sys::stat::umask(nix::sys::stat::Mode::from_bits_truncate(0o177));
+
+        let bind_result = UnixListener::bind(socket_path);
+
+        #[cfg(unix)]
+        nix::sys::stat::umask(old_umask);
+
+        let listener = bind_result?;
         fs::set_permissions(socket_path, fs::Permissions::from_mode(0o600))
             .map_err(VeyronError::Io)?;
         info!(

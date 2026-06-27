@@ -170,7 +170,9 @@ where
     })
 }
 
-pub fn target_as_str(frame: &Frame) -> &str {
+/// Returns `None` if the target bytes are not valid UTF-8. Callers must log
+/// the raw hex and return an error frame in that case (VULN-022).
+pub fn target_as_str(frame: &Frame) -> Option<&str> {
     let end = frame.target.iter().position(|&b| b == 0).unwrap_or(32);
-    std::str::from_utf8(&frame.target[..end]).unwrap_or("")
+    std::str::from_utf8(&frame.target[..end]).ok()
 }

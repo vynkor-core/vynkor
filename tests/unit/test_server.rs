@@ -36,7 +36,7 @@ async fn server_accepts_connection_and_receives_frame() {
         .expect("channel must not close");
 
     assert_eq!(msg.frame.payload, b"hello");
-    assert_eq!(veyron::ipc::framing::target_as_str(&msg.frame), "kernel");
+    assert_eq!(veyron::ipc::framing::target_as_str(&msg.frame), Some("kernel"));
 
     let _ = std::fs::remove_file(&path);
 }

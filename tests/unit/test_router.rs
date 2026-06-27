@@ -167,7 +167,7 @@ async fn router_forwards_frame_to_target_plugin() {
 
     let received = recv_frame(&mut b_write_rx).await;
     assert_eq!(received.payload, raw_payload);
-    assert_eq!(target_as_str(&received), "plugin_b");
+    assert_eq!(target_as_str(&received), Some("plugin_b"));
 }
 
 #[tokio::test]
@@ -225,7 +225,7 @@ async fn slow_target_does_not_stall_router() {
     // would never arrive. The bounded send must let it through promptly.
     let f = recv_frame(&mut fast_rx).await;
     assert_eq!(f.payload, b"to-fast");
-    assert_eq!(target_as_str(&f), "fast");
+    assert_eq!(target_as_str(&f), Some("fast"));
 }
 
 #[tokio::test]
@@ -662,6 +662,19 @@ async fn poisoned_session_key_cell_still_installs_mac_key() {
             assert!(!session_nonce.is_empty(), "nonce must be present when mac_secret set");
         }
         other => panic!("expected PluginRegisterAck, got {:?}", other),
+    }
+
+    // EnableMac is enqueued after the ack (VULN-020 fix). In production the
+    // write_loop processes it. Here we simulate that: drain it and install the key.
+    let enable_item = timeout(Duration::from_secs(2), write_rx.recv())
+        .await
+        .expect("EnableMac timed out")
+        .expect("channel closed");
+    match enable_item {
+        Outbound::EnableMac(k, c) => {
+            *c.lock().unwrap_or_else(|p| p.into_inner()) = Some(k);
+        }
+        _ => panic!("expected Outbound::EnableMac after ack"),
     }
 
     // Key must be installed despite the earlier poison — recover with unwrap_or_else.

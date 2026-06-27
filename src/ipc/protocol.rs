@@ -82,9 +82,20 @@ impl MessageRouter {
 
         while let Some(msg) = rx.recv().await {
             let conn_id = msg.conn_id;
-            let target = {
-                let frame = &msg.frame;
-                target_as_str(frame).to_string()
+            let target = match target_as_str(&msg.frame) {
+                Some(t) => t.to_string(),
+                None => {
+                    let raw_hex: String =
+                        msg.frame.target.iter().map(|b| format!("{b:02x}")).collect();
+                    warn!(conn_id, raw_target = %raw_hex, "frame target is not valid UTF-8");
+                    Self::send_error(
+                        &msg.write_tx,
+                        ErrorCode::ErrUnknown,
+                        "invalid UTF-8 in frame target",
+                    )
+                    .await;
+                    continue;
+                }
             };
 
             if error_counts.get(&conn_id).copied().unwrap_or(0) >= MAX_CONN_ERRORS {
@@ -256,10 +267,14 @@ impl MessageRouter {
                         &session_nonce,
                         &plugin_id,
                     );
-                    // Recover from mutex poison: a poisoned cell must still get the key —
-                    // silent swallow would leave the connection without MAC enforcement (VULN-013).
-                    *msg.session_key.lock().unwrap_or_else(|p| p.into_inner()) = Some(key);
-                    let _ = msg.write_tx.send(Outbound::EnableMac(key)).await;
+                    // EnableMac installs the inbound key AND activates outbound tagging
+                    // inside the write_loop, after the ack has been written to the socket.
+                    // This prevents inbound MAC verification from activating before the
+                    // plugin has received the ack (VULN-020).
+                    let _ = msg
+                        .write_tx
+                        .send(Outbound::EnableMac(key, msg.session_key.clone()))
+                        .await;
                 }
 
                 if result.is_ok() {

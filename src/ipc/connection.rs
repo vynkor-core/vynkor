@@ -14,11 +14,12 @@ use tracing::{info, warn};
 pub type SessionKeyCell = Arc<Mutex<Option<[u8; 32]>>>;
 
 /// Items on a connection's write channel. `EnableMac` is an ordered control
-/// item: every `Frame` enqueued *after* it is tagged; everything before it
-/// (notably the registration ack carrying the nonce) is written un-tagged.
+/// item: it both activates outbound tagging and installs the inbound key on the
+/// shared `SessionKeyCell` — guaranteeing inbound MAC verification is never
+/// armed before the registration ack has been written to the socket (VULN-020).
 pub enum Outbound {
     Frame(Box<Frame>),
-    EnableMac([u8; 32]),
+    EnableMac([u8; 32], SessionKeyCell),
 }
 
 pub fn out_frame(f: Frame) -> Outbound {
@@ -141,8 +142,9 @@ async fn write_loop(mut write_half: OwnedWriteHalf, mut rx: mpsc::Receiver<Outbo
     let mut key: Option<[u8; 32]> = None;
     while let Some(item) = rx.recv().await {
         let mut frame = match item {
-            Outbound::EnableMac(k) => {
+            Outbound::EnableMac(k, cell) => {
                 key = Some(k);
+                *cell.lock().unwrap_or_else(|p| p.into_inner()) = Some(k);
                 continue;
             }
             Outbound::Frame(frame) => *frame,
@@ -198,8 +200,9 @@ mod tests {
         tokio::spawn(write_loop(wa, rx));
 
         let key = derive_session_key(b"s", b"nonce-aaaaaaaaaa", "p");
+        let cell: SessionKeyCell = Arc::new(Mutex::new(None));
         tx.send(out_frame(plain("plugin", b"ack"))).await.unwrap(); // pre-enable
-        tx.send(Outbound::EnableMac(key)).await.unwrap();
+        tx.send(Outbound::EnableMac(key, cell.clone())).await.unwrap();
         tx.send(out_frame(plain("plugin", b"secured")))
             .await
             .unwrap();

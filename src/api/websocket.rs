@@ -151,8 +151,9 @@ async fn handle_socket(
                             break;
                         }
                     }
-                    Some(Outbound::EnableMac(k)) => {
+                    Some(Outbound::EnableMac(k, cell)) => {
                         outbound_key = Some(k);
+                        *cell.lock().unwrap_or_else(|p| p.into_inner()) = Some(k);
                     }
                     None => break,
                 }
