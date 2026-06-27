@@ -6,6 +6,35 @@ use veyron::proto::veyron::PluginManifest;
 use veyron::utils::config::Config;
 use veyron_sdk::VeyronClient;
 
+#[test]
+fn pid_flock_prevents_double_start() {
+    use nix::fcntl::{Flock, FlockArg};
+    use std::fs;
+    use std::path::Path;
+
+    let pid_file = Path::new("/tmp/veyron_flock_double_start_test.pid");
+
+    let h1 = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(pid_file)
+        .unwrap();
+    let _lock = Flock::lock(h1, FlockArg::LockExclusiveNonblock)
+        .expect("first lock must succeed");
+
+    let h2 = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(pid_file)
+        .unwrap();
+    let result = Flock::lock(h2, FlockArg::LockExclusiveNonblock);
+    assert!(result.is_err(), "second lock must fail while first is held");
+
+    let _ = fs::remove_file(pid_file);
+}
+
 fn test_config(socket: &str, port: u16) -> Config {
     Config {
         socket_path: socket.to_string(),

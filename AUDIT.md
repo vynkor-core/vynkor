@@ -7,6 +7,124 @@
 
 ---
 
+## Phase 1.2 Security Audit Update
+
+**Date:** 2026-06-27  
+**Commit:** `86abd56` (develop branch)  
+**Test result:** All tests pass (includes MAC integration tests, stress test, fuzz harness) — clippy clean — fmt clean
+
+### What Changed Since Phase 1.1
+
+All seven hardening targets (T-01 through T-07) are complete. Ten tracked vulnerabilities
+have been resolved or formally mitigated. This addendum records the current security
+posture; the Phase 1.1 audit below remains as historical baseline.
+
+### Updated Threat Model
+
+| Threat | Mitigation | Remaining Gap |
+|--------|-----------|---------------|
+| Rogue process connects to socket | JWT mandatory when `jwt_secret` set; kernel refuses start without it unless `allow_no_auth: true` | `allow_no_auth` shifts trust to operator config |
+| Plugin claims another plugin's ID | `claims.sub == plugin_id` check at registration; JWT must match declared ID | Without JWT (`allow_no_auth`), squatting is accepted risk (see VULN-004 note) |
+| Message tampering in transit | Per-connection HMAC-SHA256 over header+payload; bad tag drops connection | C++ and Python SDKs lack MAC — those plugins cannot connect to a hardened kernel (VULN-011) |
+| Peer-to-peer IPC abuse | Default-deny `PERMISSION_IPC_SEND`; per-target `ipc_targets` allowlist in manifest | — |
+| Broadcast abuse | `PERMISSION_IPC_SEND` required for `target = "*"` | — |
+| HTTP API misuse | Bound to `127.0.0.1`; auth-protected route group for sensitive endpoints | JWT optional for basic health/list when no `jwt_secret` |
+| Plugin ID injection into events | `validate_plugin_id()` enforces `[A-Za-z0-9._-]` ≤32 bytes, blocks reserved names | — |
+| Error-spam flooding | Per-connection error budget (16 errors) throttles without disconnecting | — |
+| Oversized / malformed frames | Size limit 1 MiB; magic + CRC32 + timeout validated | — |
+| Plugin resource exhaustion | RLIMIT_NPROC (64) + RLIMIT_AS (512 MiB) on Linux for supervised plugins | Self-connected (non-supervised) plugins have no limits |
+| Fuzz attack on frame/proto parser | 3 libFuzzer targets cover frame parse, envelope decode, router pipeline | Continuous fuzz not wired to CI yet |
+
+### Authentication (Updated)
+
+Fully implemented. `src/auth/jwt.rs` validates HS256 tokens. `src/main.rs:115–123`
+(`ensure_auth_configured()`) refuses to start the kernel unless `jwt_secret` is set in
+config or the operator explicitly acknowledges `allow_no_auth: true`. At registration,
+`claims.sub` must equal the declared `plugin_id` — prevents identity spoofing.
+
+**Accepted risk (VULN-004):** When `allow_no_auth: true` is set, any process can claim
+any plugin ID. This is an explicit operator opt-out, not a silent default. The setting
+should only be used in isolated development environments.
+
+### Authorization (Updated)
+
+RBAC fully enforced:
+- `ActionRequest` — checked against declared permissions
+- Unicast (`target = "<id>"`) — requires `PERMISSION_IPC_SEND`; further scoped by `ipc_targets` allowlist
+- Broadcast (`target = "*"`) — requires `PERMISSION_IPC_SEND`
+- `KernelCommand` / `AiRequest` — unimplemented handlers return `ErrUnknown` (safe default)
+
+### Socket Security (Updated)
+
+`src/ipc/server.rs:26` applies `fs::set_permissions(0o600)` after bind. No longer
+depends on umask. HTTP API rebound to `127.0.0.1` — not reachable from external
+interfaces by default.
+
+### Integrity (Updated)
+
+HMAC-SHA256 per-connection MAC active when `jwt_secret` configured. Key derived via
+HKDF-SHA256 from the shared secret + a per-connection nonce minted by the kernel.
+Constant-time verification at `src/auth/frame_mac.rs:36`. Bad tag closes connection.
+CRC-32 retained as a framing sanity check independent of MAC.
+
+### Audit Logging (Updated)
+
+Permission denials, CRC/magic errors, oversized frames, MAC failures are all logged
+via `tracing` at `warn` level with structured fields. Security-relevant events are
+now observable. Gap: no dedicated security event sink (syslog, SIEM) — tracing output
+only.
+
+### T-07: Fuzz + Soak Harness (New)
+
+Three libFuzzer targets in `fuzz/`:
+- `fuzz_frame_parse` — arbitrary bytes into `read_frame()`
+- `fuzz_envelope_decode` — arbitrary bytes into protobuf `Envelope::decode()`
+- `fuzz_router_pipeline` — arbitrary frames through the full router
+
+Seed corpus covers valid frames, truncated headers, wrong magic, CRC mismatches,
+oversized payloads, reserved target names, and malformed protobuf. Soak test at
+`tests/integration/test_soak.rs` runs 5 s in CI; set `VEYRON_SOAK_SECS=86400`
+for 24-hour overnight runs.
+
+**CI:** `.github/workflows/fuzz.yml` runs all three targets weekly (Monday 03:00 UTC),
+60 s per target. Crashes uploaded as artifacts. Also added `.github/workflows/ci.yml`
+for per-PR build + test + clippy + fmt.
+
+### New Finding: SDK MAC Gap (VULN-011)
+
+C++ SDK (`sdk/cpp/src/framing.cpp`) and Python SDK (`sdk/python/veyron/framing.py`)
+implement CRC-32 framing only. Neither computes nor verifies HMAC-SHA256 tags.
+When the kernel is started with `jwt_secret` (the hardened, recommended configuration),
+C++ and Python plugins fail MAC verification and their connections are dropped.
+
+**Impact:** C++ and Python plugin authors cannot use the hardened kernel without either
+(a) disabling MAC via `allow_no_auth: true` (weakens security), or (b) implementing
+MAC in their SDK. This is tracked as VULN-011 in ROADMAP.md.
+
+**Interim guidance:** Run development kernels with `allow_no_auth: true` for C++/Python
+plugins only in isolated, single-user environments. Do not use this setting in any
+shared or production context.
+
+### Current Vulnerability Summary
+
+| ID | Status | Notes |
+|----|--------|-------|
+| VULN-001 | ✅ Fixed | Default-deny unicast IPC |
+| VULN-002 | ✅ Fixed | Default-deny broadcast IPC |
+| VULN-003 | ✅ Mitigated | Secure-by-default; `allow_no_auth` explicit opt-out |
+| VULN-004 | ✅ Fixed / Accepted risk | JWT `sub==plugin_id`; squatting accepted when `allow_no_auth` |
+| VULN-005 | ✅ Fixed | HMAC-SHA256 per-connection MAC |
+| VULN-006 | ✅ Mitigated | Explicit `0o600` after bind |
+| VULN-007 | ✅ Fixed | Error budget 16 throttles floods |
+| VULN-008 | ◐ Mitigated | `127.0.0.1` binding; JWT optional |
+| VULN-009 | ✅ Fixed | `validate_plugin_id()` blocks injection |
+| VULN-010 | ✅ Fixed | `/logs` in auth-protected route group |
+| VULN-011 | 🆕 Open | C++/Python SDK lacks MAC; blocked from hardened kernel |
+
+---
+
+---
+
 ## 1. Executive Summary
 
 Veyron is a plugin kernel written in Rust: a long-running daemon that loads, supervises, and routes messages between independently-developed plugin processes using a binary-framed protobuf protocol over Unix domain sockets.

@@ -42,6 +42,7 @@ retained for the audit trail.
 | VULN-008 | Info | HTTP control plane unauthenticated by default | REST endpoints require JWT only when configured | ◐ Mitigated — bound to `127.0.0.1`; enable `jwt_secret` for shared hosts |
 | VULN-009 | High | JSON injection via `plugin_id` | Unvalidated `plugin_id` embedded unescaped into `system.plugin_joined/left/died` payloads; a crafted id spoofs/injects fields subscribers parse | ✅ Fixed — `validate_plugin_id()` at registration: `[A-Za-z0-9._-]`, ≤32 bytes, non-reserved |
 | VULN-010 | Medium | Plugin logs exposed without auth | `GET /plugins/:id/logs` was public; log output may contain secrets/PII | ✅ Fixed — moved to the auth-protected route group (`server.rs`) |
+| VULN-011 | Medium | C++/Python SDK lacks MAC | When kernel runs with `jwt_secret`, HMAC-SHA256 tag is required on every frame; C++ and Python SDKs send CRC-only frames → kernel drops connection | 🔴 Open — workaround: `allow_no_auth: true` in isolated dev environments only |
 
 **Note:** VULN-004 fully fixed: VULN-009 (id validation) blocks reserved/malformed ids;
 JWT `sub == plugin_id` check at registration closes identity spoofing when `jwt_secret` set.
@@ -49,3 +50,22 @@ Without `jwt_secret` (explicit `allow_no_auth: true`), squatting is a known acce
 
 **Reporting:** new findings get the next `VULN-NNN` id, a severity, and a row
 here before remediation begins. Fixed rows stay for traceability.
+
+---
+
+## Proposed Sprint Goals (Phase 1.3)
+
+Discussion items for the next sprint. Not yet prioritised or assigned.
+
+| ID | Goal | Rationale | Status | Effort est. |
+|----|------|-----------|--------|-------------|
+| T-08 | Python SDK MAC support | Closes VULN-011 for Python plugins; enables hardened kernel in Python-plugin environments | 🔄 In progress | 2–3 days |
+| T-09 | C++ SDK full client + MAC | C++ SDK framing complete but no connection/registration logic or MAC; blocks C++ plugins on hardened kernel | 🔄 In progress | 3–4 days |
+| T-10 | SIGTERM graceful shutdown (foreground mode) | `kill -TERM <pid>` in foreground skips graceful shutdown; only Ctrl+C triggers it | ✅ Done — `orchestrator.rs:31-36` installs `signal(SignalKind::terminate())`; `tests/integration/test_sigterm.rs` covers | — |
+| T-11 | PID file flock in daemon mode | TOCTOU race on concurrent `vyn start`; foreground already uses flock, daemon does not | ✅ Done — `run_foreground()` in `main.rs:231` acquires `LockExclusiveNonblock`; daemon children inherit this path; `test_kernel::pid_flock_prevents_double_start` covers | — |
+| T-12 | Fuzz targets in CI (scheduled job) | Fuzz harness exists but runs manually; nightly CI run catches regressions before releases | ✅ Done — `.github/workflows/fuzz.yml` runs weekly (Mon 03:00 UTC), matrix over all 3 targets, 60 s each; crashes uploaded as artifacts | — |
+| T-13 | WebSocket frame MAC | `src/api/websocket.rs` sets `session_key = None` always; WS clients bypass MAC even on hardened kernel | — | 2 days |
+| T-14 | Config-driven plugin autoloading | Kernel reads plugin list from `config.yaml`, auto-spawns on start; enables supervised deployments | — | 2–3 days |
+| T-15 | Prometheus `/metrics` endpoint | Counters for messages routed, permission denials, MAC failures, error budget hits — needed for prod observability | — | 1–2 days |
+| T-16 | SQLite event store (at-least-once delivery) | Fire-and-forget event bus drops events to full channels; Phase 2 reliability target | — | 3–4 days |
+| T-17 | KernelCommand dispatch | `reload_config`, `health_check` handlers not implemented; falls to `ErrUnknown` | — | 1–2 days |

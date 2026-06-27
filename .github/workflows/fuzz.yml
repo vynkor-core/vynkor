@@ -1,0 +1,65 @@
+name: Fuzz
+
+on:
+  schedule:
+    - cron: '0 3 * * 1'  # Monday 03:00 UTC weekly
+  workflow_dispatch:
+    inputs:
+      max_total_time:
+        description: 'Max fuzz time per target (seconds)'
+        required: false
+        default: '60'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fuzz:
+    name: Fuzz (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - fuzz_frame_parse
+          - fuzz_envelope_decode
+          - fuzz_router_pipeline
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: fuzz-${{ matrix.target }}
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz
+
+      - name: Restore seed corpus
+        run: |
+          CORPUS_DIR="fuzz/corpus/${{ matrix.target }}"
+          if [ -d "$CORPUS_DIR" ]; then
+            echo "Found seed corpus in $CORPUS_DIR"
+          else
+            echo "No seed corpus found; libFuzzer will start from scratch"
+          fi
+
+      - name: Run fuzz target
+        env:
+          MAX_TIME: ${{ github.event.inputs.max_total_time || '60' }}
+        run: |
+          cargo +nightly fuzz run "${{ matrix.target }}" \
+            -- -max_total_time="$MAX_TIME" -max_len=65536
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crash-${{ matrix.target }}-${{ github.run_id }}
+          path: |
+            fuzz/artifacts/${{ matrix.target }}/
+          retention-days: 30
