@@ -11,3 +11,19 @@ data_dir: /tmp/veyron
 # register as any plugin and reach the control plane. Do NOT use in production —
 # set jwt_secret and remove allow_no_auth.
 allow_no_auth: true
+
+# Plugins to auto-spawn on kernel start. Each entry maps to a supervised
+# OS process. The process must connect back to `socket_path` and complete
+# the PluginRegister handshake.
+#
+# plugins:
+#   - id: weather                    # unique plugin_id
+#     binary: /opt/plugins/weather   # absolute path to executable
+#     restart: on-failure            # always | on-failure | never
+#     max_restarts: 5                # max auto-restarts (default: 5)
+#     args:                          # argv[1..] passed to the binary
+#       - --socket
+#       - /tmp/veyron.sock
+#     env:                           # extra environment variables
+#       - LOG_LEVEL=info
+#     sandbox: false                 # true: isolate in new PID+net namespace (Linux)

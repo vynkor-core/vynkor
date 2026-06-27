@@ -1,4 +1,5 @@
 mod helpers;
+mod test_autoload;
 mod test_disconnect;
 mod test_events;
 mod test_mac;

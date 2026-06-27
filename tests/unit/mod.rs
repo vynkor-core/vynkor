@@ -5,6 +5,7 @@ mod test_event_store;
 mod test_framing;
 mod test_jwt;
 mod test_kernel;
+mod test_loader;
 mod test_permissions;
 mod test_proto;
 mod test_registry;
