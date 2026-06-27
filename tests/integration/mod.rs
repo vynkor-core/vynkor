@@ -3,6 +3,7 @@ mod test_autoload;
 mod test_disconnect;
 mod test_events;
 mod test_mac;
+mod test_metrics_counters;
 mod test_ping;
 mod test_registration;
 mod test_routing;
