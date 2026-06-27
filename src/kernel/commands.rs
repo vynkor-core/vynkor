@@ -77,6 +77,12 @@ impl CommandHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::sync::mpsc;
+    use crate::proto::veyron::PluginManifest;
+
+    fn dummy_tx() -> mpsc::Sender<crate::ipc::connection::Outbound> {
+        mpsc::channel(1).0
+    }
 
     #[test]
     fn health_check_reports_plugin_count() {
@@ -90,11 +96,58 @@ mod tests {
     }
 
     #[test]
+    fn health_check_counts_registered_plugin() {
+        let registry = PluginRegistry::new();
+        registry
+            .register("alpha".to_string(), 1, PluginManifest::default(), dummy_tx())
+            .unwrap();
+        let out = CommandHandler::dispatch("health_check", &registry, Instant::now(), None);
+        assert_eq!(out.status, CommandStatus::CommandOk);
+        let json = String::from_utf8(out.data_json).unwrap();
+        assert!(json.contains("\"plugin_count\":1"), "json={json}");
+    }
+
+    #[test]
     fn reload_config_without_path_errors() {
         let registry = PluginRegistry::new();
         let out = CommandHandler::dispatch("reload_config", &registry, Instant::now(), None);
         assert_eq!(out.status, CommandStatus::CommandError);
         assert_eq!(out.error, "no config path configured");
+    }
+
+    #[test]
+    fn reload_config_with_invalid_path_returns_error() {
+        let registry = PluginRegistry::new();
+        let out = CommandHandler::dispatch(
+            "reload_config",
+            &registry,
+            Instant::now(),
+            Some("/nonexistent/veyron_cfg_test.yaml"),
+        );
+        assert_eq!(out.status, CommandStatus::CommandError);
+        assert!(out.error.contains("config reload failed"), "error={}", out.error);
+    }
+
+    #[test]
+    fn reload_config_with_valid_path_returns_ok() {
+        let tmp = std::env::temp_dir().join(format!("veyron_cmd_test_{}.yaml", std::process::id()));
+        std::fs::write(
+            &tmp,
+            b"port: 9001\nlog_level: info\npid_file: /tmp/v.pid\nlog_file: /tmp/v.log\ndata_dir: /tmp/v_data\n",
+        )
+        .unwrap();
+        let registry = PluginRegistry::new();
+        let out = CommandHandler::dispatch(
+            "reload_config",
+            &registry,
+            Instant::now(),
+            Some(tmp.to_str().unwrap()),
+        );
+        let _ = std::fs::remove_file(&tmp);
+        assert_eq!(out.status, CommandStatus::CommandOk, "error={}", out.error);
+        let json = String::from_utf8(out.data_json).unwrap();
+        assert!(json.contains("\"port\":9001"), "json={json}");
+        assert!(json.contains("\"log_level\":\"info\""), "json={json}");
     }
 
     #[test]

@@ -6,7 +6,8 @@ use tokio::net::UnixStream;
 use veyron::auth::frame_mac::{compute_tag, derive_session_key, verify_tag};
 use veyron::ipc::framing::{serialize_header, write_frame_raw, Frame, FLAG_MAC_PRESENT};
 use veyron::proto::veyron::{
-    envelope, Envelope, Ping, PluginManifest, PluginRegister, PluginRegisterAck, Subscribe,
+    envelope, Envelope, KernelCommand, KernelCommandAck, Ping, PluginManifest, PluginRegister,
+    PluginRegisterAck, Subscribe,
 };
 use veyron::utils::errors::VeyronError;
 
@@ -152,6 +153,28 @@ impl VeyronClient {
             ..Default::default()
         };
         self.send("kernel", env).await
+    }
+
+    pub async fn send_command(
+        &mut self,
+        command_id: &str,
+        command: &str,
+        params_json: &[u8],
+    ) -> Result<KernelCommandAck, VeyronError> {
+        let env = Envelope {
+            payload: Some(envelope::Payload::KernelCommand(KernelCommand {
+                command_id: command_id.to_string(),
+                command: command.to_string(),
+                params_json: params_json.to_vec(),
+            })),
+            ..Default::default()
+        };
+        self.send("kernel", env).await?;
+        let response = self.recv().await?;
+        match response.payload {
+            Some(envelope::Payload::KernelCommandAck(ack)) => Ok(ack),
+            _ => Err(VeyronError::Internal("expected KernelCommandAck".into())),
+        }
     }
 
     pub async fn ping(&mut self) -> Result<Duration, VeyronError> {
