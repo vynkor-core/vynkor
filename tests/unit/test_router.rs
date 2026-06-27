@@ -199,8 +199,13 @@ async fn slow_target_does_not_stall_router() {
 
     // sender: ipc_send + both targets in allowlist
     let (a_tx, _a_rx) = make_write_pair();
-    reg.register("sender".to_string(), 1, ipc_manifest_with_targets(vec!["slow", "fast"]), a_tx.clone())
-        .unwrap();
+    reg.register(
+        "sender".to_string(),
+        1,
+        ipc_manifest_with_targets(vec!["slow", "fast"]),
+        a_tx.clone(),
+    )
+    .unwrap();
 
     let router_tx = spawn_router(Arc::clone(&reg), bus);
 
@@ -491,14 +496,28 @@ async fn router_denies_forward_with_empty_ipc_targets() {
     let bus = Arc::new(EventBus::new());
 
     let (b_tx, mut b_rx) = make_write_pair();
-    reg.register("plugin_b".to_string(), 2, dummy_manifest(), b_tx).unwrap();
+    reg.register("plugin_b".to_string(), 2, dummy_manifest(), b_tx)
+        .unwrap();
 
     // sender: ipc_send granted but ipc_targets empty → deny-all
     let (a_tx, mut a_rx) = make_write_pair();
-    reg.register("plugin_a".to_string(), 1, ipc_manifest_with_targets(vec![]), a_tx.clone()).unwrap();
+    reg.register(
+        "plugin_a".to_string(),
+        1,
+        ipc_manifest_with_targets(vec![]),
+        a_tx.clone(),
+    )
+    .unwrap();
 
     let router_tx = spawn_router(Arc::clone(&reg), bus);
-    router_tx.send(incoming(1, plug_frame("plugin_b", b"blocked".to_vec()), a_tx)).await.unwrap();
+    router_tx
+        .send(incoming(
+            1,
+            plug_frame("plugin_b", b"blocked".to_vec()),
+            a_tx,
+        ))
+        .await
+        .unwrap();
 
     let err = recv_frame(&mut a_rx).await;
     let env = Envelope::decode(err.payload.as_slice()).unwrap();
@@ -512,15 +531,25 @@ async fn router_allows_forward_to_listed_ipc_target() {
     let bus = Arc::new(EventBus::new());
 
     let (b_tx, mut b_rx) = make_write_pair();
-    reg.register("plugin_b".to_string(), 2, dummy_manifest(), b_tx).unwrap();
+    reg.register("plugin_b".to_string(), 2, dummy_manifest(), b_tx)
+        .unwrap();
 
     // sender: ipc_send + plugin_b in allowlist
     let (a_tx, _a_rx) = make_write_pair();
-    reg.register("plugin_a".to_string(), 1, ipc_manifest_with_targets(vec!["plugin_b"]), a_tx.clone()).unwrap();
+    reg.register(
+        "plugin_a".to_string(),
+        1,
+        ipc_manifest_with_targets(vec!["plugin_b"]),
+        a_tx.clone(),
+    )
+    .unwrap();
 
     let router_tx = spawn_router(Arc::clone(&reg), bus);
     let payload = b"hello".to_vec();
-    router_tx.send(incoming(1, plug_frame("plugin_b", payload.clone()), a_tx)).await.unwrap();
+    router_tx
+        .send(incoming(1, plug_frame("plugin_b", payload.clone()), a_tx))
+        .await
+        .unwrap();
 
     let received = recv_frame(&mut b_rx).await;
     assert_eq!(received.payload, payload);
@@ -532,16 +561,31 @@ async fn router_denies_forward_to_unlisted_ipc_target() {
     let bus = Arc::new(EventBus::new());
 
     let (b_tx, mut b_rx) = make_write_pair();
-    reg.register("plugin_b".to_string(), 2, dummy_manifest(), b_tx).unwrap();
+    reg.register("plugin_b".to_string(), 2, dummy_manifest(), b_tx)
+        .unwrap();
     let (c_tx, mut c_rx) = make_write_pair();
-    reg.register("plugin_c".to_string(), 3, dummy_manifest(), c_tx).unwrap();
+    reg.register("plugin_c".to_string(), 3, dummy_manifest(), c_tx)
+        .unwrap();
 
     // sender: ipc_send + only plugin_b allowed, not plugin_c
     let (a_tx, mut a_rx) = make_write_pair();
-    reg.register("plugin_a".to_string(), 1, ipc_manifest_with_targets(vec!["plugin_b"]), a_tx.clone()).unwrap();
+    reg.register(
+        "plugin_a".to_string(),
+        1,
+        ipc_manifest_with_targets(vec!["plugin_b"]),
+        a_tx.clone(),
+    )
+    .unwrap();
 
     let router_tx = spawn_router(Arc::clone(&reg), bus);
-    router_tx.send(incoming(1, plug_frame("plugin_c", b"blocked".to_vec()), a_tx)).await.unwrap();
+    router_tx
+        .send(incoming(
+            1,
+            plug_frame("plugin_c", b"blocked".to_vec()),
+            a_tx,
+        ))
+        .await
+        .unwrap();
 
     let err = recv_frame(&mut a_rx).await;
     let env = Envelope::decode(err.payload.as_slice()).unwrap();

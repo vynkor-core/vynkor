@@ -6,6 +6,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
+use metrics::counter;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,
@@ -13,9 +14,10 @@ use std::sync::{
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
+use crate::auth::frame_mac::{compute_tag, verify_tag};
 use crate::auth::jwt::JwtValidator;
 use crate::ipc::connection::{Outbound, SessionKeyCell};
-use crate::ipc::framing::{Frame, MAX_PAYLOAD_SIZE};
+use crate::ipc::framing::{serialize_header, Frame, FLAG_MAC_PRESENT, MAX_PAYLOAD_SIZE};
 use crate::ipc::messages::IncomingMessage;
 
 const FRAME_HEADER_SIZE: usize = 44;
@@ -70,9 +72,9 @@ async fn handle_socket(
     info!(conn_id = conn_id, "WS client connected");
 
     let (write_tx, mut write_rx) = mpsc::channel::<Outbound>(64);
-    // WebSocket transport does not implement the frame MAC (out of scope); the
-    // cell stays empty and these connections are never MAC-enforced.
     let session_key: SessionKeyCell = std::sync::Arc::new(std::sync::Mutex::new(None));
+    // Key stored locally for tagging outbound frames; populated via Outbound::EnableMac.
+    let mut outbound_key: Option<[u8; 32]> = None;
 
     loop {
         tokio::select! {
@@ -81,6 +83,23 @@ async fn handle_socket(
                     Some(Ok(Message::Binary(data))) => {
                         match parse_frame(&data) {
                             Ok(frame) => {
+                                // Verify MAC on inbound frames once session key is active.
+                                let key = *session_key.lock().unwrap();
+                                if let Some(k) = key {
+                                    let valid = frame.flags & FLAG_MAC_PRESENT != 0
+                                        && match &frame.mac {
+                                            Some(tag) => {
+                                                let header = serialize_header(&frame);
+                                                verify_tag(&k, &header, &frame.payload, tag)
+                                            }
+                                            None => false,
+                                        };
+                                    if !valid {
+                                        warn!(conn_id, "WS: frame MAC invalid — dropping connection");
+                                        counter!("ipc_frame_errors_total", "error" => "mac").increment(1);
+                                        break;
+                                    }
+                                }
                                 let incoming = IncomingMessage {
                                     conn_id,
                                     frame,
@@ -105,11 +124,19 @@ async fn handle_socket(
             item = write_rx.recv() => {
                 match item {
                     Some(Outbound::Frame(f)) => {
-                        if socket.send(Message::Binary(frame_to_bytes(&f))).await.is_err() {
+                        let mut frame = *f;
+                        if let Some(k) = &outbound_key {
+                            frame.flags |= FLAG_MAC_PRESENT;
+                            let header = serialize_header(&frame);
+                            frame.mac = Some(compute_tag(k, &header, &frame.payload));
+                        }
+                        if socket.send(Message::Binary(frame_to_bytes(&frame))).await.is_err() {
                             break;
                         }
                     }
-                    Some(Outbound::EnableMac(_)) => {} // WS does not tag frames
+                    Some(Outbound::EnableMac(k)) => {
+                        outbound_key = Some(k);
+                    }
                     None => break,
                 }
             }
@@ -133,17 +160,28 @@ fn parse_frame(data: &[u8]) -> Result<Frame, &'static str> {
     if length > MAX_PAYLOAD_SIZE {
         return Err("payload too large");
     }
-    if data.len() < FRAME_HEADER_SIZE + length {
+    let payload_end = FRAME_HEADER_SIZE + length;
+    if data.len() < payload_end {
         return Err("truncated payload");
     }
     let mut target = [0u8; 32];
     target.copy_from_slice(&data[8..40]);
     let crc32 = u32::from_be_bytes([data[40], data[41], data[42], data[43]]);
-    let payload = data[FRAME_HEADER_SIZE..FRAME_HEADER_SIZE + length].to_vec();
+    let payload = data[FRAME_HEADER_SIZE..payload_end].to_vec();
     let computed = crc32fast::hash(&payload);
     if computed != crc32 {
         return Err("CRC mismatch");
     }
+    let mac = if flags & FLAG_MAC_PRESENT != 0 {
+        if data.len() < payload_end + 32 {
+            return Err("frame too short for MAC tag");
+        }
+        let mut tag = [0u8; 32];
+        tag.copy_from_slice(&data[payload_end..payload_end + 32]);
+        Some(tag)
+    } else {
+        None
+    };
     Ok(Frame {
         magic,
         flags,
@@ -151,17 +189,21 @@ fn parse_frame(data: &[u8]) -> Result<Frame, &'static str> {
         target,
         crc32,
         payload,
-        mac: None,
+        mac,
     })
 }
 
 fn frame_to_bytes(frame: &Frame) -> Vec<u8> {
-    let mut out = Vec::with_capacity(FRAME_HEADER_SIZE + frame.payload.len());
+    let mac_len = if frame.mac.is_some() { 32 } else { 0 };
+    let mut out = Vec::with_capacity(FRAME_HEADER_SIZE + frame.payload.len() + mac_len);
     out.extend_from_slice(&frame.magic.to_be_bytes());
     out.extend_from_slice(&frame.flags.to_be_bytes());
     out.extend_from_slice(&frame.length.to_be_bytes());
     out.extend_from_slice(&frame.target);
     out.extend_from_slice(&frame.crc32.to_be_bytes());
     out.extend_from_slice(&frame.payload);
+    if let Some(tag) = &frame.mac {
+        out.extend_from_slice(tag);
+    }
     out
 }

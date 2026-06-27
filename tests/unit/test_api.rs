@@ -167,10 +167,7 @@ async fn stop_plugin_returns_200_and_unregisters() {
     register(&registry, "stoppable", 1);
     assert!(registry.get("stoppable").is_some());
 
-    let app = create_router(
-        make_manager(Arc::clone(&registry), make_supervisor()),
-        None,
-    );
+    let app = create_router(make_manager(Arc::clone(&registry), make_supervisor()), None);
     let response = app
         .oneshot(
             Request::builder()
@@ -225,10 +222,7 @@ async fn restart_plugin_not_in_supervisor_returns_422() {
     let registry = make_registry();
     register(&registry, "self-connected", 1);
 
-    let app = create_router(
-        make_manager(Arc::clone(&registry), make_supervisor()),
-        None,
-    );
+    let app = create_router(make_manager(Arc::clone(&registry), make_supervisor()), None);
     let response = app
         .oneshot(
             Request::builder()

@@ -25,7 +25,7 @@ posture; the Phase 1.1 audit below remains as historical baseline.
 |--------|-----------|---------------|
 | Rogue process connects to socket | JWT mandatory when `jwt_secret` set; kernel refuses start without it unless `allow_no_auth: true` | `allow_no_auth` shifts trust to operator config |
 | Plugin claims another plugin's ID | `claims.sub == plugin_id` check at registration; JWT must match declared ID | Without JWT (`allow_no_auth`), squatting is accepted risk (see VULN-004 note) |
-| Message tampering in transit | Per-connection HMAC-SHA256 over header+payload; bad tag drops connection | C++ and Python SDKs lack MAC — those plugins cannot connect to a hardened kernel (VULN-011) |
+| Message tampering in transit | Per-connection HMAC-SHA256 over header+payload; bad tag drops connection | C++ and Python SDKs lack MAC — those plugins cannot connect to a hardened kernel (VULN-011). WS gateway now enforces MAC on par with UDS (T-13 complete). |
 | Peer-to-peer IPC abuse | Default-deny `PERMISSION_IPC_SEND`; per-target `ipc_targets` allowlist in manifest | — |
 | Broadcast abuse | `PERMISSION_IPC_SEND` required for `target = "*"` | — |
 | HTTP API misuse | Bound to `127.0.0.1`; auth-protected route group for sensitive endpoints | JWT optional for basic health/list when no `jwt_secret` |

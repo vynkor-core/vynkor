@@ -13,7 +13,10 @@ pub struct PluginManager {
 
 impl PluginManager {
     pub fn new(supervisor: Arc<PluginSupervisor>, registry: Arc<PluginRegistry>) -> Self {
-        Self { supervisor, registry }
+        Self {
+            supervisor,
+            registry,
+        }
     }
 
     pub fn list(&self) -> Vec<PluginEntry> {

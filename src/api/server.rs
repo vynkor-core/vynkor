@@ -132,7 +132,10 @@ impl ApiServer {
 
 async fn get_metrics() -> impl IntoResponse {
     (
-        [(header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
+        [(
+            header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
         crate::metrics::render(),
     )
 }

@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::oneshot;
 use veyron::events::bus::EventBus;
@@ -69,8 +69,7 @@ pub async fn run_soak(socket: &str, port: u16, duration_secs: u64) -> SoakStats 
     let success = Arc::new(AtomicU64::new(0));
     let panics = Arc::new(AtomicU64::new(0));
 
-    let deadline = tokio::time::Instant::now()
-        + Duration::from_secs(duration_secs);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(duration_secs);
 
     let mut handles = Vec::new();
     for i in 0..SOAK_WORKERS {
@@ -92,18 +91,11 @@ pub async fn run_soak(socket: &str, port: u16, duration_secs: u64) -> SoakStats 
                         continue;
                     }
                 };
-                let _ = client
-                    .register(&plugin_id, PluginManifest::default())
-                    .await;
+                let _ = client.register(&plugin_id, PluginManifest::default()).await;
 
                 while tokio::time::Instant::now() < deadline {
                     tot.fetch_add(1, Ordering::Relaxed);
-                    match tokio::time::timeout(
-                        Duration::from_secs(2),
-                        client.ping(),
-                    )
-                    .await
-                    {
+                    match tokio::time::timeout(Duration::from_secs(2), client.ping()).await {
                         Ok(Ok(_)) => {
                             suc.fetch_add(1, Ordering::Relaxed);
                         }

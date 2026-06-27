@@ -20,8 +20,7 @@ fn pid_flock_prevents_double_start() {
         .truncate(false)
         .open(pid_file)
         .unwrap();
-    let _lock = Flock::lock(h1, FlockArg::LockExclusiveNonblock)
-        .expect("first lock must succeed");
+    let _lock = Flock::lock(h1, FlockArg::LockExclusiveNonblock).expect("first lock must succeed");
 
     let h2 = fs::OpenOptions::new()
         .write(true)

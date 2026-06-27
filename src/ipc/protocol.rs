@@ -1,5 +1,7 @@
 use crate::auth::jwt::JwtValidator;
-use crate::auth::permissions::{action_to_permission, check_ipc_send, check_ipc_target, check_permission};
+use crate::auth::permissions::{
+    action_to_permission, check_ipc_send, check_ipc_target, check_permission,
+};
 use crate::events::bus::EventBus;
 use crate::events::store::EventStore;
 use crate::ipc::connection::{out_frame, Outbound};
