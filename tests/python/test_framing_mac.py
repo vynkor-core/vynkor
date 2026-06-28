@@ -1,0 +1,110 @@
+import struct
+import sys
+import os
+import io
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../sdk/python"))
+
+from veyron.framing import (
+    FLAG_MAC_PRESENT,
+    derive_session_key,
+    compute_tag,
+    verify_tag,
+    pack_frame,
+    read_frame,
+    HEADER_SIZE,
+)
+
+
+def test_derive_session_key_is_deterministic():
+    k1 = derive_session_key(b"secret", b"nonce-0123456789ab", "plugin-a")
+    k2 = derive_session_key(b"secret", b"nonce-0123456789ab", "plugin-a")
+    assert k1 == k2
+    assert len(k1) == 32
+
+
+def test_derive_session_key_is_input_sensitive():
+    k = derive_session_key(b"secret", b"nonce-0123456789ab", "plugin-a")
+    assert k != derive_session_key(b"other!", b"nonce-0123456789ab", "plugin-a")
+    assert k != derive_session_key(b"secret", b"nonce-xxxxxxxxxxxx", "plugin-a")
+    assert k != derive_session_key(b"secret", b"nonce-0123456789ab", "plugin-b")
+
+
+def test_compute_and_verify_tag():
+    key = derive_session_key(b"secret", b"nonce-0123456789ab", "p")
+    header = bytes(range(44))
+    payload = b"hello veyron"
+    tag = compute_tag(key, header, payload)
+    assert len(tag) == 32
+    assert verify_tag(key, header, payload, tag)
+
+
+def test_verify_tag_rejects_tampered_payload():
+    key = derive_session_key(b"secret", b"nonce-0123456789ab", "p")
+    header = bytes(range(44))
+    payload = b"hello"
+    tag = compute_tag(key, header, payload)
+    assert not verify_tag(key, header, b"hellx", tag)
+
+
+def test_verify_tag_rejects_tampered_header():
+    key = derive_session_key(b"secret", b"nonce-0123456789ab", "p")
+    header = bytes(range(44))
+    payload = b"hello"
+    tag = compute_tag(key, header, payload)
+    bad_header = bytes([header[0] ^ 0xFF]) + header[1:]
+    assert not verify_tag(key, bad_header, payload, tag)
+
+
+def test_verify_tag_rejects_wrong_key():
+    key = derive_session_key(b"secret", b"nonce-0123456789ab", "p")
+    other = derive_session_key(b"secret", b"nonce-xxxxxxxxxxxx", "p")
+    header = bytes(range(44))
+    payload = b"hello"
+    tag = compute_tag(key, header, payload)
+    assert not verify_tag(other, header, payload, tag)
+
+
+def test_pack_frame_mac_sets_flag_and_appends_tag():
+    key = derive_session_key(b"secret", b"nonce-0123456789ab", "tgt")
+    payload = b"test payload"
+    frame = pack_frame("tgt", payload, session_key=key)
+    # header is 44 bytes, payload is 12, tag is 32
+    assert len(frame) == 44 + 12 + 32
+    flags = struct.unpack(">H", frame[2:4])[0]
+    assert flags & FLAG_MAC_PRESENT
+
+
+def test_pack_frame_no_key_no_mac():
+    payload = b"test payload"
+    frame = pack_frame("tgt", payload)
+    assert len(frame) == 44 + len(payload)
+    flags = struct.unpack(">H", frame[2:4])[0]
+    assert not (flags & FLAG_MAC_PRESENT)
+
+
+def test_read_frame_mac_verifies():
+    key = derive_session_key(b"secret", b"nonce-0123456789ab", "tgt")
+    payload = b"round trip"
+    frame = pack_frame("tgt", payload, session_key=key)
+    result = read_frame(io.BytesIO(frame), session_key=key)
+    assert result == payload
+
+
+def test_read_frame_mac_rejects_tampered():
+    import pytest
+    key = derive_session_key(b"secret", b"nonce-0123456789ab", "tgt")
+    payload = b"round trip"
+    frame = bytearray(pack_frame("tgt", payload, session_key=key))
+    frame[-1] ^= 0xFF  # corrupt last byte of MAC tag
+    with pytest.raises(ValueError, match="MAC verification failed"):
+        read_frame(io.BytesIO(bytes(frame)), session_key=key)
+
+
+def test_read_frame_no_key_skips_verification():
+    key = derive_session_key(b"secret", b"nonce-0123456789ab", "tgt")
+    payload = b"no verify"
+    frame = pack_frame("tgt", payload, session_key=key)
+    # No session_key passed: reads and discards MAC bytes, returns payload
+    result = read_frame(io.BytesIO(frame))
+    assert result == payload
