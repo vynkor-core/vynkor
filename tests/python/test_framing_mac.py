@@ -1,7 +1,10 @@
+import asyncio
+import io
+import os
 import struct
 import sys
-import os
-import io
+
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../sdk/python"))
 
@@ -12,6 +15,7 @@ from veyron.framing import (
     verify_tag,
     pack_frame,
     read_frame,
+    async_read_frame,
     HEADER_SIZE,
 )
 
@@ -92,7 +96,6 @@ def test_read_frame_mac_verifies():
 
 
 def test_read_frame_mac_rejects_tampered():
-    import pytest
     key = derive_session_key(b"secret", b"nonce-0123456789ab", "tgt")
     payload = b"round trip"
     frame = bytearray(pack_frame("tgt", payload, session_key=key))
@@ -107,4 +110,19 @@ def test_read_frame_no_key_skips_verification():
     frame = pack_frame("tgt", payload, session_key=key)
     # No session_key passed: reads and discards MAC bytes, returns payload
     result = read_frame(io.BytesIO(frame))
+    assert result == payload
+
+
+def test_async_read_frame_mac_verifies():
+    key = derive_session_key(b"secret", b"nonce-0123456789ab", "tgt")
+    payload = b"async round trip"
+    frame = pack_frame("tgt", payload, session_key=key)
+
+    async def _run():
+        reader = asyncio.StreamReader()
+        reader.feed_data(frame)
+        reader.feed_eof()
+        return await async_read_frame(reader, session_key=key)
+
+    result = asyncio.run(_run())
     assert result == payload
