@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
+use veyron::plugins::registry::PluginRegistry;
 use veyron::plugins::supervisor::{PluginConfig, PluginSupervisor, RestartPolicy};
 
 fn quick_exit_config(plugin_id: &str, policy: RestartPolicy, max_restarts: u32) -> PluginConfig {
@@ -165,6 +166,67 @@ async fn max_restarts_honored() {
 
     let count = sup.restart_count("capped").unwrap_or(0);
     assert_eq!(count, 2, "expected exactly 2 restarts, got {}", count);
+}
+
+// ── T-22: VULN-018 — dead entry cleanup ─────────────────────────────────────
+
+#[tokio::test]
+async fn is_running_returns_false_after_max_restarts_exceeded() {
+    let sup = Arc::new(PluginSupervisor::new("/tmp/veyron_test.sock"));
+
+    // Always policy, max_restarts=0: first exit triggers None branch → entry removed.
+    sup.spawn_plugin(quick_exit_config("terminated", RestartPolicy::Always, 0))
+        .await
+        .unwrap();
+
+    let sup_clone = Arc::clone(&sup);
+    tokio::spawn(async move {
+        sup_clone.monitor_loop().await;
+    });
+
+    sleep(Duration::from_millis(300)).await;
+
+    assert!(
+        !sup.is_running("terminated"),
+        "is_running must be false once max restarts are exhausted"
+    );
+}
+
+// ── T-22: VULN-021 — watchdog must not reset pong after SIGKILL ─────────────
+
+#[tokio::test]
+async fn watchdog_does_not_reset_pong_after_kill() {
+    let sup = Arc::new(PluginSupervisor::new("/tmp/veyron_watchdog_pong.sock"));
+    sup.spawn_plugin(sleep_config("watchdog_victim")).await.unwrap();
+
+    let reg = Arc::new(PluginRegistry::new());
+    // Record a pong so the watchdog enters the deadline-check branch.
+    reg.record_pong("watchdog_victim");
+    let pong_before = reg.last_pong("watchdog_victim").unwrap();
+
+    // Wait long enough to make the pong stale relative to the tiny deadline below.
+    sleep(Duration::from_millis(50)).await;
+
+    // interval=1ms, timeout=1ms → deadline=2ms. Pong is ~50ms old → SIGKILL fires.
+    let sup_clone = Arc::clone(&sup);
+    let reg_clone = Arc::clone(&reg);
+    let wdog = tokio::spawn(async move {
+        sup_clone
+            .watchdog_loop(reg_clone, Duration::from_millis(1), Duration::from_millis(1))
+            .await;
+    });
+
+    sleep(Duration::from_millis(30)).await;
+    wdog.abort();
+
+    // Pong must NOT have been refreshed after SIGKILL (VULN-021 fix).
+    let pong_after = reg.last_pong("watchdog_victim").unwrap();
+    assert_eq!(
+        pong_before, pong_after,
+        "watchdog must not reset pong after SIGKILL"
+    );
+
+    sup.stop_plugin("watchdog_victim").await.ok();
 }
 
 #[tokio::test]

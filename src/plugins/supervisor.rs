@@ -68,6 +68,9 @@ pub struct PluginSupervisor {
     /// Plugins whose next exit is a manual restart (POST /restart) and must be
     /// respawned regardless of restart_policy / max_restarts.
     forced_restarts: Arc<DashMap<String, ()>>,
+    /// Final restart_count for plugins that have been removed from `entries` after
+    /// exhausting their restart budget (VULN-018). Preserved for historical lookup.
+    stopped_counts: Arc<DashMap<String, u32>>,
 }
 
 impl PluginSupervisor {
@@ -97,6 +100,7 @@ impl PluginSupervisor {
             event_bus,
             plugin_registry,
             forced_restarts: Arc::new(DashMap::new()),
+            stopped_counts: Arc::new(DashMap::new()),
         }
     }
 
@@ -244,7 +248,10 @@ impl PluginSupervisor {
 
     #[allow(dead_code)]
     pub fn restart_count(&self, plugin_id: &str) -> Option<u32> {
-        self.entries.get(plugin_id).map(|e| e.restart_count)
+        self.entries
+            .get(plugin_id)
+            .map(|e| e.restart_count)
+            .or_else(|| self.stopped_counts.get(plugin_id).map(|c| *c))
     }
 
     pub async fn monitor_loop(self: &Arc<Self>) {
@@ -313,7 +320,15 @@ impl PluginSupervisor {
                     let _ = self.spawn_internal(config, new_count).await;
                 }
                 None => {
-                    // max restarts reached or Never policy — process is gone, entry stays
+                    // max restarts reached or Never policy — remove dead entry so
+                    // is_running() returns false (VULN-018). Preserve final restart_count
+                    // in stopped_counts for historical lookup.
+                    let final_count = self
+                        .entries
+                        .remove(&event.plugin_id)
+                        .map(|(_, e)| e.restart_count)
+                        .unwrap_or(0);
+                    self.stopped_counts.insert(event.plugin_id, final_count);
                 }
             }
         }
@@ -341,7 +356,10 @@ impl PluginSupervisor {
                         warn!(plugin_id = %plugin_id, "watchdog: plugin unresponsive, sending SIGKILL");
                         let nix_pid = nix::unistd::Pid::from_raw(pid as i32);
                         let _ = nix::sys::signal::kill(nix_pid, nix::sys::signal::Signal::SIGKILL);
-                        registry.record_pong(&plugin_id);
+                        // Do NOT reset pong here (VULN-021): the deadline must keep
+                        // running so the watchdog can escalate (another SIGKILL) if the
+                        // process is stuck in D-state. If the process truly died, the
+                        // exit event from monitor_loop will clean up the entry.
                         continue;
                     }
                 }
