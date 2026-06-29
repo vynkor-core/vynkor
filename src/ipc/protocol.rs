@@ -85,8 +85,12 @@ impl MessageRouter {
             let target = match target_as_str(&msg.frame) {
                 Some(t) => t.to_string(),
                 None => {
-                    let raw_hex: String =
-                        msg.frame.target.iter().map(|b| format!("{b:02x}")).collect();
+                    let raw_hex: String = msg
+                        .frame
+                        .target
+                        .iter()
+                        .map(|b| format!("{b:02x}"))
+                        .collect();
                     warn!(conn_id, raw_target = %raw_hex, "frame target is not valid UTF-8");
                     Self::send_error(
                         &msg.write_tx,

@@ -101,10 +101,9 @@ mod tests {
         let _ = std::fs::remove_file(sock_path);
 
         let (tx, _rx) = tokio::sync::mpsc::channel(16);
-        let (_handle, _disc) =
-            UdsServer::start(std::path::Path::new(sock_path), tx, 1)
-                .await
-                .unwrap();
+        let (_handle, _disc) = UdsServer::start(std::path::Path::new(sock_path), tx, 1)
+            .await
+            .unwrap();
 
         // First connection: accepted (open_conns goes 0 → 1)
         let _c1 = UnixStream::connect(sock_path).await.unwrap();
@@ -113,13 +112,10 @@ mod tests {
         // Second connection: limit reached — server drops stream, peer sees EOF
         let mut c2 = UnixStream::connect(sock_path).await.unwrap();
         let mut buf = [0u8; 1];
-        let n = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            c2.read(&mut buf),
-        )
-        .await
-        .expect("read timed out")
-        .expect("read error");
+        let n = tokio::time::timeout(std::time::Duration::from_secs(1), c2.read(&mut buf))
+            .await
+            .expect("read timed out")
+            .expect("read error");
         assert_eq!(n, 0, "excess connection must receive EOF");
 
         // _c1 kept alive to hold the slot during the test

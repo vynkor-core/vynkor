@@ -77,8 +77,8 @@ impl CommandHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::sync::mpsc;
     use crate::proto::veyron::PluginManifest;
+    use tokio::sync::mpsc;
 
     fn dummy_tx() -> mpsc::Sender<crate::ipc::connection::Outbound> {
         mpsc::channel(1).0
@@ -99,7 +99,12 @@ mod tests {
     fn health_check_counts_registered_plugin() {
         let registry = PluginRegistry::new();
         registry
-            .register("alpha".to_string(), 1, PluginManifest::default(), dummy_tx())
+            .register(
+                "alpha".to_string(),
+                1,
+                PluginManifest::default(),
+                dummy_tx(),
+            )
             .unwrap();
         let out = CommandHandler::dispatch("health_check", &registry, Instant::now(), None);
         assert_eq!(out.status, CommandStatus::CommandOk);
@@ -125,7 +130,11 @@ mod tests {
             Some("/nonexistent/veyron_cfg_test.yaml"),
         );
         assert_eq!(out.status, CommandStatus::CommandError);
-        assert!(out.error.contains("config reload failed"), "error={}", out.error);
+        assert!(
+            out.error.contains("config reload failed"),
+            "error={}",
+            out.error
+        );
     }
 
     #[test]

@@ -7,7 +7,7 @@ use veyron::events::bus::EventBus;
 use veyron::events::store::EventStore;
 use veyron::kernel::Kernel;
 use veyron::plugins::registry::PluginRegistry;
-use veyron::proto::veyron::{envelope, EventAck, Envelope, PluginManifest};
+use veyron::proto::veyron::{envelope, Envelope, EventAck, PluginManifest};
 use veyron::utils::config::Config;
 use veyron_sdk::VeyronClient;
 
@@ -46,8 +46,7 @@ async fn start_kernel_with_store(
 }
 
 fn tmp_data_dir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir()
-        .join(format!("veyron_es_integ_{tag}_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("veyron_es_integ_{tag}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     dir
 }
@@ -94,8 +93,7 @@ async fn kernel_system_event_is_persisted_to_store_as_pending() {
 #[tokio::test]
 async fn event_ack_from_plugin_marks_event_delivered() {
     let data_dir = tmp_data_dir("ack_delivered");
-    let shutdown_tx =
-        start_kernel_with_store("/tmp/veyron_es_ack.sock", 19301, &data_dir).await;
+    let shutdown_tx = start_kernel_with_store("/tmp/veyron_es_ack.sock", 19301, &data_dir).await;
 
     // observer subscribes to all events so it receives system.plugin_joined
     let mut observer = VeyronClient::connect("/tmp/veyron_es_ack.sock")

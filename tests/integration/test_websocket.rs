@@ -280,8 +280,7 @@ async fn ws_untagged_frames_rejected_on_secured_kernel() {
 
 #[tokio::test]
 async fn ws_closed_after_max_parse_errors() {
-    let (_shutdown, _reg, _bus) =
-        start_kernel("/tmp/veyron_ws_parse_err.sock", 19321).await;
+    let (_shutdown, _reg, _bus) = start_kernel("/tmp/veyron_ws_parse_err.sock", 19321).await;
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     let (mut ws, _) = tokio_tungstenite::connect_async("ws://127.0.0.1:19321/ws")

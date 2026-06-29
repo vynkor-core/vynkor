@@ -197,7 +197,9 @@ async fn is_running_returns_false_after_max_restarts_exceeded() {
 #[tokio::test]
 async fn watchdog_does_not_reset_pong_after_kill() {
     let sup = Arc::new(PluginSupervisor::new("/tmp/veyron_watchdog_pong.sock"));
-    sup.spawn_plugin(sleep_config("watchdog_victim")).await.unwrap();
+    sup.spawn_plugin(sleep_config("watchdog_victim"))
+        .await
+        .unwrap();
 
     let reg = Arc::new(PluginRegistry::new());
     // Record a pong so the watchdog enters the deadline-check branch.
@@ -212,7 +214,11 @@ async fn watchdog_does_not_reset_pong_after_kill() {
     let reg_clone = Arc::clone(&reg);
     let wdog = tokio::spawn(async move {
         sup_clone
-            .watchdog_loop(reg_clone, Duration::from_millis(1), Duration::from_millis(1))
+            .watchdog_loop(
+                reg_clone,
+                Duration::from_millis(1),
+                Duration::from_millis(1),
+            )
             .await;
     });
 

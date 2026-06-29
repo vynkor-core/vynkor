@@ -36,7 +36,11 @@ fn persist_is_idempotent() {
     store.persist(&ev("dup"));
     store.persist(&ev("dup")); // second call must be a no-op
     let rows = store.pending_older_than(0);
-    assert_eq!(rows.len(), 1, "duplicate persist must not create a second row");
+    assert_eq!(
+        rows.len(),
+        1,
+        "duplicate persist must not create a second row"
+    );
 }
 
 #[test]
@@ -45,7 +49,10 @@ fn mark_delivered_removes_from_pending() {
     store.persist(&ev("y"));
     store.mark_delivered("y");
     let rows = store.pending_older_than(0);
-    assert!(rows.is_empty(), "delivered event must not appear in pending");
+    assert!(
+        rows.is_empty(),
+        "delivered event must not appear in pending"
+    );
 }
 
 #[test]
@@ -54,7 +61,10 @@ fn pending_older_than_ignores_fresh_events() {
     store.persist(&ev("fresh"));
     // age threshold of 1 hour — just-created event must not appear
     let rows = store.pending_older_than(3600);
-    assert!(rows.is_empty(), "fresh event must not appear before age threshold");
+    assert!(
+        rows.is_empty(),
+        "fresh event must not appear before age threshold"
+    );
 }
 
 // ── Unit tests: retry / dead ─────────────────────────────────────────────────
@@ -66,7 +76,10 @@ fn increment_retry_increments_count_below_max() {
     store.increment_retry_or_dead("r", 5); // max=5, count becomes 1 → still pending
     let rows = store.pending_older_than(0);
     assert_eq!(rows.len(), 1, "event below max_retries must remain pending");
-    assert_eq!(rows[0].retry_count, 1, "retry_count must be 1 after one increment");
+    assert_eq!(
+        rows[0].retry_count, 1,
+        "retry_count must be 1 after one increment"
+    );
 }
 
 #[test]
@@ -75,7 +88,10 @@ fn increment_retry_marks_dead_at_max() {
     store.persist(&ev("d"));
     store.increment_retry_or_dead("d", 1); // max=1, count becomes 1 → dead
     let rows = store.pending_older_than(0);
-    assert!(rows.is_empty(), "event at max_retries must become dead (not pending)");
+    assert!(
+        rows.is_empty(),
+        "event at max_retries must become dead (not pending)"
+    );
 }
 
 #[test]

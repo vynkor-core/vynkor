@@ -659,7 +659,10 @@ async fn poisoned_session_key_cell_still_installs_mac_key() {
             ..
         })) => {
             assert!(accepted, "registration must be accepted");
-            assert!(!session_nonce.is_empty(), "nonce must be present when mac_secret set");
+            assert!(
+                !session_nonce.is_empty(),
+                "nonce must be present when mac_secret set"
+            );
         }
         other => panic!("expected PluginRegisterAck, got {:?}", other),
     }

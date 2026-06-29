@@ -1,9 +1,9 @@
 mod helpers;
 mod test_autoload;
-mod test_kernel_commands;
 mod test_disconnect;
 mod test_event_store_integration;
 mod test_events;
+mod test_kernel_commands;
 mod test_mac;
 mod test_metrics_counters;
 mod test_ping;

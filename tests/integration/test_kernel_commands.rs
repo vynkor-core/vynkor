@@ -6,8 +6,7 @@ use veyron_sdk::VeyronClient;
 
 #[tokio::test]
 async fn health_check_via_ipc_returns_ok_with_json_fields() {
-    let (shutdown_tx, _registry, _bus) =
-        start_kernel("/tmp/veyron_integ_cmd_hc.sock", 19210).await;
+    let (shutdown_tx, _registry, _bus) = start_kernel("/tmp/veyron_integ_cmd_hc.sock", 19210).await;
 
     let mut client = VeyronClient::connect("/tmp/veyron_integ_cmd_hc.sock")
         .await
@@ -28,16 +27,21 @@ async fn health_check_via_ipc_returns_ok_with_json_fields() {
     assert_eq!(ack.status(), CommandStatus::CommandOk);
     assert!(ack.error.is_empty(), "unexpected error: {}", ack.error);
     let json = String::from_utf8(ack.data_json).unwrap();
-    assert!(json.contains("uptime_secs"), "missing uptime_secs in: {json}");
-    assert!(json.contains("plugin_count"), "missing plugin_count in: {json}");
+    assert!(
+        json.contains("uptime_secs"),
+        "missing uptime_secs in: {json}"
+    );
+    assert!(
+        json.contains("plugin_count"),
+        "missing plugin_count in: {json}"
+    );
 
     let _ = shutdown_tx.send(());
 }
 
 #[tokio::test]
 async fn kernel_command_ack_echoes_command_id() {
-    let (shutdown_tx, _registry, _bus) =
-        start_kernel("/tmp/veyron_integ_cmd_id.sock", 19211).await;
+    let (shutdown_tx, _registry, _bus) = start_kernel("/tmp/veyron_integ_cmd_id.sock", 19211).await;
 
     let mut client = VeyronClient::connect("/tmp/veyron_integ_cmd_id.sock")
         .await

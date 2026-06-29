@@ -202,7 +202,9 @@ mod tests {
         let key = derive_session_key(b"s", b"nonce-aaaaaaaaaa", "p");
         let cell: SessionKeyCell = Arc::new(Mutex::new(None));
         tx.send(out_frame(plain("plugin", b"ack"))).await.unwrap(); // pre-enable
-        tx.send(Outbound::EnableMac(key, cell.clone())).await.unwrap();
+        tx.send(Outbound::EnableMac(key, cell.clone()))
+            .await
+            .unwrap();
         tx.send(out_frame(plain("plugin", b"secured")))
             .await
             .unwrap();
