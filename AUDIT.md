@@ -25,7 +25,7 @@ posture; the Phase 1.1 audit below remains as historical baseline.
 |--------|-----------|---------------|
 | Rogue process connects to socket | JWT mandatory when `jwt_secret` set; kernel refuses start without it unless `allow_no_auth: true` | `allow_no_auth` shifts trust to operator config |
 | Plugin claims another plugin's ID | `claims.sub == plugin_id` check at registration; JWT must match declared ID | Without JWT (`allow_no_auth`), squatting is accepted risk (see VULN-004 note) |
-| Message tampering in transit | Per-connection HMAC-SHA256 over header+payload; bad tag drops connection | C++ and Python SDKs lack MAC — those plugins cannot connect to a hardened kernel (VULN-011). WS gateway now enforces MAC on par with UDS (T-13 complete). |
+| Message tampering in transit | Per-connection HMAC-SHA256 over header+payload; bad tag drops connection | WS gateway enforces MAC on par with UDS (T-13). C++ and Python SDKs now implement MAC (T-08/T-09, VULN-011 fixed). |
 | Peer-to-peer IPC abuse | Default-deny `PERMISSION_IPC_SEND`; per-target `ipc_targets` allowlist in manifest | — |
 | Broadcast abuse | `PERMISSION_IPC_SEND` required for `target = "*"` | — |
 | HTTP API misuse | Bound to `127.0.0.1`; auth-protected route group for sensitive endpoints | JWT optional for basic health/list when no `jwt_secret` |
@@ -90,20 +90,18 @@ for 24-hour overnight runs.
 60 s per target. Crashes uploaded as artifacts. Also added `.github/workflows/ci.yml`
 for per-PR build + test + clippy + fmt.
 
-### New Finding: SDK MAC Gap (VULN-011)
+### SDK MAC Gap (VULN-011) — Fixed
 
 C++ SDK (`sdk/cpp/src/framing.cpp`) and Python SDK (`sdk/python/veyron/framing.py`)
-implement CRC-32 framing only. Neither computes nor verifies HMAC-SHA256 tags.
-When the kernel is started with `jwt_secret` (the hardened, recommended configuration),
-C++ and Python plugins fail MAC verification and their connections are dropped.
+previously implemented CRC-32 framing only. Both SDKs now implement HMAC-SHA256 MAC:
 
-**Impact:** C++ and Python plugin authors cannot use the hardened kernel without either
-(a) disabling MAC via `allow_no_auth: true` (weakens security), or (b) implementing
-MAC in their SDK. This is tracked as VULN-011 in ROADMAP.md.
+- **Python (T-08):** `derive_session_key`/`compute_tag`/`verify_tag` added to `framing.py`;
+  `VeyronClient(socket_path, secret=bytes)` derives session key from `PluginRegisterAck.session_nonce`.
+- **C++ (T-09):** `mac.hpp/cpp` with HKDF-SHA256 + HMAC-SHA256 via OpenSSL; `pack_frame_mac` and
+  `read_frame_full` in `framing.cpp`; `VeyronClient(path, secret)` is MAC-transparent.
 
-**Interim guidance:** Run development kernels with `allow_no_auth: true` for C++/Python
-plugins only in isolated, single-user environments. Do not use this setting in any
-shared or production context.
+C++ and Python plugins can now connect to hardened kernels (`jwt_secret` configured) without
+disabling MAC. `allow_no_auth: true` remains supported for no-secret environments.
 
 ### Current Vulnerability Summary
 
@@ -119,7 +117,7 @@ shared or production context.
 | VULN-008 | ◐ Mitigated | `127.0.0.1` binding; JWT optional |
 | VULN-009 | ✅ Fixed | `validate_plugin_id()` blocks injection |
 | VULN-010 | ✅ Fixed | `/logs` in auth-protected route group |
-| VULN-011 | 🆕 Open | C++/Python SDK lacks MAC; blocked from hardened kernel |
+| VULN-011 | ✅ Fixed | Python/C++ SDK MAC added (T-08/T-09) |
 
 ---
 
