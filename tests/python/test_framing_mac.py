@@ -126,3 +126,23 @@ def test_async_read_frame_mac_verifies():
 
     result = asyncio.run(_run())
     assert result == payload
+
+
+def test_client_derive_session_key_after_mock_ack():
+    """Client correctly derives session_key from a mock PluginRegisterAck."""
+    import sys, os
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../sdk/python"))
+    from veyron.client import VeyronClient
+    from veyron.veyron_protocol_pb2 import Envelope, PluginRegisterAck
+
+    secret = b"test-jwt-secret"
+    nonce = b"nonce-0123456789ab"[:16]
+    plugin_id = "mock-plugin"
+
+    client = VeyronClient("/tmp/not-used.sock", secret=secret)
+    # Simulate what register() does after receiving the ack
+    client._apply_session_nonce(plugin_id, nonce)
+
+    from veyron.framing import derive_session_key
+    expected_key = derive_session_key(secret, nonce, plugin_id)
+    assert client.session_key == expected_key
