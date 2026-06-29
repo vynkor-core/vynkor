@@ -8,10 +8,23 @@ use veyron_sdk::VeyronClient;
 
 /// Raw HTTP GET helper — avoids adding reqwest to dev-deps.
 async fn http_get_body(port: u16, path: &str) -> (u16, String) {
+    http_get_body_with_auth(port, path, None).await
+}
+
+/// Raw HTTP GET helper with optional Authorization header.
+async fn http_get_body_with_auth(port: u16, path: &str, token: Option<&str>) -> (u16, String) {
     let mut stream = tokio::net::TcpStream::connect(format!("127.0.0.1:{port}"))
         .await
         .expect("connect to kernel HTTP port");
-    let req = format!("GET {path} HTTP/1.0\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+
+    let auth_header = if let Some(t) = token {
+        format!("Authorization: Bearer {}\r\n", t)
+    } else {
+        String::new()
+    };
+
+    let req =
+        format!("GET {path} HTTP/1.0\r\nHost: 127.0.0.1\r\nConnection: close\r\n{auth_header}\r\n");
     stream.write_all(req.as_bytes()).await.unwrap();
     let mut buf = Vec::new();
     stream.read_to_end(&mut buf).await.unwrap();
@@ -186,7 +199,8 @@ async fn mac_error_counter_appears_after_untagged_frame_on_secured_kernel() {
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let (_status, body) = http_get_body(19604, "/metrics").await;
+    // /metrics requires auth on secured kernels, pass the JWT token
+    let (_status, body) = http_get_body_with_auth(19604, "/metrics", Some(&token)).await;
     assert!(
         body.contains("ipc_frame_errors_total"),
         "ipc_frame_errors_total must appear in /metrics after a MAC failure; body:\n{body}"

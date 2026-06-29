@@ -44,15 +44,15 @@ pub fn create_router_full(
         started_at,
     });
 
-    let public = Router::new()
-        .route("/health", get(health_check))
+    let public = Router::new().route("/health", get(health_check));
+
+    // All non-health endpoints require auth when jwt_secret is configured.
+    // auth_middleware short-circuits to next.run when jwt_validator is None,
+    // so allow_no_auth deployments see no change in behaviour.
+    let protected = Router::new()
         .route("/metrics", get(get_metrics))
         .route("/plugins", get(list_plugins))
-        .route("/plugins/:id", get(get_plugin));
-
-    // Plugin logs can contain sensitive output, and stop/restart mutate state —
-    // all require auth when a jwt_secret is configured.
-    let protected = Router::new()
+        .route("/plugins/:id", get(get_plugin))
         .route("/plugins/:id/logs", get(get_plugin_logs))
         .route("/plugins/:id/stop", post(stop_plugin))
         .route("/plugins/:id/restart", post(restart_plugin))
