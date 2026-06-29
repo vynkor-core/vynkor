@@ -10,8 +10,9 @@
 
 namespace veyron {
 
-VeyronClient::VeyronClient(std::string socket_path)
-    : socket_path_(std::move(socket_path)) {}
+VeyronClient::VeyronClient(std::string socket_path, std::vector<uint8_t> secret)
+    : socket_path_(std::move(socket_path))
+    , secret_(std::move(secret)) {}
 
 VeyronClient::~VeyronClient() { close(); }
 
@@ -47,8 +48,19 @@ Envelope VeyronClient::register_plugin(const std::string& plugin_id,
     reg->set_plugin_id(plugin_id);
     reg->set_jwt_token(jwt_token);
 
-    send_envelope("kernel", env);
-    return recv();
+    // Registration frame is always CRC-only; session_key not yet derived.
+    send_envelope_no_mac("kernel", env);
+    Envelope ack = recv();
+
+    if (ack.has_plugin_register_ack() && !secret_.empty()) {
+        const auto& nonce_str = ack.plugin_register_ack().session_nonce();
+        if (!nonce_str.empty()) {
+            std::vector<uint8_t> nonce(nonce_str.begin(), nonce_str.end());
+            session_key_ = derive_session_key(secret_, nonce, plugin_id);
+        }
+    }
+
+    return ack;
 }
 
 void VeyronClient::send(const std::string& target, const Envelope& env) {
@@ -56,9 +68,13 @@ void VeyronClient::send(const std::string& target, const Envelope& env) {
 }
 
 Envelope VeyronClient::recv() {
-    auto payload = read_frame(fd_);
+    const std::array<uint8_t,32>* key_ptr =
+        session_key_.has_value() ? &session_key_.value() : nullptr;
+    auto result = read_frame_full(fd_, key_ptr);
+
     Envelope env;
-    if (!env.ParseFromArray(payload.data(), static_cast<int>(payload.size())))
+    if (!env.ParseFromArray(result.payload.data(),
+                            static_cast<int>(result.payload.size())))
         throw std::runtime_error("veyron: protobuf parse failed");
     return env;
 }
@@ -83,14 +99,37 @@ double VeyronClient::ping() {
 
     auto t0 = clk::now();
     send_envelope("kernel", env);
-    recv();  // discard Pong
+    recv();
     return std::chrono::duration<double>(clk::now() - t0).count();
+}
+
+void VeyronClient::send_envelope_no_mac(const std::string& target, const Envelope& env) {
+    std::string bytes;
+    env.SerializeToString(&bytes);
+    auto frame = pack_frame(target, bytes);
+
+    const uint8_t* ptr = frame.data();
+    size_t remaining   = frame.size();
+    while (remaining > 0) {
+        ssize_t written = ::write(fd_, ptr, remaining);
+        if (written <= 0)
+            throw std::runtime_error("veyron: write() failed");
+        ptr       += written;
+        remaining -= static_cast<size_t>(written);
+    }
 }
 
 void VeyronClient::send_envelope(const std::string& target, const Envelope& env) {
     std::string bytes;
     env.SerializeToString(&bytes);
-    auto frame = pack_frame(target, bytes);
+
+    std::vector<uint8_t> frame;
+    if (session_key_.has_value()) {
+        std::vector<uint8_t> payload(bytes.begin(), bytes.end());
+        frame = pack_frame_mac(target, payload, session_key_.value());
+    } else {
+        frame = pack_frame(target, bytes);
+    }
 
     const uint8_t* ptr = frame.data();
     size_t remaining   = frame.size();

@@ -2,6 +2,7 @@
 
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include "veyron/client.hpp"
 
@@ -10,9 +11,10 @@ namespace veyron {
 class Plugin {
 public:
     explicit Plugin(std::string plugin_id,
-                    std::string socket_path = "/tmp/veyron.sock")
+                    std::string socket_path = "/tmp/veyron.sock",
+                    std::vector<uint8_t> secret = {})
         : plugin_id_(std::move(plugin_id))
-        , client_(std::move(socket_path)) {}
+        , client_(std::move(socket_path), std::move(secret)) {}
 
     virtual ~Plugin() = default;
 

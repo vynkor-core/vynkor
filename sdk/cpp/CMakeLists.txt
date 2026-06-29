@@ -6,6 +6,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(Threads REQUIRED)
 find_package(Protobuf REQUIRED)
+find_package(OpenSSL REQUIRED)
+find_package(absl REQUIRED)
 
 # Generate C++ bindings from the shared proto
 set(PROTO_FILE ${CMAKE_CURRENT_SOURCE_DIR}/../../proto/veyron_protocol.proto)
@@ -14,8 +16,10 @@ protobuf_generate_cpp(PROTO_SRCS PROTO_HDRS ${PROTO_FILE})
 add_library(veyron_sdk_cpp STATIC
     src/client.cpp
     src/framing.cpp
+    src/mac.cpp
     include/veyron/client.hpp
     include/veyron/framing.hpp
+    include/veyron/mac.hpp
     include/veyron/plugin.hpp
     ${PROTO_SRCS}
     ${PROTO_HDRS}
@@ -33,9 +37,26 @@ target_include_directories(veyron_sdk_cpp
 target_link_libraries(veyron_sdk_cpp
     PUBLIC
     protobuf::libprotobuf
+    absl::base
+    absl::strings
+    absl::log_internal_check_op
+    OpenSSL::Crypto
     Threads::Threads
 )
 
+# ── Tests ──────────────────────────────────────────────────────────────────
+include(CTest)
+find_package(GTest REQUIRED)
+
+add_executable(veyron_sdk_tests tests/test_mac.cpp)
+target_link_libraries(veyron_sdk_tests
+    PRIVATE
+    veyron_sdk_cpp
+    GTest::GTest
+)
+add_test(NAME veyron_sdk_tests COMMAND veyron_sdk_tests)
+
+# ── Install ────────────────────────────────────────────────────────────────
 include(GNUInstallDirs)
 
 install(
