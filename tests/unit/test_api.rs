@@ -327,3 +327,124 @@ async fn read_only_endpoints_open_without_token() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
 }
+
+#[tokio::test]
+async fn get_plugins_requires_auth_when_jwt_set() {
+    const SECRET: &[u8] = b"test-secret";
+    let validator = Arc::new(JwtValidator::new(SECRET));
+    let app = create_router(
+        make_manager(make_registry(), make_supervisor()),
+        Some(validator.clone()),
+    );
+
+    // No token → 401
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/plugins")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    // Valid token → 200
+    let token = create_test_token("admin", vec![], SECRET, 3600);
+    let res2 = create_router(
+        make_manager(make_registry(), make_supervisor()),
+        Some(validator),
+    )
+    .oneshot(
+        Request::builder()
+            .uri("/plugins")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(res2.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn get_plugin_by_id_requires_auth_when_jwt_set() {
+    const SECRET: &[u8] = b"test-secret";
+    let validator = Arc::new(JwtValidator::new(SECRET));
+    let registry = make_registry();
+    register(&registry, "echo", 1);
+    let app = create_router(
+        make_manager(Arc::clone(&registry), make_supervisor()),
+        Some(validator.clone()),
+    );
+
+    // No token → 401
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/plugins/echo")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    // Valid token → 200
+    let token = create_test_token("admin", vec![], SECRET, 3600);
+    let registry2 = make_registry();
+    register(&registry2, "echo", 1);
+    let res2 = create_router(make_manager(registry2, make_supervisor()), Some(validator))
+        .oneshot(
+            Request::builder()
+                .uri("/plugins/echo")
+                .header("Authorization", format!("Bearer {}", token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res2.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn get_metrics_requires_auth_when_jwt_set() {
+    const SECRET: &[u8] = b"test-secret";
+    let validator = Arc::new(JwtValidator::new(SECRET));
+    let app = create_router(
+        make_manager(make_registry(), make_supervisor()),
+        Some(validator.clone()),
+    );
+
+    // No token → 401
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/metrics")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    // Valid token → 200
+    let token = create_test_token("admin", vec![], SECRET, 3600);
+    let res2 = create_router(
+        make_manager(make_registry(), make_supervisor()),
+        Some(validator),
+    )
+    .oneshot(
+        Request::builder()
+            .uri("/metrics")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(res2.status(), StatusCode::OK);
+}
