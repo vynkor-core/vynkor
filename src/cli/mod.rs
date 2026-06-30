@@ -1,4 +1,7 @@
+pub mod plugin;
+
 use clap::{Parser, Subcommand};
+use plugin::PluginCmd;
 
 #[derive(Parser)]
 #[command(name = "vyn")]
@@ -10,6 +13,10 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
+    Plugin {
+        #[command(subcommand)]
+        cmd: PluginCmd,
+    },
     Start {
         #[arg(short, long)]
         foreground: bool,

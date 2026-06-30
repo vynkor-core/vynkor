@@ -34,6 +34,7 @@
 | T-03 | ✅ Done | `PluginSupervisor::graceful_shutdown(grace_seconds)` added; hardcoded 200ms removed; `grace_seconds` in `PluginConfig` + `config.yaml` |
 | T-04 | ✅ Done | `AudioStreamChunk` + `AudioCodec` enum added to proto; field 60 in `Envelope` oneof |
 | T-08 | ✅ Done | `src/marketplace/registry.rs`: `fetch_registry` with 1h TTL cache, `check_kernel_compatibility`; 8 unit tests pass |
+| T-09 | ✅ Done | `src/cli/plugin.rs`: `vyn plugin list/search` with tab-aligned output; `start/stop/restart/logs` proxy to REST API |
 
 ---
 
@@ -809,7 +810,7 @@ if std::env::var("LOG_FORMAT").as_deref() == Ok("json") {
 | T-06 | Enforce audio stream permission in router | 2.2 | P1 | ✅ 2026-06-30 |
 | T-07 | Define registry.json and plugin.json schemas | 2.3 | P0 | ✅ 2026-06-30 |
 | T-08 | Registry fetch, cache, and kernel version resolution | 2.3 | P1 | ✅ 2026-06-30 |
-| T-09 | `vyn plugin list` and `vyn plugin search` | 2.3 | P1 | |
+| T-09 | `vyn plugin list` and `vyn plugin search` | 2.3 | P1 | ✅ 2026-06-30 |
 | T-10 | `vyn install <slug-or-id>` (atomic pipeline) | 2.3 | P0 | |
 | T-11 | Shell tab-completion | 2.3 | P2 | |
 | T-11b | Kernel-side plugin.json enforcement at load time | 2.3 | P0 | |

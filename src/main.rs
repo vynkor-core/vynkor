@@ -4,6 +4,7 @@ mod cli;
 mod events;
 mod ipc;
 mod kernel;
+mod marketplace;
 mod metrics;
 mod plugins;
 mod proto;
@@ -12,6 +13,7 @@ mod utils;
 use anyhow::Result;
 use clap::Parser;
 use cli::{Cli, Commands};
+use cli::plugin;
 use std::fs;
 use std::process::Command;
 use tracing::{info, warn};
@@ -102,6 +104,10 @@ async fn main() -> Result<()> {
             let cfg = load_config(&config).unwrap_or_default();
             utils::logging::init(&cfg.log_level);
             show_logs(&cfg.log_file, lines)?;
+        }
+        Commands::Plugin { cmd } => {
+            let port = load_config("config.yaml").map(|c| c.port).unwrap_or(8000);
+            plugin::handle(cmd, port).await?;
         }
     }
 
