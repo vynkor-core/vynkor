@@ -1,4 +1,7 @@
 mod test_api;
+mod test_completions;
+mod test_installer;
+mod test_manifest_enforcement;
 mod test_errors;
 mod test_event_bus;
 mod test_event_store;

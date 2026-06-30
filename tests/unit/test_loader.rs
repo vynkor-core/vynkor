@@ -23,6 +23,7 @@ fn sleep_def(id: &str) -> PluginDef {
         env: vec![],
         sandbox: false,
         grace_seconds: 5,
+        permissions: vec![],
     }
 }
 
@@ -36,6 +37,7 @@ fn bad_binary_def(id: &str) -> PluginDef {
         env: vec![],
         sandbox: false,
         grace_seconds: 5,
+        permissions: vec![],
     }
 }
 

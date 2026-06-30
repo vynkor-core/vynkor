@@ -19,6 +19,11 @@ pub struct PluginDef {
     /// Seconds to wait after SIGTERM before SIGKILL on shutdown. 0 = default (5s).
     #[serde(default)]
     pub grace_seconds: u32,
+    /// Permissions granted to this plugin by the operator. Any permission declared
+    /// in plugin.json but absent here causes the kernel to refuse to load the plugin.
+    /// Empty list means "allow all declared permissions" (no restriction).
+    #[serde(default)]
+    pub permissions: Vec<String>,
 }
 
 fn default_restart_policy() -> String {

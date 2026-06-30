@@ -1,5 +1,6 @@
 use clap::Subcommand;
 
+use crate::marketplace::installer::install;
 use crate::marketplace::registry::{fetch_registry, PluginEntry};
 
 #[derive(Subcommand)]
@@ -69,8 +70,9 @@ pub async fn handle(cmd: PluginCmd, port: u16) -> anyhow::Result<()> {
             let body = api_get(port, &format!("/plugins/{id}/logs?lines={lines}")).await?;
             print!("{body}");
         }
-        PluginCmd::Install { .. } => {
-            anyhow::bail!("T-10 not implemented yet");
+        PluginCmd::Install { target, refresh } => {
+            let entries = fetch_registry(refresh).await?;
+            install(&entries, &target).await?;
         }
     }
     Ok(())

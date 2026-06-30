@@ -1,6 +1,8 @@
+pub mod complete;
 pub mod plugin;
 
 use clap::{Parser, Subcommand};
+use clap_complete::Shell;
 use plugin::PluginCmd;
 
 #[derive(Parser)]
@@ -53,4 +55,9 @@ pub enum Commands {
         #[arg(short, long, default_value = "config.yaml")]
         config: String,
     },
+    Completions {
+        shell: Shell,
+    },
+    #[command(name = "__complete-slugs", hide = true)]
+    CompleteSlugs,
 }

@@ -50,6 +50,7 @@ async fn kernel_auto_spawns_plugins_from_config() {
         env: vec![],
         sandbox: false,
         grace_seconds: 5,
+        permissions: vec![],
     };
 
     let (shutdown, _registry) =

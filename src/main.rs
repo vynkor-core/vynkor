@@ -13,7 +13,7 @@ mod utils;
 use anyhow::Result;
 use clap::Parser;
 use cli::{Cli, Commands};
-use cli::plugin;
+use cli::{complete, plugin};
 use std::fs;
 use std::process::Command;
 use tracing::{info, warn};
@@ -108,6 +108,12 @@ async fn main() -> Result<()> {
         Commands::Plugin { cmd } => {
             let port = load_config("config.yaml").map(|c| c.port).unwrap_or(8000);
             plugin::handle(cmd, port).await?;
+        }
+        Commands::Completions { shell } => {
+            complete::generate_completions(shell);
+        }
+        Commands::CompleteSlugs => {
+            complete::complete_slugs().await?;
         }
     }
 

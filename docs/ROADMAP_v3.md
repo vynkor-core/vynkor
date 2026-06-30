@@ -35,6 +35,9 @@
 | T-04 | ✅ Done | `AudioStreamChunk` + `AudioCodec` enum added to proto; field 60 in `Envelope` oneof |
 | T-08 | ✅ Done | `src/marketplace/registry.rs`: `fetch_registry` with 1h TTL cache, `check_kernel_compatibility`; 8 unit tests pass |
 | T-09 | ✅ Done | `src/cli/plugin.rs`: `vyn plugin list/search` with tab-aligned output; `start/stop/restart/logs` proxy to REST API |
+| T-10 | ✅ Done | `src/marketplace/installer.rs`: 8-step atomic pipeline (resolve→compat→download→SHA-256→zip-slip→atomic move→validate→confirm); `indicatif` progress bar; 9 unit tests pass |
+| T-11a | ✅ Done | `src/cli/complete.rs`: `generate_completions(shell)` via `clap_complete`; hidden `__complete-slugs` subcommand prints cached registry slugs one-per-line; `Commands::Completions { shell }` + `Commands::CompleteSlugs` added; 4 unit tests pass |
+| T-11b | ✅ Done | `src/plugins/loader.rs`: `validate_plugin_def` reads `plugin.json` from binary parent dir before spawn; reuses `validate_manifest`; enforces kernel compat + known permissions + config-granted permission allowlist; invalid plugin skipped, kernel continues; 5 unit tests pass |
 
 ---
 
@@ -811,9 +814,9 @@ if std::env::var("LOG_FORMAT").as_deref() == Ok("json") {
 | T-07 | Define registry.json and plugin.json schemas | 2.3 | P0 | ✅ 2026-06-30 |
 | T-08 | Registry fetch, cache, and kernel version resolution | 2.3 | P1 | ✅ 2026-06-30 |
 | T-09 | `vyn plugin list` and `vyn plugin search` | 2.3 | P1 | ✅ 2026-06-30 |
-| T-10 | `vyn install <slug-or-id>` (atomic pipeline) | 2.3 | P0 | |
-| T-11 | Shell tab-completion | 2.3 | P2 | |
-| T-11b | Kernel-side plugin.json enforcement at load time | 2.3 | P0 | |
+| T-10 | `vyn install <slug-or-id>` (atomic pipeline) | 2.3 | P0 | ✅ 2026-06-30 |
+| T-11a | Shell tab-completion | 2.3 | P2 | ✅ 2026-06-30 |
+| T-11b | Kernel-side plugin.json enforcement at load time | 2.3 | P0 | ✅ 2026-06-30 |
 | T-12 | Fragmentation (Flag Bit 2) | 2.4 | P2 | |
 | T-13 | CI fuzz integration | 2.4 | P2 | |
 | T-14 | macOS sandbox warning | 2.4 | P2 | |
