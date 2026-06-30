@@ -1,7 +1,6 @@
 use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
 
 use prost::Message;
 use tokio::signal::unix::{signal, SignalKind};
@@ -167,6 +166,7 @@ impl Kernel {
                 .await
         });
 
+        let shutdown_supervisor = Arc::clone(&supervisor);
         let manager = Arc::new(PluginManager::new(supervisor, Arc::clone(&registry)));
         PluginLoader::load_all(&config.plugins, &manager).await;
         let api = ApiServer::new(
@@ -187,7 +187,7 @@ impl Kernel {
         shutdown.await;
         info!("shutdown signal received");
 
-        Self::graceful_shutdown(&registry).await;
+        Self::graceful_shutdown(&registry, &shutdown_supervisor).await;
         Ok(())
     }
 
@@ -219,17 +219,19 @@ impl Kernel {
         }
     }
 
-    async fn graceful_shutdown(registry: &PluginRegistry) {
+    async fn graceful_shutdown(registry: &PluginRegistry, supervisor: &PluginSupervisor) {
         let entries = registry.list();
         if entries.is_empty() {
             return;
         }
 
+        const GRACE_SECONDS: u32 = 5;
+
         let mut payload = Vec::new();
         let env = Envelope {
             payload: Some(envelope::Payload::PluginShutdown(PluginShutdown {
                 reason: "kernel shutdown".to_string(),
-                grace_seconds: 5,
+                grace_seconds: GRACE_SECONDS,
             })),
             ..Default::default()
         };
@@ -254,6 +256,6 @@ impl Kernel {
             let _ = entry.write_tx.send(out_frame(frame.clone())).await;
         }
 
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        supervisor.graceful_shutdown(GRACE_SECONDS).await;
     }
 }

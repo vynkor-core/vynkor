@@ -9,6 +9,9 @@ const HEADER_SIZE: usize = 44;
 /// `flags` bit indicating a 32-byte HMAC tag is appended after the payload.
 pub const FLAG_MAC_PRESENT: u16 = 0x0001;
 
+/// Payload is raw binary (PCM/Opus audio). Router skips Protobuf decode.
+pub const FLAG_RAW_BINARY: u16 = 0x0010;
+
 /// Once a frame has started arriving, the rest of the header + payload must
 /// complete within this window. Bounds slow-loris stalls (a peer that sends a
 /// header declaring a large payload then dribbles or stops). Idle connections

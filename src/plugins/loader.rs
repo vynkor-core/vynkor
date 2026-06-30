@@ -31,6 +31,7 @@ impl PluginLoader {
                 restart_policy: policy,
                 max_restarts: def.max_restarts,
                 sandbox: def.sandbox,
+                grace_seconds: def.grace_seconds,
             };
             match manager.start(config).await {
                 Ok(proc) => info!(id = %def.id, pid = proc.pid, "plugin spawned"),

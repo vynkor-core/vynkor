@@ -2,7 +2,7 @@ use serde::Deserialize;
 use std::path::PathBuf;
 
 /// One plugin entry in the `plugins:` list in config.yaml.
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, Default)]
 pub struct PluginDef {
     pub id: String,
     pub binary: String,
@@ -16,6 +16,9 @@ pub struct PluginDef {
     pub env: Vec<String>,
     #[serde(default)]
     pub sandbox: bool,
+    /// Seconds to wait after SIGTERM before SIGKILL on shutdown. 0 = default (5s).
+    #[serde(default)]
+    pub grace_seconds: u32,
 }
 
 fn default_restart_policy() -> String {

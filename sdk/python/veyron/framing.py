@@ -9,6 +9,7 @@ HEADER_FMT = ">HHI32sI"  # magic, flags, length, target, crc32
 HEADER_SIZE = struct.calcsize(HEADER_FMT)  # 44
 MAX_PAYLOAD = 1_048_576
 FLAG_MAC_PRESENT = 0x0001
+FLAG_RAW_BINARY  = 0x0010  # payload is raw bytes (PCM/Opus); router skips Protobuf decode
 
 
 # ---------------------------------------------------------------------------

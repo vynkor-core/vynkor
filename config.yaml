@@ -31,3 +31,4 @@ allow_no_auth: true
 #     env:                           # extra environment variables
 #       - LOG_LEVEL=info
 #     sandbox: false                 # true: isolate in new PID+net namespace (Linux)
+#     grace_seconds: 10              # optional, default 5 — seconds to wait after SIGTERM before SIGKILL

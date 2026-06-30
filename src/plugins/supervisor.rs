@@ -37,6 +37,8 @@ pub struct PluginConfig {
     pub max_restarts: u32,
     /// Isolate plugin in new PID + network namespaces (Linux only).
     pub sandbox: bool,
+    /// Seconds to wait after SIGTERM before SIGKILL. 0 means use default (5s).
+    pub grace_seconds: u32,
 }
 
 #[allow(dead_code)]
@@ -252,6 +254,28 @@ impl PluginSupervisor {
             .get(plugin_id)
             .map(|e| e.restart_count)
             .or_else(|| self.stopped_counts.get(plugin_id).map(|c| *c))
+    }
+
+    /// Send SIGTERM to all managed plugins, wait `grace_seconds` (default 5s if zero), then
+    /// SIGKILL any that have not exited. Matches the `PluginShutdown.grace_seconds` proto field.
+    pub async fn graceful_shutdown(&self, grace_seconds: u32) {
+        let grace = if grace_seconds > 0 {
+            Duration::from_secs(grace_seconds as u64)
+        } else {
+            Duration::from_secs(5)
+        };
+
+        for entry in self.entries.iter() {
+            let pid = nix::unistd::Pid::from_raw(entry.value().pid as i32);
+            let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGTERM);
+        }
+
+        tokio::time::sleep(grace).await;
+
+        for entry in self.entries.iter() {
+            let pid = nix::unistd::Pid::from_raw(entry.value().pid as i32);
+            let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGKILL);
+        }
     }
 
     pub async fn monitor_loop(self: &Arc<Self>) {
