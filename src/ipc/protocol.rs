@@ -5,13 +5,13 @@ use crate::auth::permissions::{
 use crate::events::bus::EventBus;
 use crate::events::store::EventStore;
 use crate::ipc::connection::{out_frame, Outbound};
-use crate::ipc::framing::{target_as_str, Frame};
+use crate::ipc::framing::{target_as_str, Frame, FLAG_RAW_BINARY};
 use crate::ipc::messages::IncomingMessage;
 use crate::kernel::commands::CommandHandler;
 use crate::plugins::registry::PluginRegistry;
 use crate::proto::veyron::{
     envelope, ActionResponse, ActionStatus, Envelope, ErrorCode, ErrorMessage, Event,
-    KernelCommandAck, PluginRegisterAck, Pong,
+    KernelCommandAck, PermissionType, PluginRegisterAck, Pong,
 };
 use metrics::{counter, histogram};
 use prost::Message;
@@ -446,6 +446,22 @@ impl MessageRouter {
             return true;
         }
 
+        // Audio stream gate (T-06): raw binary frames require PERMISSION_AUDIO_STREAM.
+        if msg.frame.flags & FLAG_RAW_BINARY != 0
+            && check_permission(registry, &sender_id, PermissionType::PermissionAudioStream)
+                .is_err()
+        {
+            warn!(sender = %sender_id, target = %plugin_id, "audio stream permission denied");
+            counter!("ipc_send_denied_total").increment(1);
+            Self::send_error(
+                &msg.write_tx,
+                ErrorCode::ErrPermissionDenied,
+                "PERMISSION_AUDIO_STREAM required for FLAG_RAW_BINARY frames",
+            )
+            .await;
+            return true;
+        }
+
         match registry.get(plugin_id) {
             Some(entry) => {
                 // Bounded send: a slow target must not block the router. Dropping
@@ -489,6 +505,22 @@ impl MessageRouter {
                 &msg.write_tx,
                 ErrorCode::ErrUnknown,
                 "PERMISSION_IPC_SEND required",
+            )
+            .await;
+            return true;
+        }
+
+        // Audio stream gate (T-06): raw binary broadcast requires PERMISSION_AUDIO_STREAM.
+        if msg.frame.flags & FLAG_RAW_BINARY != 0
+            && check_permission(registry, &sender_id, PermissionType::PermissionAudioStream)
+                .is_err()
+        {
+            warn!(sender = %sender_id, "audio stream broadcast denied");
+            counter!("ipc_send_denied_total").increment(1);
+            Self::send_error(
+                &msg.write_tx,
+                ErrorCode::ErrPermissionDenied,
+                "PERMISSION_AUDIO_STREAM required for FLAG_RAW_BINARY frames",
             )
             .await;
             return true;

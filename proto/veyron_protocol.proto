@@ -97,6 +97,7 @@ enum PermissionType {
   reserved "PERMISSION_AI";
   PERMISSION_BROWSER    = 9;  // управление браузером
   PERMISSION_IPC_SEND   = 10; // отправка сообщений другим плагинам (peer-to-peer)
+  PERMISSION_AUDIO_STREAM = 11; // send/receive raw audio frames via FLAG_RAW_BINARY
 }
 
 
@@ -228,4 +229,5 @@ enum ErrorCode {
   ERR_DESERIALIZATION   = 5;  // не удалось разобрать сообщение
   ERR_MAC_MISSING       = 6;  // registered conn sent an un-MAC'd frame while secured
   ERR_MAC_INVALID       = 7;  // frame MAC verification failed (tampering)
+  ERR_PERMISSION_DENIED = 8;  // plugin lacks required permission for this operation
 }

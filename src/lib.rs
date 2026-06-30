@@ -1,4 +1,5 @@
 pub mod api;
+pub mod marketplace;
 pub mod auth;
 pub mod events;
 pub mod ipc;

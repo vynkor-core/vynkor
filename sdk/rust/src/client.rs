@@ -127,6 +127,39 @@ impl VeyronClient {
         }
     }
 
+    /// Send a raw payload with explicit extra flags ORed into the frame header.
+    /// Used by tests that need to set FLAG_RAW_BINARY without MAC involvement.
+    pub async fn send_raw_with_flags(
+        &mut self,
+        target: &str,
+        extra_flags: u16,
+        payload: Vec<u8>,
+    ) -> Result<(), VeyronError> {
+        let crc = crc32fast::hash(&payload);
+        let mut t = [0u8; 32];
+        let b = target.as_bytes();
+        t[..b.len().min(32)].copy_from_slice(&b[..b.len().min(32)]);
+        let base_flags = if self.session_key.is_some() {
+            FLAG_MAC_PRESENT
+        } else {
+            0
+        };
+        let mut frame = Frame {
+            magic: 0x5652,
+            flags: base_flags | extra_flags,
+            length: payload.len() as u32,
+            target: t,
+            crc32: crc,
+            payload,
+            mac: None,
+        };
+        if let Some(key) = &self.session_key {
+            let header = serialize_header(&frame);
+            frame.mac = Some(compute_tag(key, &header, &frame.payload));
+        }
+        write_frame_raw(&mut self.write, &frame).await
+    }
+
     pub async fn recv(&mut self) -> Result<Envelope, VeyronError> {
         let frame = read_frame(&mut self.read).await?;
         if let Some(key) = &self.session_key {

@@ -1,0 +1,28 @@
+[
+  {
+    "id": "001",
+    "slug": "stt-whisper",
+    "name": "Whisper STT",
+    "description": "Speech-to-text via OpenAI Whisper. Supports 16kHz mono PCM input.",
+    "version": "1.2.0",
+    "permissions": ["audio_stream", "network"],
+    "archive_url": "https://github.com/veyron-core/veyron-plugins/releases/download/stt-whisper-1.2.0/stt-whisper-1.2.0.zip",
+    "source_url":  "https://github.com/veyron-core/veyron-plugins/releases/download/stt-whisper-1.2.0/stt-whisper-1.2.0-src.zip",
+    "sha256": "a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4",
+    "min_kernel_version": "0.3.0",
+    "max_kernel_version": "1.0.0"
+  },
+  {
+    "id": "002",
+    "slug": "tts-kokoro",
+    "name": "Kokoro TTS",
+    "description": "Text-to-speech via Kokoro. Streams PCM audio to audio_stream-capable plugins.",
+    "version": "0.9.1",
+    "permissions": ["audio_stream"],
+    "archive_url": "https://github.com/veyron-core/veyron-plugins/releases/download/tts-kokoro-0.9.1/tts-kokoro-0.9.1.zip",
+    "source_url":  "https://github.com/veyron-core/veyron-plugins/releases/download/tts-kokoro-0.9.1/tts-kokoro-0.9.1-src.zip",
+    "sha256": "b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5",
+    "min_kernel_version": "0.2.0",
+    "max_kernel_version": "*"
+  }
+]

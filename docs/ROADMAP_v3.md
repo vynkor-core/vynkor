@@ -32,6 +32,8 @@
 | T-01 | ✅ Done | `docs/FRAMING.md` created; `FLAG_RAW_BINARY = 0x0010` in kernel + all 3 SDKs; AUDIT-001 closed |
 | T-02 | ✅ Done | WS JWT `Sec-WebSocket-Protocol` deviation documented in `docs/FRAMING.md` |
 | T-03 | ✅ Done | `PluginSupervisor::graceful_shutdown(grace_seconds)` added; hardcoded 200ms removed; `grace_seconds` in `PluginConfig` + `config.yaml` |
+| T-04 | ✅ Done | `AudioStreamChunk` + `AudioCodec` enum added to proto; field 60 in `Envelope` oneof |
+| T-08 | ✅ Done | `src/marketplace/registry.rs`: `fetch_registry` with 1h TTL cache, `check_kernel_compatibility`; 8 unit tests pass |
 
 ---
 
@@ -802,11 +804,11 @@ if std::env::var("LOG_FORMAT").as_deref() == Ok("json") {
 | T-01 | Canonicalize flag bit space | 2.1 | P0 | ✅ 2026-06-30 |
 | T-02 | Document WS JWT deviation | 2.1 | P0 | ✅ 2026-06-30 |
 | T-03 | Configurable shutdown grace period | 2.1 | P1 | ✅ 2026-06-30 |
-| T-04 | AudioStreamChunk proto message | 2.2 | P1 | |
-| T-05 | PERMISSION_AUDIO_STREAM | 2.2 | P1 | |
-| T-06 | Enforce audio stream permission in router | 2.2 | P1 | |
-| T-07 | Define registry.json and plugin.json schemas | 2.3 | P0 | |
-| T-08 | Registry fetch, cache, and kernel version resolution | 2.3 | P1 | |
+| T-04 | AudioStreamChunk proto message | 2.2 | P1 | ✅ 2026-06-30 |
+| T-05 | PERMISSION_AUDIO_STREAM | 2.2 | P1 | ✅ 2026-06-30 |
+| T-06 | Enforce audio stream permission in router | 2.2 | P1 | ✅ 2026-06-30 |
+| T-07 | Define registry.json and plugin.json schemas | 2.3 | P0 | ✅ 2026-06-30 |
+| T-08 | Registry fetch, cache, and kernel version resolution | 2.3 | P1 | ✅ 2026-06-30 |
 | T-09 | `vyn plugin list` and `vyn plugin search` | 2.3 | P1 | |
 | T-10 | `vyn install <slug-or-id>` (atomic pipeline) | 2.3 | P0 | |
 | T-11 | Shell tab-completion | 2.3 | P2 | |

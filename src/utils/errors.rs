@@ -16,6 +16,9 @@ pub enum VeyronError {
     PermissionDenied(String),
     Timeout,
     Internal(String),
+    Incompatible(String),
+    NetworkError(String),
+    CacheError(String),
 }
 
 impl fmt::Display for VeyronError {
@@ -37,6 +40,9 @@ impl fmt::Display for VeyronError {
             VeyronError::PermissionDenied(perm) => write!(f, "permission denied: {}", perm),
             VeyronError::Timeout => write!(f, "operation timed out"),
             VeyronError::Internal(msg) => write!(f, "internal error: {}", msg),
+            VeyronError::Incompatible(msg) => write!(f, "incompatible: {}", msg),
+            VeyronError::NetworkError(msg) => write!(f, "network error: {}", msg),
+            VeyronError::CacheError(msg) => write!(f, "cache error: {}", msg),
         }
     }
 }

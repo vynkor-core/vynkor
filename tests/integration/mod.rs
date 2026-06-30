@@ -1,4 +1,5 @@
 mod helpers;
+mod test_audio_stream_permission;
 mod test_autoload;
 mod test_disconnect;
 mod test_event_store_integration;

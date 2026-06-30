@@ -39,7 +39,8 @@ Thumbs.db
 .agents/
 .claude/
 .claudeignore
-
+.skills/
+skill/
 # env
 .env
 .env.*
