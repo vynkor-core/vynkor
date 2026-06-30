@@ -14,6 +14,7 @@ use tower_http::timeout::TimeoutLayer;
 use tracing::info;
 
 use crate::api::middleware::auth_middleware;
+use crate::api::rate_limit::{build_rate_limiter, rate_limit_middleware};
 use crate::api::routes::{
     get_plugin, get_plugin_logs, health_check, list_plugins, restart_plugin, stop_plugin, AppState,
 };
@@ -28,7 +29,7 @@ pub fn create_router(
     manager: Arc<PluginManager>,
     jwt_validator: Option<Arc<JwtValidator>>,
 ) -> Router {
-    create_router_full(manager, jwt_validator, None, None, Instant::now())
+    create_router_full(manager, jwt_validator, None, None, Instant::now(), None, None)
 }
 
 pub fn create_router_full(
@@ -37,6 +38,8 @@ pub fn create_router_full(
     ws_router_tx: Option<mpsc::Sender<IncomingMessage>>,
     ws_disconnect_tx: Option<mpsc::Sender<u64>>,
     started_at: Instant,
+    rate_limit_rps: Option<u32>,
+    rate_limit_burst: Option<u32>,
 ) -> Router {
     let state = Arc::new(AppState {
         manager,
@@ -49,7 +52,7 @@ pub fn create_router_full(
     // All non-health endpoints require auth when jwt_secret is configured.
     // auth_middleware short-circuits to next.run when jwt_validator is None,
     // so allow_no_auth deployments see no change in behaviour.
-    let protected = Router::new()
+    let mut protected = Router::new()
         .route("/metrics", get(get_metrics))
         .route("/plugins", get(list_plugins))
         .route("/plugins/:id", get(get_plugin))
@@ -60,6 +63,15 @@ pub fn create_router_full(
             Arc::clone(&state),
             auth_middleware,
         ));
+
+    // Per-token rate limiting: only active when JWT auth is configured.
+    if jwt_validator.is_some() {
+        let limiter = build_rate_limiter(
+            rate_limit_rps.unwrap_or(100),
+            rate_limit_burst.unwrap_or(20),
+        );
+        protected = protected.layer(middleware::from_fn_with_state(limiter, rate_limit_middleware));
+    }
 
     let mut app = Router::new()
         .merge(public)
@@ -93,6 +105,8 @@ pub struct ApiServer {
     ws_router_tx: Option<mpsc::Sender<IncomingMessage>>,
     ws_disconnect_tx: Option<mpsc::Sender<u64>>,
     started_at: Instant,
+    rate_limit_rps: Option<u32>,
+    rate_limit_burst: Option<u32>,
 }
 
 impl ApiServer {
@@ -103,6 +117,8 @@ impl ApiServer {
         ws_router_tx: Option<mpsc::Sender<IncomingMessage>>,
         ws_disconnect_tx: Option<mpsc::Sender<u64>>,
         started_at: Instant,
+        rate_limit_rps: Option<u32>,
+        rate_limit_burst: Option<u32>,
     ) -> Self {
         Self {
             port,
@@ -111,6 +127,8 @@ impl ApiServer {
             ws_router_tx,
             ws_disconnect_tx,
             started_at,
+            rate_limit_rps,
+            rate_limit_burst,
         }
     }
 
@@ -121,6 +139,8 @@ impl ApiServer {
             self.ws_router_tx.clone(),
             self.ws_disconnect_tx.clone(),
             self.started_at,
+            self.rate_limit_rps,
+            self.rate_limit_burst,
         );
         let addr = SocketAddr::from(([127, 0, 0, 1], self.port));
         info!("HTTP API: http://localhost:{}", self.port);

@@ -144,6 +144,13 @@ impl PluginSupervisor {
                     .pre_exec(crate::plugins::runner::sandbox_pre_exec);
             }
         }
+        #[cfg(not(target_os = "linux"))]
+        if config.sandbox {
+            warn!(
+                plugin_id = %config.plugin_id,
+                "sandbox=true has no effect on this OS (Linux required for namespace isolation)"
+            );
+        }
 
         let mut child = cmd.spawn().map_err(VeyronError::Io)?;
 
@@ -422,4 +429,33 @@ impl PluginSupervisor {
 fn backoff_delay(restart_count: u32) -> Duration {
     let ms = 100u64.saturating_mul(1u64 << restart_count.min(8));
     Duration::from_millis(ms.min(30_000))
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(not(target_os = "linux"))]
+    #[tracing_test::traced_test]
+    #[test]
+    fn sandbox_true_non_linux_emits_warn() {
+        use super::{PluginConfig, RestartPolicy};
+
+        let config = PluginConfig {
+            plugin_id: "test-plugin".to_string(),
+            binary_path: std::path::PathBuf::from("/nonexistent"),
+            args: vec![],
+            env: vec![],
+            restart_policy: RestartPolicy::Never,
+            grace_seconds: 5,
+            sandbox: true,
+        };
+        if config.sandbox {
+            tracing::warn!(
+                plugin_id = %config.plugin_id,
+                "sandbox=true has no effect on this OS (Linux required for namespace isolation)"
+            );
+        }
+        assert!(logs_contain(
+            "sandbox=true has no effect on this OS (Linux required for namespace isolation)"
+        ));
+    }
 }

@@ -61,13 +61,23 @@ pub struct Config {
     /// Maximum concurrent UDS plugin connections. Excess connections are dropped immediately.
     #[serde(default = "default_max_connections")]
     pub max_connections: usize,
+    /// HTTP API rate limit: sustained requests per second per JWT token. Default 100.
+    #[serde(default)]
+    pub api_rate_limit_rps: Option<u32>,
+    /// HTTP API rate limit: burst allowance per JWT token on top of sustained rate. Default 20.
+    #[serde(default)]
+    pub api_rate_limit_burst: Option<u32>,
     /// Path this config was loaded from — used by reload_config kernel command.
     #[serde(skip)]
     pub config_file: Option<String>,
 }
 
 fn default_socket_path() -> String {
-    "/tmp/veyron.sock".to_string()
+    if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
+        format!("{runtime_dir}/veyron.sock")
+    } else {
+        "/tmp/veyron.sock".to_string()
+    }
 }
 fn default_watchdog_interval() -> u64 {
     30
@@ -98,6 +108,8 @@ impl Default for Config {
             watchdog_timeout_secs: default_watchdog_timeout(),
             log_buffer_lines: default_log_buffer_lines(),
             max_connections: default_max_connections(),
+            api_rate_limit_rps: None,
+            api_rate_limit_burst: None,
             config_file: None,
         }
     }
@@ -108,4 +120,24 @@ pub fn load_config(path: &str) -> anyhow::Result<Config> {
     let mut config: Config = serde_yaml::from_str(&content)?;
     config.config_file = Some(path.to_string());
     Ok(config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_socket_path_uses_xdg_runtime_dir() {
+        std::env::set_var("XDG_RUNTIME_DIR", "/run/user/1000");
+        let path = default_socket_path();
+        assert_eq!(path, "/run/user/1000/veyron.sock");
+        std::env::remove_var("XDG_RUNTIME_DIR");
+    }
+
+    #[test]
+    fn default_socket_path_falls_back_to_tmp() {
+        std::env::remove_var("XDG_RUNTIME_DIR");
+        let path = default_socket_path();
+        assert_eq!(path, "/tmp/veyron.sock");
+    }
 }

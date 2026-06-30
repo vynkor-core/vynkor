@@ -25,6 +25,18 @@
 | Marketplace | Not implemented |
 | Audio streaming | Not implemented |
 
+## Phase 2.4 progress — 2026-06-30
+
+| Task | Status | Notes |
+|------|--------|-------|
+| T-12 | ✅ Done | `FLAG_FRAGMENTED = 0x0004`; `ReassemblyBuf` in `connection.rs`; 30s timeout pruning; 2 unit tests pass |
+| T-13 | ✅ Done | `fuzz_proto_envelope` + `fuzz_target_routing` added to `fuzz/`; `fuzz.yml` triggers on `pull_request`; 5 targets in matrix |
+| T-14 | ✅ Done | `#[cfg(not(target_os = "linux"))]` warn in `supervisor.rs::spawn_internal()`; `tracing-test` dev dep; non-Linux unit test asserts warn emitted |
+| T-15 | ✅ Done | `governor` crate; `JwtSubKeyExtractor` middleware keys by JWT `sub` (insecure decode); 429 + `Retry-After: 1` on limit; `api_rate_limit_rps`/`api_rate_limit_burst` in config; inactive when `allow_no_auth` |
+| T-16 | ✅ Done | `default_socket_path()` prefers `$XDG_RUNTIME_DIR/veyron.sock`; fallback `/tmp/veyron.sock`; 2 unit tests pass |
+
+---
+
 ## Phase 2.1 progress — 2026-06-30
 
 | Task | Status | Notes |
@@ -817,11 +829,11 @@ if std::env::var("LOG_FORMAT").as_deref() == Ok("json") {
 | T-10 | `vyn install <slug-or-id>` (atomic pipeline) | 2.3 | P0 | ✅ 2026-06-30 |
 | T-11a | Shell tab-completion | 2.3 | P2 | ✅ 2026-06-30 |
 | T-11b | Kernel-side plugin.json enforcement at load time | 2.3 | P0 | ✅ 2026-06-30 |
-| T-12 | Fragmentation (Flag Bit 2) | 2.4 | P2 | |
-| T-13 | CI fuzz integration | 2.4 | P2 | |
-| T-14 | macOS sandbox warning | 2.4 | P2 | |
-| T-15 | Per-token rate limiting on HTTP API | 2.4 | P2 | |
-| T-16 | Socket path hardening | 2.4 | P3 | |
+| T-12 | Fragmentation (Flag Bit 2) | 2.4 | P2 | ✅ 2026-06-30 |
+| T-13 | CI fuzz integration | 2.4 | P2 | ✅ 2026-06-30 |
+| T-14 | macOS sandbox warning | 2.4 | P2 | ✅ 2026-06-30 |
+| T-15 | Per-token rate limiting on HTTP API | 2.4 | P2 | ✅ 2026-06-30 |
+| T-16 | Socket path hardening | 2.4 | P3 | ✅ 2026-06-30 |
 | T-17 | Structured JSON logging | 2.4 | P3 | |
 
 ---

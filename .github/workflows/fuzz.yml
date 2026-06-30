@@ -1,6 +1,7 @@
 name: Fuzz
 
 on:
+  pull_request:
   schedule:
     - cron: '0 3 * * 1'  # Monday 03:00 UTC weekly
   workflow_dispatch:
@@ -24,6 +25,8 @@ jobs:
           - fuzz_frame_parse
           - fuzz_envelope_decode
           - fuzz_router_pipeline
+          - fuzz_proto_envelope
+          - fuzz_target_routing
 
     steps:
       - uses: actions/checkout@v4

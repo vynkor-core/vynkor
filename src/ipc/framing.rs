@@ -12,6 +12,46 @@ pub const FLAG_MAC_PRESENT: u16 = 0x0001;
 /// Payload is raw binary (PCM/Opus audio). Router skips Protobuf decode.
 pub const FLAG_RAW_BINARY: u16 = 0x0010;
 
+/// Frame is one fragment of a larger message. The first [`FRAG_HEADER_SIZE`]
+/// bytes of the payload contain fragment metadata; the remainder is the chunk.
+pub const FLAG_FRAGMENTED: u16 = 0x0004;
+
+/// Byte length of the fragment metadata header embedded at the start of a
+/// fragmented frame's payload when [`FLAG_FRAGMENTED`] is set.
+///
+/// Layout (all big-endian):
+///   [fragment_id: u16][sequence: u16][total: u16][stream_id: u32]
+pub const FRAG_HEADER_SIZE: usize = 10;
+
+/// Parsed representation of the 10-byte fragment metadata header.
+#[derive(Debug, Clone, Copy)]
+pub struct FragmentHeader {
+    /// Opaque identifier for the fragmented message within a stream.
+    /// Parsed from the wire; available for callers but not used by the kernel.
+    #[allow(dead_code)]
+    pub fragment_id: u16,
+    /// Zero-based position of this fragment in the sequence.
+    pub sequence: u16,
+    /// Total number of fragments that make up the original message.
+    pub total: u16,
+    /// Stream identifier used as the reassembly buffer key.
+    pub stream_id: u32,
+}
+
+/// Parses the [`FragmentHeader`] from the start of a frame payload.
+/// Returns `None` if the payload is shorter than [`FRAG_HEADER_SIZE`].
+pub fn parse_frag_header(payload: &[u8]) -> Option<FragmentHeader> {
+    if payload.len() < FRAG_HEADER_SIZE {
+        return None;
+    }
+    Some(FragmentHeader {
+        fragment_id: u16::from_be_bytes([payload[0], payload[1]]),
+        sequence: u16::from_be_bytes([payload[2], payload[3]]),
+        total: u16::from_be_bytes([payload[4], payload[5]]),
+        stream_id: u32::from_be_bytes([payload[6], payload[7], payload[8], payload[9]]),
+    })
+}
+
 /// Once a frame has started arriving, the rest of the header + payload must
 /// complete within this window. Bounds slow-loris stalls (a peer that sends a
 /// header declaring a large payload then dribbles or stops). Idle connections

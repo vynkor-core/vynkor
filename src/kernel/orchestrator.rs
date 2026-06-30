@@ -176,6 +176,8 @@ impl Kernel {
             Some(ws_router_tx),
             Some(ws_disconnect_tx),
             kernel_start,
+            config.api_rate_limit_rps,
+            config.api_rate_limit_burst,
         );
         tokio::spawn(async move {
             if let Err(e) = api.run().await {

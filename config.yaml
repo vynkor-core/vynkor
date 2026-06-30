@@ -16,6 +16,10 @@ allow_no_auth: true
 # Connections beyond this limit are rejected immediately (peer sees EOF).
 # max_connections: 1024
 
+# Per-token HTTP API rate limiting (only active when jwt_secret is set).
+# api_rate_limit_rps: 100    # sustained requests/second per JWT token
+# api_rate_limit_burst: 20   # burst allowance on top of sustained rate; excess → 429
+
 # Plugins to auto-spawn on kernel start. Each entry maps to a supervised
 # OS process. The process must connect back to `socket_path` and complete
 # the PluginRegister handshake.
@@ -27,7 +31,7 @@ allow_no_auth: true
 #     max_restarts: 5                # max auto-restarts (default: 5)
 #     args:                          # argv[1..] passed to the binary
 #       - --socket
-#       - /tmp/veyron.sock
+#       - /run/user/1000/veyron.sock  # use XDG_RUNTIME_DIR/veyron.sock (fallback: /tmp/veyron.sock)
 #     env:                           # extra environment variables
 #       - LOG_LEVEL=info
 #     sandbox: false                 # true: isolate in new PID+net namespace (Linux)
