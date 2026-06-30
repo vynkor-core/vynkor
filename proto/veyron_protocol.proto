@@ -30,6 +30,8 @@ message Envelope {
     Subscribe         subscribe          = 42;
     Unsubscribe       unsubscribe        = 43;
 
+    AudioStreamChunk  audio_stream_chunk = 60;
+
     Ping              ping               = 90;
     Pong              pong               = 91;
     ErrorMessage      error              = 92;
@@ -175,6 +177,26 @@ message Subscribe {
 // Плагин → Ядро: отписаться
 message Unsubscribe {
   repeated string event_types = 1;
+}
+
+
+// ═══════════════════════════════════════════
+// АУДИО СТРИМИНГ
+// ═══════════════════════════════════════════
+
+enum AudioCodec {
+  AUDIO_CODEC_UNSPECIFIED = 0;
+  AUDIO_CODEC_PCM_S16LE  = 1;  // raw PCM, 16-bit signed LE — use for local UDS
+  AUDIO_CODEC_OPUS       = 2;  // Opus — use for WebSocket (bandwidth)
+}
+
+message AudioStreamChunk {
+  uint32     stream_id      = 1;  // identifies stream session; plugins assign this
+  AudioCodec codec          = 2;
+  uint32     sample_rate    = 3;  // Hz: 16000, 44100, 48000
+  uint32     channels       = 4;  // 1 = mono, 2 = stereo
+  bytes      data           = 5;  // raw PCM_S16LE or Opus packet
+  bool       end_of_stream  = 6;  // sender signals stream closed
 }
 
 
