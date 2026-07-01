@@ -44,7 +44,7 @@ sha2 = "0.10"
 hkdf = "0.12"
 rand = "0.8"
 
-nix = { version = "0.28", features = ["signal", "process", "fs", "sched", "resource"] }
+nix = { version = "0.28", features = ["signal", "process", "fs", "sched", "resource", "user"] }
 
 clap = { version = "4.6", features = ["derive"] }
 clap_complete = "4"

@@ -77,9 +77,8 @@ pub async fn install(entries: &[PluginEntry], target: &str) -> Result<(), Veyron
     let kernel_ver = Version::parse(env!("CARGO_PKG_VERSION"))
         .map_err(|e| VeyronError::Internal(format!("parse kernel version: {e}")))?;
 
-    check_kernel_compatibility(entry, &kernel_ver).map_err(|e| {
-        VeyronError::Incompatible(format!("{e}. Upgrade Veyron first."))
-    })?;
+    check_kernel_compatibility(entry, &kernel_ver)
+        .map_err(|e| VeyronError::Incompatible(format!("{e}. Upgrade Veyron first.")))?;
 
     let tmp_dir = tmp_install_dir(&entry.slug);
     let _ = fs::remove_dir_all(&tmp_dir);
@@ -288,9 +287,8 @@ pub fn validate_manifest(path: &Path, kernel_ver: &Version) -> Result<PluginMani
         VeyronError::Internal("Invalid plugin.json: file not found or unreadable.".into())
     })?;
 
-    let manifest: PluginManifest = serde_json::from_str(&data).map_err(|e| {
-        VeyronError::Internal(format!("Invalid plugin.json: {e}"))
-    })?;
+    let manifest: PluginManifest = serde_json::from_str(&data)
+        .map_err(|e| VeyronError::Internal(format!("Invalid plugin.json: {e}")))?;
 
     let compat_entry = PluginEntry {
         id: String::new(),

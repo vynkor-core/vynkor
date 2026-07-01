@@ -206,7 +206,6 @@ fn manifest_valid_ok() {
 fn manifest_not_found_errors() {
     let tmp = tempdir().unwrap();
     let kernel = Version::parse("0.1.0").unwrap();
-    let err =
-        validate_manifest(&tmp.path().join("plugin.json"), &kernel).unwrap_err();
+    let err = validate_manifest(&tmp.path().join("plugin.json"), &kernel).unwrap_err();
     assert!(err.to_string().contains("Invalid plugin.json"));
 }

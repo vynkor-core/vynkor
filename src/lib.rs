@@ -1,10 +1,10 @@
 pub mod api;
-pub mod cli;
-pub mod marketplace;
 pub mod auth;
+pub mod cli;
 pub mod events;
 pub mod ipc;
 pub mod kernel;
+pub mod marketplace;
 pub mod metrics;
 pub mod plugins;
 pub mod proto;

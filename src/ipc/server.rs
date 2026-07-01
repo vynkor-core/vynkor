@@ -2,7 +2,7 @@ use crate::ipc::connection::ConnectionHandler;
 use crate::ipc::messages::IncomingMessage;
 use crate::utils::errors::VeyronError;
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -26,7 +26,22 @@ impl UdsServer {
         tx: tokio::sync::mpsc::Sender<IncomingMessage>,
         max_connections: usize,
     ) -> Result<(JoinHandle<()>, tokio::sync::mpsc::Receiver<u64>), VeyronError> {
-        let _ = std::fs::remove_file(socket_path);
+        // Never blindly unlink whatever sits at socket_path (BUG-006) — only
+        // remove it if it's actually a socket (i.e. a stale one we or a prior
+        // instance created). A pre-existing regular file/symlink there is
+        // refused rather than deleted.
+        match std::fs::symlink_metadata(socket_path) {
+            Ok(meta) if meta.file_type().is_socket() => {
+                let _ = std::fs::remove_file(socket_path);
+            }
+            Ok(_) => {
+                return Err(VeyronError::Internal(format!(
+                    "refusing to bind UDS socket: {} exists and is not a socket",
+                    socket_path.display()
+                )));
+            }
+            Err(_) => {}
+        }
 
         // Set restrictive umask before bind so the socket is created with 0o600
         // permissions atomically, closing the TOCTOU window between bind() and
@@ -37,8 +52,7 @@ impl UdsServer {
         #[cfg(unix)]
         let bind_result = {
             let _guard = BIND_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-            let old_umask =
-                nix::sys::stat::umask(nix::sys::stat::Mode::from_bits_truncate(0o177));
+            let old_umask = nix::sys::stat::umask(nix::sys::stat::Mode::from_bits_truncate(0o177));
             let r = UnixListener::bind(socket_path);
             nix::sys::stat::umask(old_umask);
             r

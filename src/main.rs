@@ -12,8 +12,8 @@ mod utils;
 
 use anyhow::Result;
 use clap::Parser;
-use cli::{Cli, Commands};
 use cli::{complete, plugin};
+use cli::{Cli, Commands};
 use std::fs;
 use std::process::Command;
 use tracing::{info, warn};

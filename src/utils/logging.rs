@@ -32,14 +32,25 @@ pub fn init(level: &str) {
             let otel = tracing_opentelemetry::layer().with_tracer(tracer);
             Registry::default()
                 .with(reloadable)
-                .with(fmt::layer().json().with_target(true).with_file(true).with_line_number(true))
+                .with(
+                    fmt::layer()
+                        .json()
+                        .with_target(true)
+                        .with_file(true)
+                        .with_line_number(true),
+                )
                 .with(otel)
                 .init();
         } else {
             let otel = tracing_opentelemetry::layer().with_tracer(tracer);
             Registry::default()
                 .with(reloadable)
-                .with(fmt::layer().with_target(true).with_file(true).with_line_number(true))
+                .with(
+                    fmt::layer()
+                        .with_target(true)
+                        .with_file(true)
+                        .with_line_number(true),
+                )
                 .with(otel)
                 .init();
         }
@@ -50,12 +61,23 @@ pub fn init(level: &str) {
     if json {
         Registry::default()
             .with(reloadable)
-            .with(fmt::layer().json().with_target(true).with_file(true).with_line_number(true))
+            .with(
+                fmt::layer()
+                    .json()
+                    .with_target(true)
+                    .with_file(true)
+                    .with_line_number(true),
+            )
             .init();
     } else {
         Registry::default()
             .with(reloadable)
-            .with(fmt::layer().with_target(true).with_file(true).with_line_number(true))
+            .with(
+                fmt::layer()
+                    .with_target(true)
+                    .with_file(true)
+                    .with_line_number(true),
+            )
             .init();
     }
 }

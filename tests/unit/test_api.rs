@@ -1,9 +1,10 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::mpsc;
 use tower::ServiceExt;
-use veyron::api::server::create_router;
+use veyron::api::server::{create_router, create_router_full};
 use veyron::auth::jwt::{create_test_token, JwtValidator};
 use veyron::plugins::manager::PluginManager;
 use veyron::plugins::registry::PluginRegistry;
@@ -366,6 +367,81 @@ async fn get_plugins_requires_auth_when_jwt_set() {
     .await
     .unwrap();
     assert_eq!(res2.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn rate_limit_applies_only_to_verified_sub_not_forged_tokens() {
+    // BUG-004 regression: rate limiting must run after JWT signature
+    // verification and key on the verified sub, not a self-decoded field an
+    // attacker can rotate to dodge the limit or forge to burn someone else's
+    // quota.
+    const SECRET: &[u8] = b"test-secret";
+    let validator = Arc::new(JwtValidator::new(SECRET));
+    let app = create_router_full(
+        make_manager(make_registry(), make_supervisor()),
+        Some(validator),
+        None,
+        None,
+        Instant::now(),
+        Some(1), // 1 rps
+        Some(1), // burst of 1
+    );
+
+    // Forged tokens signed with the wrong secret, rotating `sub` every request,
+    // must never bypass auth to reach the rate limiter — always 401.
+    for sub in ["victim-a", "victim-b", "victim-c", "victim-d", "victim-e"] {
+        let forged = create_test_token(sub, vec![], b"wrong-secret", 3600);
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/plugins")
+                    .header("Authorization", format!("Bearer {}", forged))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            res.status(),
+            StatusCode::UNAUTHORIZED,
+            "forged token must never bypass auth regardless of sub"
+        );
+    }
+}
+
+#[tokio::test]
+async fn rate_limit_enforced_per_verified_sub() {
+    const SECRET: &[u8] = b"test-secret";
+    let validator = Arc::new(JwtValidator::new(SECRET));
+    let app = create_router_full(
+        make_manager(make_registry(), make_supervisor()),
+        Some(validator),
+        None,
+        None,
+        Instant::now(),
+        Some(1), // 1 rps
+        Some(1), // burst of 1
+    );
+
+    let token = create_test_token("admin", vec![], SECRET, 3600);
+    let request = || {
+        Request::builder()
+            .uri("/plugins")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap()
+    };
+
+    let res1 = app.clone().oneshot(request()).await.unwrap();
+    assert_eq!(res1.status(), StatusCode::OK);
+
+    let res2 = app.oneshot(request()).await.unwrap();
+    assert_eq!(
+        res2.status(),
+        StatusCode::TOO_MANY_REQUESTS,
+        "second request within the same window must be throttled for a verified sub"
+    );
 }
 
 #[tokio::test]

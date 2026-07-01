@@ -162,9 +162,9 @@ fn print_table(entries: &[PluginEntry]) {
 
 async fn api_get(port: u16, path: &str) -> anyhow::Result<String> {
     let url = format!("http://127.0.0.1:{port}{path}");
-    let resp = reqwest::get(&url).await.map_err(|_| {
-        anyhow::anyhow!("kernel not running — start it with `vyn start`")
-    })?;
+    let resp = reqwest::get(&url)
+        .await
+        .map_err(|_| anyhow::anyhow!("kernel not running — start it with `vyn start`"))?;
     if !resp.status().is_success() {
         anyhow::bail!("API error: HTTP {}", resp.status());
     }
@@ -174,12 +174,13 @@ async fn api_get(port: u16, path: &str) -> anyhow::Result<String> {
 async fn api_post(port: u16, path: &str) -> anyhow::Result<()> {
     let url = format!("http://127.0.0.1:{port}{path}");
     let client = reqwest::Client::new();
-    let resp = client.post(&url).send().await.map_err(|_| {
-        anyhow::anyhow!("kernel not running — start it with `vyn start`")
-    })?;
+    let resp = client
+        .post(&url)
+        .send()
+        .await
+        .map_err(|_| anyhow::anyhow!("kernel not running — start it with `vyn start`"))?;
     if !resp.status().is_success() {
         anyhow::bail!("API error: HTTP {}", resp.status());
     }
     Ok(())
 }
-

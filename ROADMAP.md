@@ -1,7 +1,7 @@
 # Veyron ROADMAP — Phase 3
 
-**Baseline:** 2026-07-01 · Kernel `0.1.0` · Audit score 93/100  
-**Branch:** `develop` · Commit `bead6b5`  
+**Baseline:** 2026-07-01 · Kernel `0.1.0` · Audit score ~72/100 (regressed by Phase 3 compression)  
+**Branch:** `develop` · Commit `234183a`  
 **Phase 2 archive:** `docs/archive/` (all Phase 1–2 tasks complete)
 
 ---
@@ -21,11 +21,11 @@
 | Metric | Value |
 |--------|-------|
 | Kernel version | 0.1.0 |
-| Audit score | 93/100 |
-| Open VULNs | 0 (VULN-001–022 all resolved) |
-| Open AUDIT items | AUDIT-006 (6 failing tests), AUDIT-007 (no live registry), AUDIT-014 (FLAG_COMPRESSED stub) |
-| Tests | 147 passing · 6 failing |
-| SDKs | Rust ✅ · C++ ✅ · Python ✅ (all with MAC) |
+| Audit score | pending re-audit (all BUG-001..006 fixed; was 72/100) |
+| Open BUGs | none — BUG-001..006 all fixed, regression tests added |
+| Open AUDIT items | AUDIT-007 (no live registry) |
+| Tests | `cargo test --all --all-features`: 259 passing, 0 failing |
+| SDKs | Rust ✅ · C++ ✅ · Python ✅ (MAC broken for ≥64 KiB frames, BUG-001) |
 
 ---
 
@@ -372,10 +372,105 @@ Add integration tests for each SDK:
 
 ---
 
+## Phase 4 — Audit Regression Fixes
+
+**Goal:** Close every bug in `AUDIT.md` (BUG-001..006). Phase 3 compression shipped two Critical protocol regressions; nothing else ships until they are fixed.
+
+**Done-when:** all six bugs fixed, regression tests added, `cargo test --all --all-features` exits 0, audit score restored to ≥ 90.
+
+---
+
+### T-10 — Normalize compressed-frame invariant + MAC coverage (BUG-001, BUG-002)
+
+**Priority:** P0 (Critical) · **Files:** `src/ipc/framing.rs`, `src/ipc/connection.rs`, `src/api/websocket.rs`, `tests/unit/test_framing.rs`
+
+**Problem:** After `read_frame_body` decompresses a payload it leaves `FLAG_COMPRESSED` set and `length` at the compressed size (`framing.rs:230-235`). Two failures follow:
+
+- **BUG-001 (MAC):** the write loop tags the frame *before* `write_frame_raw` compresses (`connection.rs:275-280`), so the tag covers the uncompressed header/payload; the receiver rebuilds the header from the compressed length + COMPRESSED bit and verifies against the decompressed payload → **every frame ≥ 64 KiB on an auth-enabled connection fails MAC and is dropped.**
+- **BUG-002 (forwarding):** the router re-forwards the decompressed-but-still-flagged frame; `write_frame_raw` sees COMPRESSED already set, skips re-compression, emits plaintext bytes flagged COMPRESSED → the next peer calls `zstd::decompress` on plaintext → error → connection dropped.
+
+**Fix — pick one canonical invariant and apply symmetrically:**
+1. In `read_frame_body`, after decompressing: clear `FLAG_COMPRESSED` and set `length = decompressed_len` so the in-memory `Frame` invariant is "payload is always plaintext; flags/length describe the plaintext." This alone fixes BUG-002.
+2. For MAC: define the tag to cover the **plaintext** header+payload on both ends. Since the read path now normalizes to plaintext, the receiver's `serialize_header` matches what the sender tagged pre-compression. Verify the write loop tags the plaintext frame (it already does) and that `write_frame_raw` does not alter the MAC after compressing (it must not — the tag is over plaintext).
+3. Fix `test_framing.rs:302` — it currently asserts `FLAG_COMPRESSED must be set on received frame`, which encodes the bug. Flip it to assert the flag is **cleared** and `length == decompressed_len`.
+
+**Acceptance:**
+- New test: ≥ 64 KiB payload over a MAC-enabled connection round-trips and verifies (regression for BUG-001).
+- New test: ≥ 64 KiB payload forwarded plugin→plugin arrives intact, connection stays up (regression for BUG-002).
+- Received compressed frame has `FLAG_COMPRESSED` cleared and `length` == plaintext length.
+
+**Effort:** 4–6 h
+
+---
+
+### T-11 — Cap fragment reassembly (BUG-003)
+
+**Priority:** P0 (High, DoS) · **Files:** `src/ipc/connection.rs`
+
+**Problem:** `ReassemblyBuf` has only a 30 s idle timeout — no cap on reassembled size, no cap on concurrent streams. `total` is a `u16` (≤ 65 535) × up to 1 MiB per fragment → reassembled frame bypasses `MAX_PAYLOAD_SIZE`; `length: payload.len() as u32` truncates above 4 GiB; unbounded `stream_id` keys let a peer buffer memory up to line-rate × 30 s with no ceiling.
+
+**Fix:**
+- Cap concurrent reassembly streams per connection (e.g. `MAX_REASSEMBLY_STREAMS = 64`); reject new stream_ids past the cap.
+- Track cumulative buffered bytes per stream and per connection; abort the stream (drop connection) if a reassembled payload would exceed `MAX_PAYLOAD_SIZE`.
+- Reject fragments whose `total` disagrees with the stream's first-seen `total`.
+
+**Acceptance:** test — a stream whose fragments sum past `MAX_PAYLOAD_SIZE` is rejected before allocation; opening more than the stream cap drops the connection; per-connection buffered bytes are bounded.
+
+**Effort:** 3–4 h
+
+---
+
+### T-12 — Rate-limit behind auth, not on forged `sub` (BUG-004)
+
+**Priority:** P1 (Medium) · **Files:** `src/api/rate_limit.rs`, `src/api/middleware.rs`, `src/api/server.rs`
+
+**Problem:** `extract_sub` decodes the JWT with `insecure_disable_signature_validation()` and keys the limiter on the resulting `sub` (`rate_limit.rs:48-63`). `sub` is attacker-controlled: rotating it per request bypasses the limit entirely; setting it to a victim's id burns the victim's bucket.
+
+**Fix:** rate-limit unauthenticated traffic by source (peer/connection) *before* auth, and apply the per-`sub` quota only against **verified** claims (after signature check in/after `auth_middleware`). Do not key any limiter on unverified token fields.
+
+**Acceptance:** test — forged tokens with rotating `sub` do not escape the per-source limit; a valid token's bucket cannot be exhausted by a third party supplying the same `sub` unsigned.
+
+**Effort:** 2–3 h
+
+---
+
+### T-13 — Honor shutdown grace semantics (BUG-005)
+
+**Priority:** P2 (Low) · **Files:** `src/plugins/supervisor.rs`, `src/kernel/orchestrator.rs`
+
+**Problem:** `graceful_shutdown(&self, _default_grace_seconds: u32)` ignores its argument and uses `max()` of every plugin's `grace_seconds` — one plugin with a large grace delays SIGKILL for all, and the caller's `GRACE_SECONDS = 5` is dead.
+
+**Fix:** SIGKILL each plugin on its own per-plugin deadline (SIGTERM all, then per-plugin timer to SIGKILL), using the passed default as the floor when a plugin's `grace_seconds == 0`. Remove the dead argument or actually consume it.
+
+**Acceptance:** test — plugin A grace=1s, plugin B grace=10s → A receives SIGKILL ~1s after SIGTERM without waiting for B; passed default applies when grace is 0.
+
+**Effort:** 2–3 h
+
+---
+
+### T-14 — Harden socket path fallback (BUG-006)
+
+**Priority:** P3 (Low) · **Files:** `src/utils/config.rs`, `src/ipc/server.rs`
+
+**Problem:** With `XDG_RUNTIME_DIR` unset, the socket falls back to the predictable world-writable `/tmp/veyron.sock` and is unconditionally `remove_file`d before bind.
+
+**Fix:** when `XDG_RUNTIME_DIR` is absent, prefer a per-user private dir (e.g. `/run/user/<uid>` if present, else a 0o700 dir under `$HOME`); fail closed with a clear error rather than defaulting into shared `/tmp`. Do not `remove_file` a path the kernel does not own (stat it: refuse if it exists and is not a socket we created).
+
+**Acceptance:** test — no `XDG_RUNTIME_DIR` → socket lands in a per-user 0o700 dir, not `/tmp`; a pre-existing non-socket at the path is refused, not deleted.
+
+**Effort:** 1–2 h
+
+---
+
 ## Task Summary
 
 | ID | Phase | Title | Priority | Status |
 |----|-------|-------|----------|--------|
+| T-10 | 4 | Normalize compressed-frame invariant + MAC (BUG-001/002) | **P0** | Done |
+| T-11 | 4 | Cap fragment reassembly (BUG-003) | **P0** | Done |
+| T-12 | 4 | Rate-limit behind auth (BUG-004) | P1 | Done |
+| T-13 | 4 | Honor shutdown grace semantics (BUG-005) | P2 | Done |
+| T-14 | 4 | Harden socket path fallback (BUG-006) | P3 | Done |
 | B-01 | 3.1 | Fix `test_manifest_enforcement` EACCES | P0 | Done |
 | B-02 | 3.1 | Fix kernel shutdown timeout in unit test | P0 | Done |
 | B-03 | 3.1 | Wire or suppress dead-code fields | P0 | Done |
@@ -407,6 +502,14 @@ Add integration tests for each SDK:
 | `/metrics` shows per-plugin CPU and RSS on Linux | 3.4 |
 | OTel trace spans exported when `OTEL_EXPORTER_OTLP_ENDPOINT` set | 3.4 |
 | All 3 SDK integration tests pass against live kernel in CI | 3.5 |
+| ≥ 64 KiB frame round-trips + verifies MAC on auth connection (BUG-001) | 4 |
+| ≥ 64 KiB frame forwards plugin→plugin intact, connection stays up (BUG-002) | 4 |
+| Received frame clears `FLAG_COMPRESSED`, `length` == plaintext length | 4 |
+| Fragment reassembly bounded: stream cap + per-stream/conn byte cap; over-size rejected (BUG-003) | 4 |
+| HTTP rate limit keyed only on verified claims / source (BUG-004) | 4 |
+| Per-plugin shutdown grace honored; slow plugin does not gate others (BUG-005) | 4 |
+| No `XDG_RUNTIME_DIR` → socket in per-user 0o700 dir, not `/tmp` (BUG-006) | 4 |
+| Audit score restored ≥ 90 | 4 |
 
 ---
 

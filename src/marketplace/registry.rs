@@ -2,8 +2,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
-use serde::{Deserialize, Serialize};
 use semver::Version;
+use serde::{Deserialize, Serialize};
 
 use crate::utils::errors::VeyronError;
 
@@ -30,9 +30,7 @@ pub struct PluginEntry {
 fn cache_path() -> PathBuf {
     let base = std::env::var("XDG_CACHE_HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            dirs_home().join(".cache")
-        });
+        .unwrap_or_else(|_| dirs_home().join(".cache"));
     base.join("veyron").join("registry.json")
 }
 
@@ -66,8 +64,7 @@ fn write_cache(path: &PathBuf, entries: &[PluginEntry]) -> Result<(), VeyronErro
     }
     let json = serde_json::to_string(entries)
         .map_err(|e| VeyronError::CacheError(format!("serialize registry: {e}")))?;
-    fs::write(path, json)
-        .map_err(|e| VeyronError::CacheError(format!("write cache: {e}")))?;
+    fs::write(path, json).map_err(|e| VeyronError::CacheError(format!("write cache: {e}")))?;
     Ok(())
 }
 
@@ -130,10 +127,7 @@ pub(crate) async fn fetch_registry_from(
         }
         Err(network_err) => {
             if let Some(entries) = read_cache(&path) {
-                tracing::warn!(
-                    "registry fetch failed ({}); using stale cache",
-                    network_err
-                );
+                tracing::warn!("registry fetch failed ({}); using stale cache", network_err);
                 Ok(entries)
             } else {
                 Err(network_err)
@@ -320,6 +314,9 @@ mod tests {
         let cache = tmp.path().join("registry.json");
 
         let result = fetch_registry_from("http://127.0.0.1:1", false, &cache).await;
-        assert!(result.is_err(), "should error when no cache and network fails");
+        assert!(
+            result.is_err(),
+            "should error when no cache and network fails"
+        );
     }
 }

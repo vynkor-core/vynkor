@@ -6,11 +6,10 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use governor::{DefaultKeyedRateLimiter, Quota, RateLimiter};
-use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
-use crate::auth::jwt::PluginClaims;
+use crate::api::middleware::VerifiedSub;
 
 pub type TokenRateLimiter = DefaultKeyedRateLimiter<String>;
 
@@ -23,16 +22,18 @@ pub fn build_rate_limiter(rps: u32, burst: u32) -> Arc<TokenRateLimiter> {
 
 /// Axum middleware: rate-limits authenticated routes by JWT `sub` claim.
 ///
-/// Key is extracted from the bearer token without signature verification — auth
-/// middleware (which runs after this layer) handles full validation. Requests
-/// without a parseable sub bypass rate limiting and proceed to auth middleware
-/// which will reject them.
+/// This layer must be mounted *inside* `auth_middleware` (i.e. auth runs
+/// first) so it only ever sees requests that already passed signature
+/// verification. The key comes from `VerifiedSub`, inserted into request
+/// extensions by `auth_middleware` after validation — never from a
+/// self-decoded, unverified token field, which an attacker could rotate or
+/// forge to bypass or exhaust another plugin's quota (BUG-004).
 pub async fn rate_limit_middleware(
     State(limiter): State<Arc<TokenRateLimiter>>,
     request: Request<Body>,
     next: Next,
 ) -> Response {
-    if let Some(sub) = extract_sub(&request) {
+    if let Some(VerifiedSub(sub)) = request.extensions().get::<VerifiedSub>().cloned() {
         if limiter.check_key(&sub).is_err() {
             return (
                 StatusCode::TOO_MANY_REQUESTS,
@@ -43,21 +44,4 @@ pub async fn rate_limit_middleware(
         }
     }
     next.run(request).await
-}
-
-fn extract_sub(req: &Request<Body>) -> Option<String> {
-    let token = req
-        .headers()
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))?;
-
-    // Decode without signature check — only need `sub` for rate-limit keying.
-    let mut validation = Validation::new(Algorithm::HS256);
-    validation.insecure_disable_signature_validation();
-    validation.validate_exp = false;
-
-    jsonwebtoken::decode::<PluginClaims>(token, &DecodingKey::from_secret(&[]), &validation)
-        .ok()
-        .map(|d| d.claims.sub)
 }

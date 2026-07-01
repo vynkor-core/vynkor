@@ -87,9 +87,7 @@ impl MessageRouter {
         // Per-connection IPC send rate limiter keyed by conn_id.
         let ipc_limiter: Option<Arc<DefaultKeyedRateLimiter<u64>>> =
             ipc_rate_limit_rps.and_then(|rps| {
-                NonZeroU32::new(rps).map(|r| {
-                    Arc::new(RateLimiter::keyed(Quota::per_second(r)))
-                })
+                NonZeroU32::new(rps).map(|r| Arc::new(RateLimiter::keyed(Quota::per_second(r))))
             });
 
         while let Some(msg) = rx.recv().await {

@@ -1,7 +1,7 @@
 use crate::auth::frame_mac::{compute_tag, verify_tag};
 use crate::ipc::framing::{
     parse_frag_header, read_frame, serialize_header, write_frame_raw, Frame, FLAG_FRAGMENTED,
-    FLAG_MAC_PRESENT, FRAG_HEADER_SIZE,
+    FLAG_MAC_PRESENT, FRAG_HEADER_SIZE, MAX_PAYLOAD_SIZE,
 };
 use crate::ipc::messages::IncomingMessage;
 use crate::utils::errors::VeyronError;
@@ -19,12 +19,21 @@ use tracing::{info, warn};
 /// connection where a sender opens a stream and never finishes it.
 const FRAGMENT_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Maximum number of concurrent in-flight reassembly streams per connection.
+/// Bounds the memory a single peer can hold open regardless of how many
+/// distinct `stream_id`s it opens (BUG-003).
+const MAX_REASSEMBLY_STREAMS: usize = 64;
+
 struct ReassemblyBuf {
     fragments: HashMap<u16, Vec<u8>>,
     total: u16,
     /// Target field from the first fragment — carried into the reassembled frame.
     target: [u8; 32],
     first_seen: tokio::time::Instant,
+    /// Sum of fragment payload bytes buffered so far for this stream. Checked
+    /// against `MAX_PAYLOAD_SIZE` on every insert so a reassembled message can
+    /// never exceed the protocol's single-frame cap (BUG-003).
+    buffered_bytes: usize,
 }
 
 impl ReassemblyBuf {
@@ -177,16 +186,53 @@ impl ConnectionHandler {
                             break;
                         }
 
+                        // Reject a stream_id whose declared `total` disagrees with
+                        // what an earlier fragment on the same stream declared.
+                        if let Some(existing) = reassembly_map.get(&frag_hdr.stream_id) {
+                            if existing.total != frag_hdr.total {
+                                warn!(
+                                    conn_id = self.conn_id,
+                                    stream_id = frag_hdr.stream_id,
+                                    "fragment total mismatch — dropping connection"
+                                );
+                                counter!("ipc_frame_errors_total", "error" => "fragment_total_mismatch")
+                                    .increment(1);
+                                break;
+                            }
+                        } else if reassembly_map.len() >= MAX_REASSEMBLY_STREAMS {
+                            warn!(
+                                conn_id = self.conn_id,
+                                "reassembly stream cap exceeded — dropping connection"
+                            );
+                            counter!("ipc_frame_errors_total", "error" => "reassembly_stream_cap")
+                                .increment(1);
+                            break;
+                        }
+
                         let frag_data = frame.payload[FRAG_HEADER_SIZE..].to_vec();
-                        let entry =
-                            reassembly_map
-                                .entry(frag_hdr.stream_id)
-                                .or_insert_with(|| ReassemblyBuf {
-                                    fragments: HashMap::new(),
-                                    total: frag_hdr.total,
-                                    target: frame.target,
-                                    first_seen: tokio::time::Instant::now(),
-                                });
+                        let entry = reassembly_map.entry(frag_hdr.stream_id).or_insert_with(|| {
+                            ReassemblyBuf {
+                                fragments: HashMap::new(),
+                                total: frag_hdr.total,
+                                target: frame.target,
+                                first_seen: tokio::time::Instant::now(),
+                                buffered_bytes: 0,
+                            }
+                        });
+
+                        // Abort before allocating if this fragment would push the
+                        // reassembled payload past the single-frame protocol cap.
+                        if entry.buffered_bytes + frag_data.len() > MAX_PAYLOAD_SIZE {
+                            warn!(
+                                conn_id = self.conn_id,
+                                stream_id = frag_hdr.stream_id,
+                                "reassembled payload would exceed MAX_PAYLOAD_SIZE — dropping connection"
+                            );
+                            counter!("ipc_frame_errors_total", "error" => "reassembly_oversized")
+                                .increment(1);
+                            break;
+                        }
+                        entry.buffered_bytes += frag_data.len();
                         entry.fragments.insert(frag_hdr.sequence, frag_data);
 
                         if entry.is_complete() {
@@ -300,7 +346,13 @@ mod tests {
     use crate::ipc::framing::{read_frame, write_frame_raw, FLAG_MAC_PRESENT};
 
     /// Build a fragmented-frame payload: 10-byte header + data.
-    fn frag_payload(fragment_id: u16, seq: u16, total: u16, stream_id: u32, data: &[u8]) -> Vec<u8> {
+    fn frag_payload(
+        fragment_id: u16,
+        seq: u16,
+        total: u16,
+        stream_id: u32,
+        data: &[u8],
+    ) -> Vec<u8> {
         let mut p = Vec::with_capacity(FRAG_HEADER_SIZE + data.len());
         p.extend_from_slice(&fragment_id.to_be_bytes());
         p.extend_from_slice(&seq.to_be_bytes());
@@ -310,7 +362,14 @@ mod tests {
         p
     }
 
-    fn frag_frame(target: &str, fragment_id: u16, seq: u16, total: u16, stream_id: u32, data: &[u8]) -> Frame {
+    fn frag_frame(
+        target: &str,
+        fragment_id: u16,
+        seq: u16,
+        total: u16,
+        stream_id: u32,
+        data: &[u8],
+    ) -> Frame {
         let payload = frag_payload(fragment_id, seq, total, stream_id, data);
         let crc = crc32fast::hash(&payload);
         let mut t = [0u8; 32];
@@ -407,17 +466,30 @@ mod tests {
 
         let (_, mut wc) = client.into_split();
         // Send 3 fragments out-of-order: seq 2, 0, 1
-        write_frame_raw(&mut wc, &frag_frame("kernel", 1, 2, 3, 99, b"third")).await.unwrap();
-        write_frame_raw(&mut wc, &frag_frame("kernel", 1, 0, 3, 99, b"first")).await.unwrap();
-        write_frame_raw(&mut wc, &frag_frame("kernel", 1, 1, 3, 99, b"second")).await.unwrap();
+        write_frame_raw(&mut wc, &frag_frame("kernel", 1, 2, 3, 99, b"third"))
+            .await
+            .unwrap();
+        write_frame_raw(&mut wc, &frag_frame("kernel", 1, 0, 3, 99, b"first"))
+            .await
+            .unwrap();
+        write_frame_raw(&mut wc, &frag_frame("kernel", 1, 1, 3, 99, b"second"))
+            .await
+            .unwrap();
 
         let msg = tokio::time::timeout(std::time::Duration::from_secs(1), incoming_rx.recv())
             .await
             .expect("reassembled message must arrive within 1s")
             .unwrap();
 
-        assert_eq!(msg.frame.payload, b"firstsecondthird", "fragments must be reassembled in sequence order");
-        assert_eq!(msg.frame.flags & FLAG_FRAGMENTED, 0, "FLAG_FRAGMENTED must be cleared on reassembled frame");
+        assert_eq!(
+            msg.frame.payload, b"firstsecondthird",
+            "fragments must be reassembled in sequence order"
+        );
+        assert_eq!(
+            msg.frame.flags & FLAG_FRAGMENTED,
+            0,
+            "FLAG_FRAGMENTED must be cleared on reassembled frame"
+        );
         assert_eq!(msg.conn_id, 42);
     }
 
@@ -431,13 +503,17 @@ mod tests {
 
         let (_, mut wc) = client.into_split();
         // Send only 1 of 2 fragments — never complete the set.
-        write_frame_raw(&mut wc, &frag_frame("kernel", 1, 0, 2, 55, b"half")).await.unwrap();
+        write_frame_raw(&mut wc, &frag_frame("kernel", 1, 0, 2, 55, b"half"))
+            .await
+            .unwrap();
 
         // Advance time past FRAGMENT_TIMEOUT (30s) to make the buffer stale.
         tokio::time::advance(std::time::Duration::from_secs(31)).await;
 
         // Send a normal frame to trigger stale buffer pruning.
-        write_frame_raw(&mut wc, &plain("kernel", b"trigger")).await.unwrap();
+        write_frame_raw(&mut wc, &plain("kernel", b"trigger"))
+            .await
+            .unwrap();
 
         // Only the plain frame arrives — the incomplete fragment is never dispatched.
         let msg = tokio::time::timeout(std::time::Duration::from_secs(1), incoming_rx.recv())
@@ -445,6 +521,98 @@ mod tests {
             .expect("plain frame must arrive")
             .unwrap();
         assert_eq!(msg.frame.payload, b"trigger");
-        assert!(incoming_rx.try_recv().is_err(), "incomplete fragment must not be dispatched");
+        assert!(
+            incoming_rx.try_recv().is_err(),
+            "incomplete fragment must not be dispatched"
+        );
+    }
+
+    #[tokio::test]
+    async fn reassembled_payload_exceeding_max_size_drops_connection() {
+        // BUG-003 regression: fragments summing past MAX_PAYLOAD_SIZE must be
+        // rejected before the reassembled payload is ever allocated.
+        let (client, server) = UnixStream::pair().unwrap();
+        let (incoming_tx, mut incoming_rx) = mpsc::channel(8);
+        let (disc_tx, mut disc_rx) = mpsc::channel(8);
+        let (handler, _wtx) = ConnectionHandler::new(10, server, incoming_tx, disc_tx);
+        tokio::spawn(handler.run());
+
+        let (_, mut wc) = client.into_split();
+        // Two fragments, each larger than half of MAX_PAYLOAD_SIZE, so their sum
+        // exceeds the single-frame protocol cap.
+        let half = crate::ipc::framing::MAX_PAYLOAD_SIZE / 2 + 1024;
+        let chunk = vec![b'x'; half];
+        write_frame_raw(&mut wc, &frag_frame("kernel", 1, 0, 2, 1, &chunk))
+            .await
+            .unwrap();
+        write_frame_raw(&mut wc, &frag_frame("kernel", 1, 1, 2, 1, &chunk))
+            .await
+            .unwrap();
+
+        let disc = tokio::time::timeout(std::time::Duration::from_secs(1), disc_rx.recv())
+            .await
+            .expect("must signal disconnect")
+            .unwrap();
+        assert_eq!(disc, 10);
+        assert!(
+            incoming_rx.try_recv().is_err(),
+            "oversized reassembly must not be dispatched"
+        );
+    }
+
+    #[tokio::test]
+    async fn reassembly_stream_cap_drops_connection() {
+        // BUG-003 regression: opening more concurrent streams than the cap
+        // allows must drop the connection rather than buffer unbounded streams.
+        let (client, server) = UnixStream::pair().unwrap();
+        let (incoming_tx, mut incoming_rx) = mpsc::channel(128);
+        let (disc_tx, mut disc_rx) = mpsc::channel(8);
+        let (handler, _wtx) = ConnectionHandler::new(11, server, incoming_tx, disc_tx);
+        tokio::spawn(handler.run());
+
+        let (_, mut wc) = client.into_split();
+        // Open one more incomplete stream than MAX_REASSEMBLY_STREAMS allows.
+        for stream_id in 0..(MAX_REASSEMBLY_STREAMS as u32 + 1) {
+            write_frame_raw(
+                &mut wc,
+                &frag_frame("kernel", 1, 0, 2, stream_id, b"partial"),
+            )
+            .await
+            .unwrap();
+        }
+
+        let disc = tokio::time::timeout(std::time::Duration::from_secs(1), disc_rx.recv())
+            .await
+            .expect("must signal disconnect")
+            .unwrap();
+        assert_eq!(disc, 11);
+        assert!(incoming_rx.try_recv().is_err(), "no stream should complete");
+    }
+
+    #[tokio::test]
+    async fn fragment_total_mismatch_drops_connection() {
+        // BUG-003 regression: a stream_id whose `total` disagrees with the
+        // first-seen total for that stream is a protocol violation.
+        let (client, server) = UnixStream::pair().unwrap();
+        let (incoming_tx, mut incoming_rx) = mpsc::channel(8);
+        let (disc_tx, mut disc_rx) = mpsc::channel(8);
+        let (handler, _wtx) = ConnectionHandler::new(12, server, incoming_tx, disc_tx);
+        tokio::spawn(handler.run());
+
+        let (_, mut wc) = client.into_split();
+        write_frame_raw(&mut wc, &frag_frame("kernel", 1, 0, 3, 5, b"a"))
+            .await
+            .unwrap();
+        // Same stream_id, different declared total.
+        write_frame_raw(&mut wc, &frag_frame("kernel", 1, 1, 5, 5, b"b"))
+            .await
+            .unwrap();
+
+        let disc = tokio::time::timeout(std::time::Duration::from_secs(1), disc_rx.recv())
+            .await
+            .expect("must signal disconnect")
+            .unwrap();
+        assert_eq!(disc, 12);
+        assert!(incoming_rx.try_recv().is_err());
     }
 }

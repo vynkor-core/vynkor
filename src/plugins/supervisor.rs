@@ -263,36 +263,41 @@ impl PluginSupervisor {
             .or_else(|| self.stopped_counts.get(plugin_id).map(|c| *c))
     }
 
-    /// Send SIGTERM to all managed plugins, wait for the longest per-plugin
-    /// `grace_seconds` (default 5s if zero), then SIGKILL any that have not exited.
-    /// Uses each plugin's configured `grace_seconds` from `PluginConfig`.
-    pub async fn graceful_shutdown(&self, _default_grace_seconds: u32) {
+    /// Send SIGTERM to all managed plugins, then SIGKILL each plugin on its own
+    /// deadline — `grace_seconds` from its `PluginConfig`, falling back to
+    /// `default_grace_seconds` when that field is 0. A plugin with a long grace
+    /// period no longer delays SIGKILL for every other plugin (BUG-005).
+    pub async fn graceful_shutdown(&self, default_grace_seconds: u32) {
         if self.entries.is_empty() {
             return;
         }
-
-        let max_grace = self
-            .entries
-            .iter()
-            .map(|e| e.value().config.grace_seconds)
-            .max()
-            .unwrap_or(0);
-        let grace = if max_grace > 0 {
-            Duration::from_secs(max_grace as u64)
-        } else {
-            Duration::from_secs(5)
-        };
 
         for entry in self.entries.iter() {
             let pid = nix::unistd::Pid::from_raw(entry.value().pid as i32);
             let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGTERM);
         }
 
-        tokio::time::sleep(grace).await;
+        let handles: Vec<_> = self
+            .entries
+            .iter()
+            .map(|entry| {
+                let pid = entry.value().pid;
+                let grace = entry.value().config.grace_seconds;
+                let grace = if grace > 0 {
+                    grace
+                } else {
+                    default_grace_seconds
+                };
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_secs(grace as u64)).await;
+                    let pid = nix::unistd::Pid::from_raw(pid as i32);
+                    let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGKILL);
+                })
+            })
+            .collect();
 
-        for entry in self.entries.iter() {
-            let pid = nix::unistd::Pid::from_raw(entry.value().pid as i32);
-            let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGKILL);
+        for handle in handles {
+            let _ = handle.await;
         }
     }
 

@@ -245,7 +245,10 @@ fn topo_sort_detects_simple_cycle() {
     deps.insert("b", vec!["a"]);
     let refused: HashSet<&str> = HashSet::new();
     let cycle = topo_sort(&defs, &deps, &refused).expect_err("must detect cycle");
-    assert!(cycle.contains(&"a") && cycle.contains(&"b"), "both in cycle");
+    assert!(
+        cycle.contains(&"a") && cycle.contains(&"b"),
+        "both in cycle"
+    );
 }
 
 #[test]
@@ -270,5 +273,8 @@ fn topo_sort_refused_nodes_excluded() {
     refused.insert("b");
     let order = topo_sort(&defs, &deps, &refused).expect("no cycle");
     assert_eq!(order.len(), 2);
-    assert!(!order.contains(&"b"), "refused node must not appear in order");
+    assert!(
+        !order.contains(&"b"),
+        "refused node must not appear in order"
+    );
 }

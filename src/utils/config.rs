@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 /// One plugin entry in the `plugins:` list in config.yaml.
@@ -86,12 +87,35 @@ pub struct Config {
     pub config_file: Option<String>,
 }
 
+/// Picks a per-user socket location, preferring `XDG_RUNTIME_DIR`, then the
+/// kernel-provided `/run/user/<uid>`, then a private 0o700 directory under
+/// `$HOME`. Never falls back to the world-writable shared `/tmp` (BUG-006):
+/// if none of those are available, returns an empty string so callers can
+/// fail closed with a clear error instead of binding into `/tmp`.
 fn default_socket_path() -> String {
     if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
-        format!("{runtime_dir}/veyron.sock")
-    } else {
-        "/tmp/veyron.sock".to_string()
+        return format!("{runtime_dir}/veyron.sock");
     }
+
+    let uid = nix::unistd::Uid::current().as_raw();
+    let run_user_dir = PathBuf::from(format!("/run/user/{uid}"));
+    if run_user_dir.is_dir() {
+        return run_user_dir
+            .join("veyron.sock")
+            .to_string_lossy()
+            .to_string();
+    }
+
+    if let Ok(home) = std::env::var("HOME") {
+        let dir = PathBuf::from(home).join(".veyron").join("run");
+        if std::fs::create_dir_all(&dir).is_ok()
+            && std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).is_ok()
+        {
+            return dir.join("veyron.sock").to_string_lossy().to_string();
+        }
+    }
+
+    String::new()
 }
 fn default_watchdog_interval() -> u64 {
     30
@@ -153,9 +177,18 @@ mod tests {
     }
 
     #[test]
-    fn default_socket_path_falls_back_to_tmp() {
+    fn default_socket_path_never_falls_back_to_shared_tmp() {
         std::env::remove_var("XDG_RUNTIME_DIR");
         let path = default_socket_path();
-        assert_eq!(path, "/tmp/veyron.sock");
+        assert_ne!(
+            path, "/tmp/veyron.sock",
+            "must not default into world-writable shared /tmp (BUG-006)"
+        );
+        // Must land in a per-user location: either the kernel-provided
+        // /run/user/<uid>, or a private 0o700 dir under $HOME.
+        assert!(
+            path.starts_with("/run/user/") || path.contains("/.veyron/"),
+            "expected a per-user private socket dir, got {path}"
+        );
     }
 }

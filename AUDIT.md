@@ -2,306 +2,150 @@
 
 **Date:** 2026-07-01
 **Auditor:** Lead Systems Architect
-**Branch:** `develop` · Commit: `bead6b5`
-**Test baseline:** 147 passing · 6 failing · `cargo clippy -D warnings` clean · `cargo fmt` clean
+**Branch:** `develop` · Commit: `234183a` (Phase 3)
+**Method:** Static read of all 42 Rust source files + SDK re-exports. Tests **not** re-run this pass; test-status figures below are carried from the previous audit and are stale.
 
 ---
 
 ## Executive Summary
 
-| Dimension | Score | Verdict |
-|-----------|-------|---------|
-| Core architecture ("dumb core") | 10/10 | Production-ready |
-| IPC transport (UDS-only) | 10/10 | Production-ready |
-| Binary framing protocol | 10/10 | Flag space canonicalized (AUDIT-001 closed) |
-| Security & fail-fast | 10/10 | All VULN-001–022 resolved |
-| Process isolation | 9/10 | Linux sandbox complete; macOS warning added (AUDIT-005 closed) |
-| CLI tooling (`vyn`) | 10/10 | `vyn plugin list/search/install`, completions, all subcommands present |
-| Marketplace & plugin distribution | 9/10 | Atomic 8-step install pipeline; no live registry yet |
-| Observability | 9/10 | Prometheus metrics, JSON logging, structured traces |
-| Test suite | 7/10 | 6 tests failing (see below) |
-| Documentation | 6/10 | Several stale/redundant MD files |
-| **Overall** | **93/100** | **Staging-ready; resolve test failures before promoting to production** |
+The kernel's architecture (dumb byte-router, UDS-only IPC, per-process isolation, default-deny permissions) remains sound. **However, the Phase 3 payload-compression feature (`FLAG_COMPRESSED`, added after the previous audit) introduced two protocol-level regressions that silently corrupt any frame ≥ 64 KiB.** These are not covered by tests and invalidate the previous "all clear" verdict.
 
-**Summary:** Phase 2.1–2.4 shipped and closed all five prior audit items (AUDIT-001 through AUDIT-005). The kernel is architecturally sound, all 22 tracked vulnerabilities are resolved, and the full feature set (marketplace, audio protocol, fragmentation, rate limiting, JSON logging, CI fuzz) is in place. Two outstanding concerns: six unit tests are failing (three are permission-denied environment issues; one is a shutdown timing race), and the docs folder contains multiple stale planning documents that should be archived.
+The prior AUDIT.md scored this 93/100 with "all 22 VULNs closed." That grade predates the compression code and is no longer accurate.
+
+| Dimension | Prev | Now | Note |
+|-----------|------|-----|------|
+| Core architecture | 10/10 | 9/10 | Sound; router now mishandles compressed-frame flags |
+| Binary framing | 10/10 | **4/10** | BUG-001/002: decompress-in-place leaves flags/length inconsistent |
+| Frame MAC | 10/10 | **4/10** | BUG-001: MAC verification fails for every compressed frame |
+| Fragmentation / DoS | 9/10 | **6/10** | BUG-003: reassembly has no size or stream-count cap |
+| HTTP rate limiting | 10/10 | 6/10 | BUG-004: keyed on unauthenticated, attacker-chosen `sub` |
+| Lifecycle / shutdown | 9/10 | 8/10 | BUG-005: grace arg is dead; slowest plugin gates all |
+| **Overall** | 93/100 | **~72/100** | Fix BUG-001/002/003 before any promotion |
 
 ---
 
-## Closed Audit Items (since 2026-06-30)
+## Bugs Found (this pass)
 
-All items from the previous audit are now closed:
+### BUG-001 — Compressed frames fail MAC verification (Critical)
 
-| ID | Item | Closed by | Status |
-|----|------|-----------|--------|
-| AUDIT-001 | Flag Bit 0 conflict (RAW audio vs MAC) | T-01: `docs/FRAMING.md` + `FLAG_RAW_BINARY = 0x0010` | ✅ Closed |
-| AUDIT-002 | WS JWT `Sec-WebSocket-Protocol` vs `?token=` | T-02: documented in `docs/FRAMING.md` | ✅ Closed |
-| AUDIT-003 | Grace period hardcoded 200ms | T-03: `grace_seconds` in `PluginConfig` + `config.yaml` | ✅ Closed |
-| AUDIT-004 | Fuzz corpus not wired to CI | T-13: `.github/workflows/fuzz.yml` triggers on PR | ✅ Closed |
-| AUDIT-005 | macOS sandbox silently no-op | T-14: `warn!` emitted when `sandbox=true` on non-Linux | ✅ Closed |
+**Files:** `src/ipc/connection.rs:275-280` (write), `src/ipc/framing.rs:135-166,230-235` (compress/read), `src/api/websocket.rs:94` (WS verify)
 
----
-
-## Architectural Compliance Checklist
-
-### Rule 1 — "Dumb" Core: No Business Logic, No AI, No Databases
-
-| Check | Status | Evidence |
-|-------|--------|----------|
-| No AI models or inference in core | ✅ PASS | Proto `ai_*` fields marked `reserved`; `AiRequest` proxies to external API only |
-| No business logic in kernel | ✅ PASS | `src/kernel/orchestrator.rs` handles lifecycle, shutdown, and component wiring only |
-| No embedded databases for plugin state | ✅ PASS | `rusqlite` is used exclusively for `EventStore` (delivery journal — infrastructure, not state) |
-| Core acts as byte router and process supervisor | ✅ PASS | `MessageRouter` routes by 32-byte target field without decoding payload; `PluginSupervisor` manages process lifecycle only |
-
----
-
-### Rule 2 — IPC Transport: UDS Only
-
-| Check | Status | Evidence |
-|-------|--------|----------|
-| Plugin↔kernel IPC over Unix Domain Sockets | ✅ PASS | `src/ipc/server.rs`: `UnixListener::bind()` at `config.socket_path` |
-| No Redis / AMQP / TCP for intra-host IPC | ✅ PASS | `Cargo.toml` has no `redis`, `lapin`, or AMQP crate |
-| External access via WebSocket/HTTP gateway only | ✅ PASS | `src/api/server.rs` is the sole TCP-facing component |
-| Socket permissions locked to owner | ✅ PASS | `umask(0o177)` before bind; `set_permissions(0o600)` as defence-in-depth (VULN-017 closed) |
-| Socket path uses XDG_RUNTIME_DIR | ✅ PASS | `default_socket_path()` prefers `$XDG_RUNTIME_DIR/veyron.sock`; falls back to `/tmp/veyron.sock` |
-
----
-
-### Rule 3 — Binary Framing Protocol (44-byte Header)
+On a secured connection the write loop computes the HMAC tag **before** compression:
 
 ```
-┌─────────┬─────────┬──────────────┬──────────────────────┬──────────┬─────────────┐
-│ Magic   │ Flags   │ Length       │ Target               │ CRC32    │ Payload     │
-│ 2 bytes │ 2 bytes │ 4 bytes BE   │ 32 bytes null-padded │ 4 bytes  │ N bytes     │
-└─────────┴─────────┴──────────────┴──────────────────────┴──────────┴─────────────┘
-  0x56 0x52  bitmask  payload len   plugin_id or "kernel"  CRC32(payload)  Protobuf/RAW
+connection.rs write_loop:
+  frame.flags |= FLAG_MAC_PRESENT;
+  header = serialize_header(&frame);              // length = UNCOMPRESSED, no COMPRESSED bit
+  frame.mac = Some(compute_tag(k, &header, &frame.payload));  // payload UNCOMPRESSED
+  write_frame_raw(&mut w, &frame).await;          // <-- compresses here, rewrites length + sets COMPRESSED, does NOT re-tag
 ```
 
-**Canonical flag table** (`docs/FRAMING.md` is now the single source of truth):
+`write_frame_raw` then compresses the payload, sets `FLAG_COMPRESSED`, and rewrites the `length` field to the *compressed* size — but leaves `frame.mac` as the tag computed over the uncompressed header/payload.
 
-| Bit | Hex    | Constant         | Status |
-|-----|--------|------------------|--------|
-| 0   | 0x0001 | FLAG_MAC_PRESENT | ✅ Implemented |
-| 1   | 0x0002 | FLAG_COMPRESSED  | Reserved |
-| 2   | 0x0004 | FLAG_FRAGMENTED  | ✅ Implemented (T-12) |
-| 3   | 0x0008 | FLAG_PRIORITY    | Reserved |
-| 4   | 0x0010 | FLAG_RAW_BINARY  | ✅ Defined + exported (T-01) |
-| 5–15 | —     | —                | Reserved |
-
-| Check | Status | Evidence |
-|-------|--------|----------|
-| 44-byte header, magic `0x5652` | ✅ PASS | `HEADER_SIZE = 44`, `MAGIC = 0x5652` |
-| Big-endian length field | ✅ PASS | `length.to_be_bytes()` / `u32::from_be_bytes()` |
-| CRC32 over payload only | ✅ PASS | `crc32fast::hash(&payload)` |
-| Zero-copy routing by target field | ✅ PASS | Proto envelope decoded only when `target == "kernel"` |
-| 1 MiB payload cap | ✅ PASS | `MAX_PAYLOAD_SIZE = 1_048_576` checked on read and write |
-| Frame read timeout | ✅ PASS | `FRAME_READ_TIMEOUT = 10s` (slow-loris defence) |
-| Fragment reassembly | ✅ PASS | `ReassemblyBuf` in `connection.rs`; 30s timeout (T-12) |
-| Flag space canonical | ✅ PASS | `docs/FRAMING.md` defines all bits; SDKs import, do not redefine |
-
----
-
-### Rule 4 — Security & Fail-Fast
-
-#### Authentication & Authorization
-
-| Check | Status | Evidence |
-|-------|--------|----------|
-| JWT HS256 on plugin registration | ✅ PASS | `src/auth/jwt.rs`; kernel refuses to start without `jwt_secret` unless `allow_no_auth: true` |
-| Per-connection HMAC-SHA256 MAC | ✅ PASS | HKDF-derived per-session key; `FLAG_MAC_PRESENT` appends 32-byte tag (VULN-005 closed) |
-| Default-deny peer-to-peer IPC | ✅ PASS | `PERMISSION_IPC_SEND` required; `forward()` and `broadcast()` both check (VULN-001/002 closed) |
-| Per-target IPC allowlist | ✅ PASS | `ipc_targets` in manifest; `check_ipc_target()` enforced in both unicast and broadcast (VULN-012 closed) |
-| Broadcast strips `FLAG_MAC_PRESENT` | ✅ PASS | Broadcast clones clear the flag; recipient write-loop re-adds with own session key (VULN-015 closed) |
-| Plugin ID validation | ✅ PASS | `[A-Za-z0-9._-]`, ≤32 bytes, reserved IDs blocked (VULN-009 closed) |
-| JWT `sub == plugin_id` at registration | ✅ PASS | Identity squatting prevented (VULN-004 closed) |
-| Mutex poison recovery on hot paths | ✅ PASS | `unwrap_or_else(|p| p.into_inner())` everywhere (VULN-013/014 closed) |
-| Non-UTF-8 frame target | ✅ PASS | `target_as_str()` returns `Option`; raw hex logged + error frame returned (VULN-022 closed) |
-
-#### HTTP Control Plane
-
-| Check | Status | Evidence |
-|-------|--------|----------|
-| Auth-protected routes | ✅ PASS | `GET /plugins`, `GET /plugins/:id`, `GET /metrics`, `GET /plugins/:id/logs` all require Bearer JWT |
-| Public routes limited | ✅ PASS | Only `GET /health` is unauthenticated |
-| Per-token rate limiting | ✅ PASS | `governor` crate; keyed by JWT `sub`; `429 + Retry-After` on limit (T-15) |
-| HTTP binds loopback only | ✅ PASS | `127.0.0.1` bind in `src/api/server.rs` |
-
-#### WebSocket
-
-| Check | Status | Evidence |
-|-------|--------|----------|
-| JWT validation before upgrade | ✅ PASS | `ws_handler()` validates `Sec-WebSocket-Protocol` header before `on_upgrade()` |
-| WS JWT delivery documented | ✅ PASS | `docs/FRAMING.md` documents the header-based approach and its security rationale (AUDIT-002 closed) |
-| WS frame MAC | ✅ PASS | `session_key` cell wired in `websocket.rs`; `FLAG_MAC_PRESENT` enforced (T-13) |
-| WS error budget | ✅ PASS | `MAX_WS_PARSE_ERRORS = 16` disconnects bad frames (VULN-016 closed) |
-| Slowloris protection | ✅ PASS | `TimeoutLayer(5s)` wraps WS upgrade route |
-
-#### Connection Limits & DoS
-
-| Check | Status | Evidence |
-|-------|--------|----------|
-| Pre-registration connection limit | ✅ PASS | `Arc<AtomicUsize>` counter; `max_connections` config field (VULN-019 closed) |
-| Per-connection error budget (UDS) | ✅ PASS | `MAX_CONN_ERRORS = 16` in `run_with_context` |
-| Fragment-based memory exhaustion | ✅ PASS | `ReassemblyBuf` pruned after 30s |
-
----
-
-### Rule 5 — Process Isolation
-
-| Check | Status | Evidence |
-|-------|--------|----------|
-| Plugins as isolated OS subprocesses | ✅ PASS | `tokio::process::Command` in `supervisor.rs:spawn_internal()` |
-| `VEYRON_SOCKET_PATH` env injection | ✅ PASS | `cmd.env("VEYRON_SOCKET_PATH", ...)` |
-| SIGTERM + SIGKILL lifecycle | ✅ PASS | `nix::sys::signal::kill(pid, SIGTERM)`; SIGKILL via watchdog |
-| Exponential restart backoff | ✅ PASS | `backoff_delay()`: 100ms × 2^n, capped at 30s |
-| Dead entries removed after max_restarts | ✅ PASS | `entries.remove()` + `stopped_counts` in `monitor_loop` (VULN-018 closed) |
-| Watchdog does not reset timer after SIGKILL | ✅ PASS | `record_pong` after SIGKILL removed; D-state processes escalated (VULN-021 closed) |
-| Linux PID + network namespace isolation | ✅ PASS | `CLONE_NEWPID | CLONE_NEWNET` via `pre_exec` in `runner.rs` |
-| Resource limits | ✅ PASS | `RLIMIT_NPROC=64`, `RLIMIT_AS=512MiB` via `setrlimit` |
-| macOS sandbox warning | ✅ PASS | `warn!` emitted when `sandbox=true` on non-Linux (AUDIT-005 closed) |
-| Configurable grace period | ✅ PASS | `grace_seconds` field in `PluginConfig` + `config.yaml` (AUDIT-003 closed) |
-
----
-
-### Rule 6 — CLI Tooling (`vyn`)
-
-| Command | Status | Evidence |
-|---------|--------|----------|
-| `vyn start / stop / restart / status / logs` | ✅ PASS | `src/cli/mod.rs` |
-| `vyn plugin list` | ✅ PASS | `src/cli/plugin.rs`; tab-aligned registry output with version columns |
-| `vyn plugin search <query>` | ✅ PASS | Case-insensitive substring filter against slug/name/description |
-| `vyn plugin start/stop/restart/logs <id>` | ✅ PASS | Proxies to REST API |
-| `vyn install <slug-or-id>` | ✅ PASS | Atomic 8-step pipeline: resolve → compat → download → SHA-256 → zip-slip → move → validate → confirm |
-| `vyn completions <shell>` | ✅ PASS | `clap_complete`; hidden `__complete-slugs` subcommand for dynamic slug completion |
-
----
-
-### Rule 7 — Marketplace & Plugin Distribution
-
-| Check | Status | Evidence |
-|-------|--------|----------|
-| `plugin.json` schema defined | ✅ PASS | `docs/PLUGIN_REGISTRY_SCHEMA.md` |
-| `registry.json` schema defined | ✅ PASS | `docs/PLUGIN_REGISTRY_SCHEMA.md` |
-| Kernel validates `plugin.json` before spawn | ✅ PASS | `src/plugins/loader.rs`: compat range + permissions checked |
-| Registry cached (1h TTL) | ✅ PASS | `src/marketplace/registry.rs`; `$XDG_CACHE_HOME/veyron/registry.json` |
-| SHA-256 archive verification | ✅ PASS | `src/marketplace/installer.rs` Step 4 |
-| Zip-slip protection | ✅ PASS | Rejects entries with `..` in path |
-| Kernel compatibility gate | ✅ PASS | `check_kernel_compatibility()` uses `semver`; min/max enforced |
-| Unknown permissions refused at load time | ✅ PASS | `validate_plugin_def()` in `loader.rs` |
-| **Live registry server (`veyron-plugins` repo)** | ⚠️ NOT YET | `registry.json` URL points to non-existent GitHub release; install works only against a local mock |
-
----
-
-### Rule 8 — Observability
-
-| Check | Status | Evidence |
-|-------|--------|----------|
-| Prometheus `/metrics` endpoint | ✅ PASS | `messages_routed_total`, `ipc_send_denied_total`, `ipc_frame_errors_total`, `plugins_registered_total`, `plugin_restarts_total` + latency histograms |
-| Structured JSON logging | ✅ PASS | `LOG_FORMAT=json` gates `tracing_subscriber::fmt().json()` (T-17) |
-| Per-plugin log ring buffer | ✅ PASS | 1000-line buffer; `GET /plugins/:id/logs` |
-| SQLite EventStore (at-least-once) | ✅ PASS | `src/events/store.rs`; retry worker every 5s; dead after 5 retries |
-
----
-
-### Rule 9 — SDK Parity
-
-| SDK | Connect | Register | MAC | Audio |
-|-----|---------|----------|-----|-------|
-| Rust | ✅ | ✅ | ✅ | `FLAG_RAW_BINARY` exported |
-| C++ | ✅ | ✅ | ✅ `mac.hpp` | `FLAG_RAW_BINARY` exported |
-| Python | ✅ | ✅ | ✅ `framing.py` | `FLAG_RAW_BINARY` exported |
-
----
-
-## Open Audit Items
-
-| ID | Severity | Issue | Recommendation |
-|----|----------|-------|----------------|
-| AUDIT-006 | **High** | 6 unit tests failing (see detail below) | Fix before merge to staging |
-| AUDIT-007 | Medium | Live marketplace registry does not exist | Create `veyron-core/veyron-plugins` GitHub repo with `registry.json` |
-| AUDIT-008 | Low | `docs/FOLDER_TREE.md` describes a structure that never existed | Delete or replace with accurate tree |
-| AUDIT-009 | Low | `docs/VEYRON_ARCHITECTURE.md` describes old module layout in Russian | Archive to `docs/archive/` |
-| AUDIT-010 | Low | `docs/ROADMAP.md` (Phase 1.1 planning, all tasks done) is dead weight | Move to `docs/archive/` |
-| AUDIT-011 | Low | `docs/ROADMAP_v2.md` explicitly superseded by v3 | Move to `docs/archive/` |
-| AUDIT-012 | Low | `docs/CORE_ROADMAP.md` (all 5 sprints complete, last updated 2026-06-21) | Move to `docs/archive/` |
-| AUDIT-013 | Low | Root `ROADMAP.md` duplicates some content from `docs/ROADMAP_v3.md` | Consider consolidating under `docs/` only |
-| AUDIT-014 | Info | `FLAG_COMPRESSED` (Bit 1) defined but `zstd` crate not present | Add `zstd` or remove the flag from the canonical table |
-
----
-
-## Failing Tests — Detail (AUDIT-006)
-
-**Run:** `cargo test --test unit 2>&1`
+On the receiver, `read_frame_body` verifies CRC, decompresses the payload, but **leaves `flags` = COMPRESSED and `length` = compressed size** (framing.rs:230-235). The verifier then does:
 
 ```
-FAILED. 147 passed; 6 failed
+header = serialize_header(&frame);   // length = COMPRESSED size, COMPRESSED bit SET
+verify_tag(&k, &header, &frame.payload /* DECOMPRESSED */, tag)
 ```
 
-| Test | Failure | Root Cause | Fix |
-|------|---------|------------|-----|
-| `test_manifest_enforcement::valid_manifest_passes` | `EACCES` (Permission denied) | Test reads `plugin.json` from a hardcoded path that requires write permission in the test environment | Use `tempfile::tempdir()` for test fixtures |
-| `test_manifest_enforcement::incompatible_min_kernel_refused` | `EACCES` | Same: hardcoded path | Same fix |
-| `test_manifest_enforcement::unknown_permission_refused` | `EACCES` | Same | Same fix |
-| `test_manifest_enforcement::config_permission_restriction_enforced` | `EACCES` | Same | Same fix |
-| `test_manifest_enforcement::invalid_plugin_skipped_valid_loads` | `EACCES` | Same | Same fix |
-| `test_kernel::kernel_graceful_shutdown_does_not_panic` | `Elapsed` (timeout) | Kernel shutdown in test takes longer than the test's deadline | Increase timeout or mock the supervisor wait |
+Sender tagged `(header{len=U, no-COMPRESSED} ‖ payload_uncompressed)`; receiver verifies `(header{len=C, COMPRESSED} ‖ payload_uncompressed)`. **The headers never match → `verify_tag` always fails → the connection is dropped** (`connection.rs:140-147`).
 
-All 6 are environment/timing issues, not logic bugs. Priority: fix before staging promotion.
+**Trigger:** any kernel→plugin (or plugin→plugin forwarded) frame ≥ `COMPRESS_THRESHOLD` (64 KiB) on an auth-enabled deployment. The Rust SDK re-exports the same `write_frame_raw`, so plugin→kernel large frames break identically. Reachable via events, forwarded IPC payloads, and any large action response.
+
+**Why undetected:** the compression tests (`tests/unit/test_framing.rs:284`) never enable MAC, and the MAC tests never exceed the compression threshold. No test exercises the intersection.
+
+**Fix:** compute the MAC over the *wire* bytes. Either (a) compress first, then tag the final on-wire header+payload, or (b) after decompression on read, clear `FLAG_COMPRESSED` and reset `length` to the decompressed size *before* reconstructing the header for verification — and correspondingly tag over the pre-compression form on both ends. Pick one canonical "what the MAC covers" and apply it symmetrically.
 
 ---
 
-## Documentation — Files Requiring Action
+### BUG-002 — Forwarding/broadcasting a compressed frame corrupts it (Critical)
 
-### Root-level MD files
+**Files:** `src/ipc/framing.rs:230-235`, `src/ipc/protocol.rs:492-515` (forward), `src/ipc/protocol.rs:556-587` (broadcast)
 
-| File | Status | Action |
-|------|--------|--------|
-| `README.md` | Active | Keep |
-| `CLAUDE.md` | Active | Keep |
-| `AUDIT.md` | Active (this file) | Keep |
-| `ROADMAP.md` | Active — security/hardening tracker | Keep; consider renaming to `SECURITY_ROADMAP.md` for clarity |
+Same root cause as BUG-001, independent of MAC. After `read_frame_body` decompresses, the returned `Frame` has `payload = plaintext` but `flags` still carries `FLAG_COMPRESSED`. `test_framing.rs:302` asserts this on purpose (`FLAG_COMPRESSED must be set on received frame`), so it is intended behavior — and it is wrong.
 
-### `docs/` files
+The router forwards this frame verbatim to the target's write loop. `write_frame_raw` sees `flags & FLAG_COMPRESSED != 0` (framing.rs:136) and therefore **skips re-compression**, writing the *plaintext* payload on the wire while `FLAG_COMPRESSED` is still set and `length`/`crc` are recomputed over the plaintext. The receiving peer sees `FLAG_COMPRESSED`, calls `zstd::bulk::decompress` on plaintext bytes → decompression error → `VeyronError::Internal` → frame read fails → **connection dropped** (framing.rs:231-232, connection.rs:255).
 
-| File | Status | Action |
-|------|--------|--------|
-| `docs/FRAMING.md` | Active — flag bit authority | Keep |
-| `docs/PLUGIN_REGISTRY_SCHEMA.md` | Active — schema contracts | Keep |
-| `docs/VEYRON_ARCHITECTURE.md` | Stale — describes old module layout in Russian | Archive |
-| `docs/FOLDER_TREE.md` | Stale — describes `veyron/kernel/cairo/plugins/` monorepo that was never built | Delete or replace |
-| `docs/ROADMAP.md` | Obsolete — Phase 1.1 planning (3-week sprint, all tasks ✅) | Archive |
-| `docs/ROADMAP_v2.md` | Superseded — Russian ecosystem roadmap, explicitly replaced by v3 | Archive |
-| `docs/ROADMAP_v3.md` | Historical — Phase 2.1–2.4 all completed 2026-06-30; no open tasks | Archive after Phase 3 planning doc created |
-| `docs/CORE_ROADMAP.md` | Obsolete — all 5 sprints complete, last updated 2026-06-21 | Archive |
-| `docs/superpowers/` | Planning artifacts | Keep (process history) |
+**Trigger:** any plugin-to-plugin unicast or broadcast of a payload ≥ 64 KiB.
 
-**Recommended action:** Create `docs/archive/` and move the 4 obsolete files there. Do not delete — they contain useful history.
+**Fix:** clear `FLAG_COMPRESSED` and reset `length` to the decompressed length in `read_frame_body` once the payload has been decompressed, so the in-memory `Frame` invariant is "payload is always plaintext; flags describe the plaintext." Update the assertion in `test_framing.rs:302` to match (it currently encodes the bug).
 
 ---
 
-## Security Vulnerabilities — Full Status
+### BUG-003 — Fragment reassembly has no size or stream-count cap (High, DoS)
 
-All 22 tracked vulnerabilities are resolved. No open CVEs.
+**File:** `src/ipc/connection.rs:180-205` (`run`), `:47-62` (prune)
 
-| Range | Count | Status |
-|-------|-------|--------|
-| VULN-001 – VULN-007 | 7 | ✅ All closed (Phase 1.x hardening) |
-| VULN-008 – VULN-011 | 4 | ✅ All closed (HTTP auth, plugin validation, SDK MAC) |
-| VULN-012 – VULN-015 | 4 | ✅ All closed (broadcast security, mutex poison) |
-| VULN-016 – VULN-019 | 4 | ✅ All closed (WS error budget, rate limit, TOCTOU, connection limit) |
-| VULN-020 – VULN-022 | 3 | ✅ All closed (MAC race, watchdog pong, UTF-8 target) |
+`ReassemblyBuf` accumulates fragments with only a 30 s idle timeout. There is **no** cap on:
 
----
+- **Reassembled payload size.** `total` is a `u16` (up to 65 535) and each fragment frame may carry up to `MAX_PAYLOAD_SIZE` (1 MiB) of chunk data. A completed reassembly therefore has no 1 MiB ceiling — it bypasses the frame size limit entirely, and `length: payload.len() as u32` (connection.rs:200) **truncates** if the total exceeds 4 GiB, producing a length field that disagrees with the payload.
+- **Concurrent streams.** `reassembly_map` is keyed by attacker-chosen `stream_id` (`u32`) with no entry cap. A peer can open unbounded incomplete streams and buffer memory up to the 30 s prune window (≈ line-rate × 30 s) with the kernel holding all of it.
 
-## Audit History
+The previous audit marked "Fragment-based memory exhaustion ✅ PASS — pruned after 30 s." 30 s of buffering with no cap is not a mitigation.
 
-| Date | Commit | Score | Key Changes |
-|------|--------|-------|-------------|
-| 2026-06-20 | `1c2a824` | 60/100 | Phase 1.1 baseline: UDS, framing, registry |
-| 2026-06-27 | — | 78/100 | T-01–T-07: MAC, JWT, socket perms, error budget, watchdog |
-| 2026-06-29 | — | 82/100 | VULN-008: HTTP GET endpoints auth-gated |
-| 2026-06-30 | `c476415` | 85/100 | T-08/T-09 SDK MAC; VULN-009–022 lifecycle closed |
-| 2026-07-01 | `bead6b5` | **93/100** | Phase 2.1–2.4 complete; all AUDIT-001–005 closed; 6 test failures remain |
+**Fix:** cap the number of concurrent reassembly streams per connection; cap cumulative buffered bytes per stream and per connection; reject reassembled payloads that would exceed `MAX_PAYLOAD_SIZE`; validate that `frag_hdr.total` is consistent across a stream.
 
 ---
 
-*Next audit scheduled after: live marketplace registry created (AUDIT-007) and failing tests fixed (AUDIT-006).*
+### BUG-004 — HTTP rate limit keyed on unauthenticated `sub` (Medium)
+
+**File:** `src/api/rate_limit.rs:48-63`
+
+`extract_sub` decodes the bearer JWT with `insecure_disable_signature_validation()` and `validate_exp = false`, then rate-limits on the resulting `sub`. Because the signature is never checked at this layer, `sub` is fully attacker-controlled:
+
+- **Bypass:** an attacker sends a fresh forged token with a random `sub` per request → each request lands in a distinct bucket → never rate-limited. The subsequent auth middleware rejects the request, but the rate limiter provides no protection against an unauthenticated request flood — which is exactly what it is supposed to blunt.
+- **Targeted exhaustion:** an attacker sets `sub` to a legitimate plugin's id and burns that victim's bucket, causing 429s for the real token.
+
+**Fix:** rate-limit unauthenticated traffic by source (connection/IP) before auth, and apply the per-`sub` limit only *after* signature verification (i.e. inside/after auth middleware using validated claims).
+
+---
+
+### BUG-005 — Shutdown grace: passed argument is dead; slowest plugin gates all (Low)
+
+**Files:** `src/plugins/supervisor.rs:269-297`, `src/kernel/orchestrator.rs:281`
+
+`graceful_shutdown(&self, _default_grace_seconds: u32)` ignores its argument (note the leading underscore) and instead uses `max()` of every plugin's `grace_seconds`. Orchestrator passes a hardcoded `GRACE_SECONDS = 5` that has no effect. Consequences: a single plugin configured with a large `grace_seconds` delays SIGKILL for *all* plugins by that amount; and the "default 5 s" the caller thinks it is passing is never honored (the real default only applies when *every* plugin has `grace_seconds == 0`).
+
+**Fix:** either honor the passed default as the floor, or SIGKILL each plugin on its own per-plugin deadline rather than one shared max.
+
+---
+
+### BUG-006 — Predictable world-directory socket fallback (Low)
+
+**File:** `src/utils/config.rs:89-95`, `src/ipc/server.rs:29`
+
+When `XDG_RUNTIME_DIR` is unset, the socket falls back to `/tmp/veyron.sock` (predictable, world-writable dir). `UdsServer::start` unconditionally `remove_file`s the path before bind. The 0o177-umask + `set_permissions(0o600)` protects the socket itself, but the predictable path in a shared `/tmp` invites pre-creation / squatting nuisance. Prefer failing closed or using a per-user dir when `XDG_RUNTIME_DIR` is absent.
+
+---
+
+## What still checks out
+
+These prior-audit claims were re-verified against the code and hold:
+
+- **UDS-only IPC**, loopback-only HTTP bind (`api/server.rs:152`), 0o600 socket via pre-bind umask (`ipc/server.rs:37-51`).
+- **Default-deny peer IPC**: `check_ipc_send` + `check_ipc_target` enforced on both `forward` and `broadcast` (`protocol.rs:449-474,527-565`); empty `ipc_targets` = deny-all.
+- **JWT `sub == plugin_id`** at registration (`protocol.rs:222`); token perms override manifest (`:231-232`).
+- **Registration integrity**: one plugin per conn_id, reserved-id/charset/length validation (`registry.rs:47-59,128-152`).
+- **Zip-slip**: `..`/root/prefix/absolute rejected, symlinks skipped, post-create canonical containment check (`installer.rs:233-277`).
+- **SHA-256 archive gate** and atomic install with `.bak` rollback (`installer.rs:104-171`).
+- **Broadcast strips `FLAG_MAC_PRESENT`** so each recipient re-tags with its own key (`protocol.rs:566-576`) — correct in principle, though it inherits BUG-002 for compressed payloads.
+- **Mutex poison recovery** on hot paths (`connection.rs:127,269`; `events/store.rs`).
+- **Watchdog** does not reset pong after SIGKILL (`supervisor.rs:410-414`).
+
+---
+
+## Recommended order of work
+
+1. **BUG-001 + BUG-002** — fix together; both are the "flags/length not normalized after decompress" invariant break. Add a test that sends a ≥64 KiB payload over a MAC-enabled connection and one that forwards a ≥64 KiB payload plugin→plugin. Correct `test_framing.rs:302`.
+2. **BUG-003** — add reassembly caps + reject over-size reassembled frames.
+3. **BUG-004** — move per-token rate limiting behind signature verification.
+4. **BUG-005 / BUG-006** — cleanups.
+5. Re-run `cargo test --all --all-features` and refresh the (currently stale) test baseline before re-scoring.
+
+---
+
+## Superseded prior claims
+
+The previous AUDIT.md (`bead6b5`) stated framing/MAC = 10/10 and "all VULN-001–022 resolved." That assessment predates the Phase 3 compression code (`234183a`) and is retracted for the framing/MAC/fragmentation dimensions per BUG-001/002/003 above. VULN-005 (per-frame MAC) is effectively regressed for all compressed frames.

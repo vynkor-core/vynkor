@@ -1,9 +1,11 @@
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio::net::UnixStream;
+use veyron::auth::frame_mac::{compute_tag, derive_session_key, verify_tag};
 use veyron::ipc::framing::{
-    read_frame, read_frame_with_timeout, target_as_str, write_frame, write_frame_raw, Frame,
-    COMPRESS_THRESHOLD, FLAG_COMPRESSED, MAX_PAYLOAD_SIZE,
+    read_frame, read_frame_with_timeout, serialize_header, target_as_str, write_frame,
+    write_frame_raw, Frame, COMPRESS_THRESHOLD, FLAG_COMPRESSED, FLAG_MAC_PRESENT,
+    MAX_PAYLOAD_SIZE,
 };
 use veyron::utils::errors::VeyronError;
 
@@ -297,9 +299,19 @@ async fn large_payload_compressed_in_transit_and_decompressed_on_read() {
     write_frame_raw(&mut w, &frame).await.expect("write failed");
 
     let received = read_frame(&mut r).await.expect("read failed");
-    // Router sees decompressed payload; FLAG_COMPRESSED is preserved in flags.
+    // Router sees plaintext: payload is always decompressed, and flags/length
+    // are normalized to describe the plaintext, not the wire bytes.
     assert_eq!(received.payload, payload, "payload must round-trip intact");
-    assert_ne!(received.flags & FLAG_COMPRESSED, 0, "FLAG_COMPRESSED must be set on received frame");
+    assert_eq!(
+        received.flags & FLAG_COMPRESSED,
+        0,
+        "FLAG_COMPRESSED must be cleared on received frame"
+    );
+    assert_eq!(
+        received.length as usize,
+        payload.len(),
+        "length must reflect decompressed size"
+    );
 }
 
 #[tokio::test]
@@ -320,5 +332,77 @@ async fn small_payload_not_compressed() {
 
     let received = read_frame(&mut r).await.expect("read failed");
     assert_eq!(received.payload, payload, "payload must round-trip intact");
-    assert_eq!(received.flags & FLAG_COMPRESSED, 0, "FLAG_COMPRESSED must NOT be set for small payload");
+    assert_eq!(
+        received.flags & FLAG_COMPRESSED,
+        0,
+        "FLAG_COMPRESSED must NOT be set for small payload"
+    );
+}
+
+#[tokio::test]
+async fn large_payload_with_mac_verifies_on_auth_connection() {
+    // BUG-001 regression: MAC is tagged over the plaintext header+payload
+    // before write_frame_raw compresses. The receiver must normalize the
+    // decompressed frame back to plaintext flags/length so the tag matches.
+    let (mut w, mut r) = make_pair().await;
+    let key = derive_session_key(b"secret", b"nonce-aaaaaaaaaa", "plugin");
+    let payload = vec![b'A'; COMPRESS_THRESHOLD + 1024];
+
+    let mut frame = Frame {
+        magic: 0x5652,
+        flags: 0,
+        length: payload.len() as u32,
+        target: [0u8; 32],
+        crc32: crc32fast::hash(&payload),
+        payload: payload.clone(),
+        mac: None,
+    };
+    frame.flags |= FLAG_MAC_PRESENT;
+    let header = serialize_header(&frame);
+    frame.mac = Some(compute_tag(&key, &header, &frame.payload));
+
+    write_frame_raw(&mut w, &frame).await.expect("write failed");
+
+    let received = read_frame(&mut r).await.expect("read failed");
+    assert_eq!(received.payload, payload, "payload must round-trip intact");
+    let recv_header = serialize_header(&received);
+    let tag = received.mac.expect("MAC tag must be present");
+    assert!(
+        verify_tag(&key, &recv_header, &received.payload, &tag),
+        "MAC must verify for a >=64KiB frame on an auth-enabled connection"
+    );
+}
+
+#[tokio::test]
+async fn decompressed_frame_recompresses_cleanly_on_forward() {
+    // BUG-002 regression: a frame decompressed on read must not retain
+    // FLAG_COMPRESSED, or re-forwarding it via write_frame_raw would skip
+    // recompression and emit plaintext bytes falsely flagged compressed.
+    let (mut w1, mut r1) = make_pair().await;
+    let payload = vec![b'Z'; COMPRESS_THRESHOLD + 2048];
+    let frame = Frame {
+        magic: 0x5652,
+        flags: 0,
+        length: payload.len() as u32,
+        target: [0u8; 32],
+        crc32: crc32fast::hash(&payload),
+        payload: payload.clone(),
+        mac: None,
+    };
+    write_frame_raw(&mut w1, &frame)
+        .await
+        .expect("write failed");
+    let received = read_frame(&mut r1).await.expect("read failed");
+    assert_eq!(received.flags & FLAG_COMPRESSED, 0);
+
+    // Router re-forwards the decompressed frame to a second peer.
+    let (mut w2, mut r2) = make_pair().await;
+    write_frame_raw(&mut w2, &received)
+        .await
+        .expect("forward failed");
+    let forwarded = read_frame(&mut r2).await.expect("forwarded read failed");
+    assert_eq!(
+        forwarded.payload, payload,
+        "forwarded payload must decompress intact"
+    );
 }

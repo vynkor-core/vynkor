@@ -17,7 +17,11 @@ fn echo_plugin_binary() -> Option<std::path::PathBuf> {
     let bin = std::env::current_dir()
         .ok()?
         .join("target/debug/echo_plugin_rs");
-    if bin.exists() { Some(bin) } else { None }
+    if bin.exists() {
+        Some(bin)
+    } else {
+        None
+    }
 }
 
 /// Spawn the echo plugin binary, send ActionRequest, verify ActionResponse.
@@ -74,7 +78,11 @@ async fn cpp_sdk_echo_plugin_round_trip() {
     match env.payload {
         Some(envelope::Payload::ActionResponse(r)) => {
             assert_eq!(r.action_id, "cpp-act-1");
-            assert!(r.error.is_empty(), "echo plugin returned error: {}", r.error);
+            assert!(
+                r.error.is_empty(),
+                "echo plugin returned error: {}",
+                r.error
+            );
             assert_eq!(r.status, ActionStatus::ActionOk as i32);
         }
         other => panic!("expected ActionResponse, got {other:?}"),

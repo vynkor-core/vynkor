@@ -266,3 +266,90 @@ async fn spawned_process_inherits_socket_path_env() {
     // We verify by checking the exit code recorded
     assert!(proc.pid > 0, "must have a valid pid");
 }
+
+// ── T-13: BUG-005 — per-plugin shutdown grace must not be gated by the
+// slowest plugin ──────────────────────────────────────────────────────────
+
+fn pid_alive(pid: u32) -> bool {
+    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), None).is_ok()
+}
+
+fn ignores_sigterm_config(plugin_id: &str, grace_seconds: u32) -> PluginConfig {
+    PluginConfig {
+        plugin_id: plugin_id.to_string(),
+        binary_path: PathBuf::from("/bin/sh"),
+        // Ignore SIGTERM so the process only ever dies via SIGKILL, letting
+        // the test observe exactly when the supervisor's grace timer fires.
+        // The loop (rather than a tail `sleep 60`) prevents shells that
+        // exec-optimize a single trailing simple command from replacing this
+        // process image and losing the SIGTERM trap disposition.
+        args: vec![
+            "-c".to_string(),
+            "trap '' TERM; while true; do sleep 1; done".to_string(),
+        ],
+        env: vec![],
+        restart_policy: RestartPolicy::Never,
+        max_restarts: 0,
+        grace_seconds,
+        sandbox: false,
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn graceful_shutdown_kills_each_plugin_on_its_own_deadline() {
+    let sup = Arc::new(PluginSupervisor::new("/tmp/veyron_grace_test.sock"));
+
+    let fast = sup
+        .spawn_plugin(ignores_sigterm_config("grace_fast", 1))
+        .await
+        .expect("spawn must succeed");
+    let slow = sup
+        .spawn_plugin(ignores_sigterm_config("grace_slow", 5))
+        .await
+        .expect("spawn must succeed");
+
+    assert!(
+        pid_alive(fast.pid) && pid_alive(slow.pid),
+        "both must start alive"
+    );
+
+    // Give each shell time to install its `trap '' TERM` before we signal it —
+    // otherwise SIGTERM can arrive before the trap is installed and kill the
+    // process via the default disposition, before the grace timer ever fires.
+    sleep(Duration::from_millis(100)).await;
+    assert!(
+        pid_alive(fast.pid) && pid_alive(slow.pid),
+        "both must still be alive after trap installs"
+    );
+
+    let sup_clone = Arc::clone(&sup);
+    let shutdown = tokio::spawn(async move {
+        sup_clone.graceful_shutdown(5).await;
+    });
+
+    sleep(Duration::from_millis(100)).await;
+
+    // Shortly after the fast plugin's 1s grace elapses, it must be dead while
+    // the slow plugin (5s grace) is still alive — SIGKILL is per-plugin, not
+    // gated on the max grace across all plugins.
+    sleep(Duration::from_millis(1200)).await;
+    assert!(
+        !pid_alive(fast.pid),
+        "fast plugin must be SIGKILLed at its own ~1s deadline"
+    );
+    assert!(
+        pid_alive(slow.pid),
+        "slow plugin must still be alive before its 5s deadline"
+    );
+
+    shutdown.await.expect("graceful_shutdown must complete");
+    // SIGKILL delivery is synchronous, but reaping the zombie happens on a
+    // separate task (the `child.wait()` spawned in `spawn_internal`); give it
+    // a tick to run before asserting the pid is gone.
+    sleep(Duration::from_millis(100)).await;
+    assert!(
+        !pid_alive(slow.pid),
+        "slow plugin must be dead once graceful_shutdown returns"
+    );
+}

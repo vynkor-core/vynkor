@@ -38,11 +38,7 @@ impl SdkHarness {
         Self::start_at(socket_path, port, Some(secret.to_string())).await
     }
 
-    async fn start_at(
-        socket_path: PathBuf,
-        port: u16,
-        jwt_secret: Option<String>,
-    ) -> Self {
+    async fn start_at(socket_path: PathBuf, port: u16, jwt_secret: Option<String>) -> Self {
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
         let socket_str = socket_path.to_string_lossy().to_string();

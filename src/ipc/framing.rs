@@ -132,17 +132,17 @@ where
 
     // Compress payloads at or above the threshold when FLAG_COMPRESSED is not
     // already set and the payload is not raw binary (audio bypasses compression).
-    let (wire_payload, wire_flags) =
-        if frame.payload.len() >= COMPRESS_THRESHOLD && frame.flags & FLAG_COMPRESSED == 0
-            && frame.flags & FLAG_RAW_BINARY == 0
-        {
-            match zstd::bulk::compress(&frame.payload, 3) {
-                Ok(c) if c.len() < frame.payload.len() => (c, frame.flags | FLAG_COMPRESSED),
-                _ => (frame.payload.clone(), frame.flags),
-            }
-        } else {
-            (frame.payload.clone(), frame.flags)
-        };
+    let (wire_payload, wire_flags) = if frame.payload.len() >= COMPRESS_THRESHOLD
+        && frame.flags & FLAG_COMPRESSED == 0
+        && frame.flags & FLAG_RAW_BINARY == 0
+    {
+        match zstd::bulk::compress(&frame.payload, 3) {
+            Ok(c) if c.len() < frame.payload.len() => (c, frame.flags | FLAG_COMPRESSED),
+            _ => (frame.payload.clone(), frame.flags),
+        }
+    } else {
+        (frame.payload.clone(), frame.flags)
+    };
 
     // CRC32 is over the compressed bytes — the bytes actually on the wire.
     let wire_crc = crc32fast::hash(&wire_payload);
@@ -227,11 +227,19 @@ where
         return Err(VeyronError::FrameCrcMismatch);
     }
 
-    let payload = if flags & FLAG_COMPRESSED != 0 {
-        zstd::bulk::decompress(&payload, MAX_PAYLOAD_SIZE)
-            .map_err(|e| VeyronError::Internal(format!("decompress frame: {e}")))?
+    // Normalize the in-memory invariant: payload is always plaintext, and
+    // flags/length/crc32 describe the plaintext, regardless of what was on the
+    // wire. The MAC (if any) was computed by the sender over the pre-compression
+    // header+payload, so crc32 must be recomputed over the decompressed bytes —
+    // the wire crc32 (over compressed bytes) would fail verification.
+    let (payload, flags, length, crc32) = if flags & FLAG_COMPRESSED != 0 {
+        let decompressed = zstd::bulk::decompress(&payload, MAX_PAYLOAD_SIZE)
+            .map_err(|e| VeyronError::Internal(format!("decompress frame: {e}")))?;
+        let plain_len = decompressed.len() as u32;
+        let plain_crc = crc32fast::hash(&decompressed);
+        (decompressed, flags & !FLAG_COMPRESSED, plain_len, plain_crc)
     } else {
-        payload
+        (payload, flags, length, crc32)
     };
 
     let mac = if flags & FLAG_MAC_PRESENT != 0 {

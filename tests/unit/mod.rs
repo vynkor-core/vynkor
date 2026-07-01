@@ -1,14 +1,14 @@
 mod test_api;
 mod test_completions;
-mod test_installer;
-mod test_manifest_enforcement;
 mod test_errors;
 mod test_event_bus;
 mod test_event_store;
 mod test_framing;
+mod test_installer;
 mod test_jwt;
 mod test_kernel;
 mod test_loader;
+mod test_manifest_enforcement;
 mod test_metrics;
 mod test_permissions;
 mod test_proto;

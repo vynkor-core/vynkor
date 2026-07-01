@@ -79,15 +79,40 @@ async fn server_assigns_unique_conn_ids_to_multiple_connections() {
 #[tokio::test]
 async fn server_cleans_up_stale_socket_on_start() {
     let path = tmp_socket();
-    // create a stale socket file
-    std::fs::write(&path, b"stale").unwrap();
+    // create a genuine stale UDS socket at the path (e.g. left behind by a
+    // crashed prior instance) — this is safe to remove and rebind.
+    let (tx0, _rx0) = mpsc::channel::<IncomingMessage>(16);
+    let (_stale_handle, _stale_disc) = UdsServer::start(&path, tx0, 1024)
+        .await
+        .expect("first bind must succeed");
 
     let (tx, _rx) = mpsc::channel::<IncomingMessage>(16);
-    // must not fail even though file exists
+    // must not fail even though a stale socket file exists at the path
     let result = UdsServer::start(&path, tx, 1024).await;
     assert!(
         result.is_ok(),
         "server must start even with stale socket file"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn server_refuses_to_bind_over_non_socket_path() {
+    let path = tmp_socket();
+    // a regular file at the socket path is not ours to delete (BUG-006) —
+    // the kernel must refuse to bind rather than silently unlinking it.
+    std::fs::write(&path, b"not a socket").unwrap();
+
+    let (tx, _rx) = mpsc::channel::<IncomingMessage>(16);
+    let result = UdsServer::start(&path, tx, 1024).await;
+    assert!(
+        result.is_err(),
+        "server must refuse to bind over a pre-existing non-socket file"
+    );
+    assert!(
+        path.exists(),
+        "the pre-existing non-socket file must not be deleted"
     );
 
     let _ = std::fs::remove_file(&path);
