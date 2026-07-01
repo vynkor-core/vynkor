@@ -80,9 +80,18 @@ async fn fetch_from_network(url: &str) -> Result<Vec<PluginEntry>, VeyronError> 
         )));
     }
 
-    response
-        .json::<Vec<PluginEntry>>()
+    let body = response
+        .text()
         .await
+        .map_err(|e| VeyronError::NetworkError(format!("read registry response: {e}")))?;
+
+    if body.trim().is_empty() {
+        return Err(VeyronError::NetworkError(format!(
+            "registry response body was empty (fetched from {url})"
+        )));
+    }
+
+    serde_json::from_str(&body)
         .map_err(|e| VeyronError::NetworkError(format!("parse registry JSON: {e}")))
 }
 
@@ -318,5 +327,54 @@ mod tests {
             result.is_err(),
             "should error when no cache and network fails"
         );
+    }
+
+    #[tokio::test]
+    async fn empty_response_body_gives_actionable_error() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/registry.json")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body("")
+            .expect(1)
+            .create_async()
+            .await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = tmp.path().join("registry.json");
+        let url = format!("{}/registry.json", server.url());
+
+        let err = fetch_registry_from(&url, false, &cache).await.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("registry response body was empty"),
+            "unexpected: {msg}"
+        );
+
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn malformed_response_body_reports_parse_error() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/registry.json")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body("{ not json")
+            .expect(1)
+            .create_async()
+            .await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = tmp.path().join("registry.json");
+        let url = format!("{}/registry.json", server.url());
+
+        let err = fetch_registry_from(&url, false, &cache).await.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("parse registry JSON"), "unexpected: {msg}");
+
+        mock.assert_async().await;
     }
 }

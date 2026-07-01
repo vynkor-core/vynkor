@@ -1,6 +1,6 @@
 use clap::Subcommand;
 
-use crate::marketplace::installer::install;
+use crate::marketplace::installer::{install, uninstall};
 use crate::marketplace::registry::{fetch_registry, fetch_registry_with_url, PluginEntry};
 
 #[derive(Subcommand)]
@@ -32,6 +32,9 @@ pub enum PluginCmd {
         target: String,
         #[arg(long)]
         refresh: bool,
+    },
+    Remove {
+        target: String,
     },
 }
 
@@ -84,6 +87,17 @@ pub async fn handle(cmd: PluginCmd, port: u16, registry_url: Option<&str>) -> an
         PluginCmd::Install { target, refresh } => {
             let entries = fetch(refresh).await?;
             install(&entries, &target).await?;
+        }
+        PluginCmd::Remove { target } => {
+            uninstall(&target)?;
+
+            if let Ok(cfg) = crate::utils::config::load_config("config.yaml") {
+                if cfg.plugins.iter().any(|p| p.id == target) {
+                    println!(
+                        "Note: '{target}' is still listed under `plugins:` in config.yaml — remove that entry too."
+                    );
+                }
+            }
         }
     }
     Ok(())

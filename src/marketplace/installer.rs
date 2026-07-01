@@ -52,9 +52,14 @@ pub fn plugin_dir() -> PathBuf {
         })
 }
 
+/// Staging directory for an in-progress install. Deliberately placed inside
+/// `plugin_dir()` rather than `/tmp` — the final install step atomically
+/// renames this directory into place, and `fs::rename` fails with EXDEV
+/// ("Invalid cross-device link") when source and destination are on
+/// different filesystems, which `/tmp` (often tmpfs) commonly is relative
+/// to the plugin directory.
 fn tmp_install_dir(slug: &str) -> PathBuf {
-    let tmp = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into());
-    PathBuf::from(tmp).join(format!("veyron-install-{slug}"))
+    plugin_dir().join(format!(".install-tmp-{slug}"))
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
@@ -279,6 +284,26 @@ pub fn extract_zip(archive: &Path, dest: &Path) -> Result<(), VeyronError> {
         }
     }
 
+    Ok(())
+}
+
+/// Remove an installed plugin's directory from `plugin_dir()`.
+///
+/// This only deletes files on disk — it does not stop a running instance or
+/// edit `config.yaml`. Callers should stop the plugin first if the kernel is
+/// running it.
+pub fn uninstall(slug: &str) -> Result<(), VeyronError> {
+    let dest = plugin_dir().join(slug);
+
+    if !dest.exists() {
+        return Err(VeyronError::PluginNotFound(format!(
+            "'{slug}' is not installed at {}",
+            dest.display()
+        )));
+    }
+
+    fs::remove_dir_all(&dest).map_err(VeyronError::Io)?;
+    println!("✓ Removed {slug} from {}/", dest.display());
     Ok(())
 }
 
