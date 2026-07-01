@@ -7,6 +7,7 @@ use axum::{
     Router,
 };
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::{atomic::AtomicU64, Arc};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -107,6 +108,8 @@ pub struct ApiServer {
     started_at: Instant,
     rate_limit_rps: Option<u32>,
     rate_limit_burst: Option<u32>,
+    tls_cert_path: Option<PathBuf>,
+    tls_key_path: Option<PathBuf>,
 }
 
 impl ApiServer {
@@ -119,6 +122,8 @@ impl ApiServer {
         started_at: Instant,
         rate_limit_rps: Option<u32>,
         rate_limit_burst: Option<u32>,
+        tls_cert_path: Option<PathBuf>,
+        tls_key_path: Option<PathBuf>,
     ) -> Self {
         Self {
             port,
@@ -129,6 +134,8 @@ impl ApiServer {
             started_at,
             rate_limit_rps,
             rate_limit_burst,
+            tls_cert_path,
+            tls_key_path,
         }
     }
 
@@ -143,9 +150,20 @@ impl ApiServer {
             self.rate_limit_burst,
         );
         let addr = SocketAddr::from(([127, 0, 0, 1], self.port));
-        info!("HTTP API: http://localhost:{}", self.port);
-        let listener = tokio::net::TcpListener::bind(addr).await?;
-        axum::serve(listener, app).await?;
+
+        if let (Some(cert), Some(key)) = (&self.tls_cert_path, &self.tls_key_path) {
+            info!("HTTPS/WSS API: https://localhost:{}", self.port);
+            let tls_config =
+                axum_server::tls_rustls::RustlsConfig::from_pem_file(cert, key).await?;
+            axum_server::bind_rustls(addr, tls_config)
+                .serve(app.into_make_service())
+                .await?;
+        } else {
+            info!("HTTP API: http://localhost:{}", self.port);
+            axum_server::bind(addr)
+                .serve(app.into_make_service())
+                .await?;
+        }
         Ok(())
     }
 }

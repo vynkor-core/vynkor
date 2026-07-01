@@ -1,7 +1,7 @@
 use clap::Subcommand;
 
 use crate::marketplace::installer::install;
-use crate::marketplace::registry::{fetch_registry, PluginEntry};
+use crate::marketplace::registry::{fetch_registry, fetch_registry_with_url, PluginEntry};
 
 #[derive(Subcommand)]
 pub enum PluginCmd {
@@ -35,14 +35,25 @@ pub enum PluginCmd {
     },
 }
 
-pub async fn handle(cmd: PluginCmd, port: u16) -> anyhow::Result<()> {
+pub async fn handle(cmd: PluginCmd, port: u16, registry_url: Option<&str>) -> anyhow::Result<()> {
+    let fetch = |refresh: bool| {
+        let url = registry_url.unwrap_or("");
+        async move {
+            if url.is_empty() {
+                fetch_registry(refresh).await
+            } else {
+                fetch_registry_with_url(url, refresh).await
+            }
+        }
+    };
+
     match cmd {
         PluginCmd::List { refresh } => {
-            let entries = fetch_registry(refresh).await?;
+            let entries = fetch(refresh).await?;
             print_table(&entries);
         }
         PluginCmd::Search { query, refresh } => {
-            let entries = fetch_registry(refresh).await?;
+            let entries = fetch(refresh).await?;
             let q = query.to_lowercase();
             let filtered: Vec<_> = entries
                 .into_iter()
@@ -71,7 +82,7 @@ pub async fn handle(cmd: PluginCmd, port: u16) -> anyhow::Result<()> {
             print!("{body}");
         }
         PluginCmd::Install { target, refresh } => {
-            let entries = fetch_registry(refresh).await?;
+            let entries = fetch(refresh).await?;
             install(&entries, &target).await?;
         }
     }

@@ -8,8 +8,10 @@ MAGIC = 0x5652
 HEADER_FMT = ">HHI32sI"  # magic, flags, length, target, crc32
 HEADER_SIZE = struct.calcsize(HEADER_FMT)  # 44
 MAX_PAYLOAD = 1_048_576
-FLAG_MAC_PRESENT = 0x0001
-FLAG_RAW_BINARY  = 0x0010  # payload is raw bytes (PCM/Opus); router skips Protobuf decode
+FLAG_MAC_PRESENT   = 0x0001
+FLAG_COMPRESSED    = 0x0002  # payload is zstd-compressed; CRC32 over compressed bytes
+FLAG_RAW_BINARY    = 0x0010  # payload is raw bytes (PCM/Opus); router skips Protobuf decode
+COMPRESS_THRESHOLD = 65_536  # payloads >= this size are candidates for compression
 
 
 # ---------------------------------------------------------------------------

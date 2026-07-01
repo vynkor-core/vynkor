@@ -1,6 +1,7 @@
 use crate::plugins::registry::PluginRegistry;
 use crate::proto::veyron::CommandStatus;
 use crate::utils::config::load_config;
+use crate::utils::logging::set_log_level;
 use std::time::Instant;
 
 /// Outcome of a kernel command: protobuf status code, JSON data payload, error text.
@@ -52,10 +53,23 @@ impl CommandHandler {
             }
             "reload_config" => match config_path {
                 Some(path) => match load_config(path) {
-                    Ok(cfg) => CommandOutcome::ok(format!(
-                        r#"{{"log_level":"{}","port":{}}}"#,
-                        cfg.log_level, cfg.port
-                    )),
+                    Ok(cfg) => {
+                        let mut reloaded: Vec<&str> = vec![];
+
+                        if set_log_level(&cfg.log_level) {
+                            reloaded.push("log_level");
+                        }
+
+                        // Fields that require restart are logged and skipped.
+                        // socket_path, jwt_secret, tls_cert_path, tls_key_path
+                        // require a full kernel restart to apply.
+
+                        let items = reloaded.join("\",\"");
+                        CommandOutcome::ok(format!(
+                            r#"{{"reloaded":["{items}"],"log_level":"{}","port":{}}}"#,
+                            cfg.log_level, cfg.port
+                        ))
+                    }
                     Err(e) => CommandOutcome::err(
                         CommandStatus::CommandError,
                         format!("config reload failed: {e}"),

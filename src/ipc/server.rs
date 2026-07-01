@@ -5,11 +5,16 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::net::UnixListener;
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
+
+// umask is process-global; serialize bind across threads to prevent
+// racing with concurrent tempdir() calls in parallel tests.
+#[cfg(unix)]
+static BIND_LOCK: Mutex<()> = Mutex::new(());
 
 use metrics::counter;
 
@@ -27,13 +32,19 @@ impl UdsServer {
         // permissions atomically, closing the TOCTOU window between bind() and
         // a separate chmod() call (VULN-017). The explicit set_permissions() call
         // below is kept as defence-in-depth.
+        // BIND_LOCK serializes the umask window so parallel threads don't see
+        // the changed umask while creating their own files.
         #[cfg(unix)]
-        let old_umask = nix::sys::stat::umask(nix::sys::stat::Mode::from_bits_truncate(0o177));
-
+        let bind_result = {
+            let _guard = BIND_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let old_umask =
+                nix::sys::stat::umask(nix::sys::stat::Mode::from_bits_truncate(0o177));
+            let r = UnixListener::bind(socket_path);
+            nix::sys::stat::umask(old_umask);
+            r
+        };
+        #[cfg(not(unix))]
         let bind_result = UnixListener::bind(socket_path);
-
-        #[cfg(unix)]
-        nix::sys::stat::umask(old_umask);
 
         let listener = bind_result?;
         fs::set_permissions(socket_path, fs::Permissions::from_mode(0o600))

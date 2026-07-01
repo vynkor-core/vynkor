@@ -1,4 +1,5 @@
 mod helpers;
+mod sdk_harness;
 mod test_audio_stream_permission;
 mod test_autoload;
 mod test_disconnect;
@@ -13,3 +14,6 @@ mod test_routing;
 mod test_sigterm;
 mod test_soak;
 mod test_websocket;
+mod test_sdk_rust;
+mod test_sdk_cpp;
+mod test_sdk_python;

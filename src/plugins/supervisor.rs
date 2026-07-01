@@ -5,7 +5,7 @@ use crate::plugins::registry::PluginRegistry;
 use crate::proto::veyron::{envelope, Envelope, Event, Ping};
 use crate::utils::errors::VeyronError;
 use dashmap::DashMap;
-use metrics::counter;
+use metrics::{counter, gauge};
 use prost::Message;
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -263,11 +263,22 @@ impl PluginSupervisor {
             .or_else(|| self.stopped_counts.get(plugin_id).map(|c| *c))
     }
 
-    /// Send SIGTERM to all managed plugins, wait `grace_seconds` (default 5s if zero), then
-    /// SIGKILL any that have not exited. Matches the `PluginShutdown.grace_seconds` proto field.
-    pub async fn graceful_shutdown(&self, grace_seconds: u32) {
-        let grace = if grace_seconds > 0 {
-            Duration::from_secs(grace_seconds as u64)
+    /// Send SIGTERM to all managed plugins, wait for the longest per-plugin
+    /// `grace_seconds` (default 5s if zero), then SIGKILL any that have not exited.
+    /// Uses each plugin's configured `grace_seconds` from `PluginConfig`.
+    pub async fn graceful_shutdown(&self, _default_grace_seconds: u32) {
+        if self.entries.is_empty() {
+            return;
+        }
+
+        let max_grace = self
+            .entries
+            .iter()
+            .map(|e| e.value().config.grace_seconds)
+            .max()
+            .unwrap_or(0);
+        let grace = if max_grace > 0 {
+            Duration::from_secs(max_grace as u64)
         } else {
             Duration::from_secs(5)
         };
@@ -382,6 +393,15 @@ impl PluginSupervisor {
                 .collect();
 
             for (plugin_id, pid) in supervised {
+                // --- T-07: per-plugin resource metrics (Linux only) ---
+                #[cfg(target_os = "linux")]
+                if let Some((cpu, rss)) = proc_resource_usage(pid) {
+                    gauge!("veyron_plugin_cpu_seconds_total", "plugin_id" => plugin_id.clone())
+                        .set(cpu);
+                    gauge!("veyron_plugin_memory_rss_bytes", "plugin_id" => plugin_id.clone())
+                        .set(rss);
+                }
+
                 if let Some(last_pong) = registry.last_pong(&plugin_id) {
                     if last_pong.elapsed() > deadline {
                         warn!(plugin_id = %plugin_id, "watchdog: plugin unresponsive, sending SIGKILL");
@@ -424,6 +444,34 @@ impl PluginSupervisor {
             }
         }
     }
+}
+
+/// Read CPU seconds (user+system) and RSS bytes for a given PID from `/proc`.
+/// Returns `(cpu_seconds, rss_bytes)` or None on any read/parse failure.
+#[cfg(target_os = "linux")]
+fn proc_resource_usage(pid: u32) -> Option<(f64, f64)> {
+    // --- CPU time from /proc/<pid>/stat ---
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let fields: Vec<&str> = stat.split_whitespace().collect();
+    // utime = field 14 (0-indexed: 13), stime = field 15 (0-indexed: 14)
+    let utime: u64 = fields.get(13)?.parse().ok()?;
+    let stime: u64 = fields.get(14)?.parse().ok()?;
+    // CLK_TCK is 100 on all modern Linux kernels (USER_HZ = 100).
+    const CLK_TCK: f64 = 100.0;
+    let cpu_seconds = (utime + stime) as f64 / CLK_TCK;
+
+    // --- RSS from /proc/<pid>/status ---
+    let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+    let rss_kb: f64 = status
+        .lines()
+        .find(|l| l.starts_with("VmRSS:"))?
+        .split_whitespace()
+        .nth(1)?
+        .parse()
+        .ok()?;
+    let rss_bytes = rss_kb * 1024.0;
+
+    Some((cpu_seconds, rss_bytes))
 }
 
 fn backoff_delay(restart_count: u32) -> Duration {

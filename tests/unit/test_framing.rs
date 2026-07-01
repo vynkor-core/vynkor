@@ -3,7 +3,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::UnixStream;
 use veyron::ipc::framing::{
     read_frame, read_frame_with_timeout, target_as_str, write_frame, write_frame_raw, Frame,
-    MAX_PAYLOAD_SIZE,
+    COMPRESS_THRESHOLD, FLAG_COMPRESSED, MAX_PAYLOAD_SIZE,
 };
 use veyron::utils::errors::VeyronError;
 
@@ -278,4 +278,47 @@ async fn write_frame_raw_rejects_payload_too_large() {
         "expected PayloadTooLarge, got {:?}",
         result
     );
+}
+
+#[tokio::test]
+async fn large_payload_compressed_in_transit_and_decompressed_on_read() {
+    // Payload above COMPRESS_THRESHOLD: must be compressed on wire, decompressed on read.
+    let (mut w, mut r) = make_pair().await;
+    let payload = vec![b'A'; COMPRESS_THRESHOLD + 1024]; // highly compressible
+    let frame = Frame {
+        magic: 0x5652,
+        flags: 0,
+        length: payload.len() as u32,
+        target: [0u8; 32],
+        crc32: crc32fast::hash(&payload),
+        payload: payload.clone(),
+        mac: None,
+    };
+    write_frame_raw(&mut w, &frame).await.expect("write failed");
+
+    let received = read_frame(&mut r).await.expect("read failed");
+    // Router sees decompressed payload; FLAG_COMPRESSED is preserved in flags.
+    assert_eq!(received.payload, payload, "payload must round-trip intact");
+    assert_ne!(received.flags & FLAG_COMPRESSED, 0, "FLAG_COMPRESSED must be set on received frame");
+}
+
+#[tokio::test]
+async fn small_payload_not_compressed() {
+    // Payload below COMPRESS_THRESHOLD: must NOT be compressed.
+    let (mut w, mut r) = make_pair().await;
+    let payload = vec![b'B'; 1024]; // below threshold
+    let frame = Frame {
+        magic: 0x5652,
+        flags: 0,
+        length: payload.len() as u32,
+        target: [0u8; 32],
+        crc32: crc32fast::hash(&payload),
+        payload: payload.clone(),
+        mac: None,
+    };
+    write_frame_raw(&mut w, &frame).await.expect("write failed");
+
+    let received = read_frame(&mut r).await.expect("read failed");
+    assert_eq!(received.payload, payload, "payload must round-trip intact");
+    assert_eq!(received.flags & FLAG_COMPRESSED, 0, "FLAG_COMPRESSED must NOT be set for small payload");
 }

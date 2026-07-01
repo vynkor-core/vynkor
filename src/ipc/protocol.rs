@@ -13,9 +13,11 @@ use crate::proto::veyron::{
     envelope, ActionResponse, ActionStatus, Envelope, ErrorCode, ErrorMessage, Event,
     KernelCommandAck, PermissionType, PluginRegisterAck, Pong,
 };
+use governor::{DefaultKeyedRateLimiter, Quota, RateLimiter};
 use metrics::{counter, histogram};
 use prost::Message;
 use std::collections::HashMap;
+use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -59,6 +61,7 @@ impl MessageRouter {
             None,
             None,
             None,
+            None,
         )
         .await
     }
@@ -72,6 +75,7 @@ impl MessageRouter {
         config_path: Option<String>,
         event_store: Option<Arc<EventStore>>,
         mac_secret: Option<Arc<Vec<u8>>>,
+        ipc_rate_limit_rps: Option<u32>,
     ) {
         // Per-connection protocol-error budget. A connection that produces a burst
         // of malformed/denied/unhandled messages (which each generate an error
@@ -80,8 +84,31 @@ impl MessageRouter {
         // A successful message resets the budget, so transient errors don't accrue.
         let mut error_counts: HashMap<u64, u32> = HashMap::new();
 
+        // Per-connection IPC send rate limiter keyed by conn_id.
+        let ipc_limiter: Option<Arc<DefaultKeyedRateLimiter<u64>>> =
+            ipc_rate_limit_rps.and_then(|rps| {
+                NonZeroU32::new(rps).map(|r| {
+                    Arc::new(RateLimiter::keyed(Quota::per_second(r)))
+                })
+            });
+
         while let Some(msg) = rx.recv().await {
             let conn_id = msg.conn_id;
+
+            // Per-plugin IPC rate limit: send ERR_RATE_LIMITED without disconnecting.
+            if let Some(limiter) = &ipc_limiter {
+                if limiter.check_key(&conn_id).is_err() {
+                    counter!("ipc_send_denied_total").increment(1);
+                    Self::send_error(
+                        &msg.write_tx,
+                        ErrorCode::ErrRateLimited,
+                        "IPC rate limit exceeded",
+                    )
+                    .await;
+                    continue;
+                }
+            }
+
             let target = match target_as_str(&msg.frame) {
                 Some(t) => t.to_string(),
                 None => {

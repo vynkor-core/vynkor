@@ -32,6 +32,9 @@ pub struct PluginManifest {
     pub kernel_compatibility_range: KernelCompatRange,
     pub events: Option<Vec<String>>,
     pub actions: Option<Vec<String>>,
+    /// Plugin IDs that must be loaded and registered before this plugin starts.
+    #[serde(default)]
+    pub requires: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]

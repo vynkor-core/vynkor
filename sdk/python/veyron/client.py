@@ -56,7 +56,8 @@ class VeyronClient:
         await self._send_envelope("kernel", env, force_no_mac=True)
         ack = await self.recv(force_no_mac=True)
         if ack.HasField("plugin_register_ack"):
-            nonce = ack.plugin_register_ack.session_nonce
+            # session_nonce was added in proto v1.2; use getattr for forward compat.
+            nonce = getattr(ack.plugin_register_ack, "session_nonce", b"")
             if nonce:
                 self._apply_session_nonce(plugin_id, nonce)
         return ack

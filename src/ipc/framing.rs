@@ -9,12 +9,19 @@ const HEADER_SIZE: usize = 44;
 /// `flags` bit indicating a 32-byte HMAC tag is appended after the payload.
 pub const FLAG_MAC_PRESENT: u16 = 0x0001;
 
+/// Payload is zstd-compressed. Decompressed by framing layer before delivery.
+/// CRC32 is computed over the compressed bytes (what is on the wire).
+pub const FLAG_COMPRESSED: u16 = 0x0002;
+
 /// Payload is raw binary (PCM/Opus audio). Router skips Protobuf decode.
 pub const FLAG_RAW_BINARY: u16 = 0x0010;
 
 /// Frame is one fragment of a larger message. The first [`FRAG_HEADER_SIZE`]
 /// bytes of the payload contain fragment metadata; the remainder is the chunk.
 pub const FLAG_FRAGMENTED: u16 = 0x0004;
+
+/// Payloads at or above this size are candidates for zstd compression.
+pub const COMPRESS_THRESHOLD: usize = 65_536;
 
 /// Byte length of the fragment metadata header embedded at the start of a
 /// fragmented frame's payload when [`FLAG_FRAGMENTED`] is set.
@@ -117,17 +124,42 @@ pub async fn write_frame_raw<W>(stream: &mut W, frame: &Frame) -> Result<(), Vey
 where
     W: AsyncWrite + Unpin,
 {
-    // Symmetry with read_frame: never put a frame on the wire that the peer
-    // would reject as oversized (which would cost them their connection).
+    // Reject oversized payloads before compression: we don't accept inputs that
+    // exceed the protocol limit regardless of how well they might compress.
     if frame.payload.len() > MAX_PAYLOAD_SIZE {
         return Err(VeyronError::PayloadTooLarge(frame.payload.len()));
     }
 
-    let header = serialize_header(frame);
+    // Compress payloads at or above the threshold when FLAG_COMPRESSED is not
+    // already set and the payload is not raw binary (audio bypasses compression).
+    let (wire_payload, wire_flags) =
+        if frame.payload.len() >= COMPRESS_THRESHOLD && frame.flags & FLAG_COMPRESSED == 0
+            && frame.flags & FLAG_RAW_BINARY == 0
+        {
+            match zstd::bulk::compress(&frame.payload, 3) {
+                Ok(c) if c.len() < frame.payload.len() => (c, frame.flags | FLAG_COMPRESSED),
+                _ => (frame.payload.clone(), frame.flags),
+            }
+        } else {
+            (frame.payload.clone(), frame.flags)
+        };
+
+    // CRC32 is over the compressed bytes — the bytes actually on the wire.
+    let wire_crc = crc32fast::hash(&wire_payload);
+    let wire_frame = Frame {
+        magic: frame.magic,
+        flags: wire_flags,
+        length: wire_payload.len() as u32,
+        target: frame.target,
+        crc32: wire_crc,
+        payload: wire_payload,
+        mac: frame.mac,
+    };
+    let header = serialize_header(&wire_frame);
 
     stream.write_all(&header).await?;
-    stream.write_all(&frame.payload).await?;
-    if let Some(tag) = &frame.mac {
+    stream.write_all(&wire_frame.payload).await?;
+    if let Some(tag) = &wire_frame.mac {
         stream.write_all(tag).await?;
     }
     Ok(())
@@ -189,10 +221,18 @@ where
         stream.read_exact(&mut payload).await?;
     }
 
+    // CRC is over the wire bytes (possibly compressed); verify before decompressing.
     let computed = crc32fast::hash(&payload);
     if computed != crc32 {
         return Err(VeyronError::FrameCrcMismatch);
     }
+
+    let payload = if flags & FLAG_COMPRESSED != 0 {
+        zstd::bulk::decompress(&payload, MAX_PAYLOAD_SIZE)
+            .map_err(|e| VeyronError::Internal(format!("decompress frame: {e}")))?
+    } else {
+        payload
+    };
 
     let mac = if flags & FLAG_MAC_PRESENT != 0 {
         let mut tag = [0u8; 32];

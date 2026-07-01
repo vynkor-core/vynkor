@@ -26,12 +26,29 @@ pub struct Kernel;
 
 impl Kernel {
     pub async fn run(config: Config) -> anyhow::Result<()> {
-        let shutdown = async {
+        let config_file = config.config_file.clone();
+        let shutdown = async move {
             let mut sigterm =
                 signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
-            tokio::select! {
-                _ = tokio::signal::ctrl_c() => {}
-                _ = sigterm.recv() => { info!("received SIGTERM"); }
+            let mut sighup =
+                signal(SignalKind::hangup()).expect("failed to install SIGHUP handler");
+            loop {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => break,
+                    _ = sigterm.recv() => { info!("received SIGTERM"); break; }
+                    _ = sighup.recv() => {
+                        info!("received SIGHUP — reloading config");
+                        if let Some(path) = &config_file {
+                            match crate::utils::config::load_config(path) {
+                                Ok(cfg) => {
+                                    crate::utils::logging::set_log_level(&cfg.log_level);
+                                    info!(log_level = %cfg.log_level, "config reloaded via SIGHUP");
+                                }
+                                Err(e) => tracing::warn!("SIGHUP config reload failed: {e}"),
+                            }
+                        }
+                    }
+                }
             }
         };
         Self::run_with_shutdown(config, shutdown).await
@@ -120,6 +137,7 @@ impl Kernel {
             config_path,
             event_store.clone(),
             mac_secret,
+            config.ipc_rate_limit_rps,
         ));
 
         // disconnect handler: unregister plugin + publish system.plugin_left
@@ -168,7 +186,7 @@ impl Kernel {
 
         let shutdown_supervisor = Arc::clone(&supervisor);
         let manager = Arc::new(PluginManager::new(supervisor, Arc::clone(&registry)));
-        PluginLoader::load_all(&config.plugins, &manager).await;
+        PluginLoader::load_all(&config.plugins, &manager, Some(&event_bus)).await;
         let api = ApiServer::new(
             config.port,
             manager,
@@ -178,6 +196,8 @@ impl Kernel {
             kernel_start,
             config.api_rate_limit_rps,
             config.api_rate_limit_burst,
+            config.tls_cert_path.clone(),
+            config.tls_key_path.clone(),
         );
         tokio::spawn(async move {
             if let Err(e) = api.run().await {

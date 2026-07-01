@@ -95,7 +95,16 @@ async fn fetch_from_network(url: &str) -> Result<Vec<PluginEntry>, VeyronError> 
 /// On network failure, falls back to stale cache with a warning. Returns error only
 /// when network fails *and* no cache exists.
 pub async fn fetch_registry(refresh: bool) -> Result<Vec<PluginEntry>, VeyronError> {
-    fetch_registry_from(REGISTRY_URL, refresh, &cache_path()).await
+    fetch_registry_with_url(REGISTRY_URL, refresh).await
+}
+
+/// Like `fetch_registry` but accepts a custom URL to support private registry overrides
+/// set via `registry_url:` in `config.yaml`.
+pub async fn fetch_registry_with_url(
+    url: &str,
+    refresh: bool,
+) -> Result<Vec<PluginEntry>, VeyronError> {
+    fetch_registry_from(url, refresh, &cache_path()).await
 }
 
 /// Internal implementation — separated so tests can inject a URL and cache path.

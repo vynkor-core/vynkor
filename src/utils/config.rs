@@ -67,6 +67,20 @@ pub struct Config {
     /// HTTP API rate limit: burst allowance per JWT token on top of sustained rate. Default 20.
     #[serde(default)]
     pub api_rate_limit_burst: Option<u32>,
+    /// Per-plugin IPC send rate limit (messages per second per connection). None = unlimited.
+    /// Exceeding the limit sends ERR_RATE_LIMITED without disconnecting the plugin.
+    #[serde(default)]
+    pub ipc_rate_limit_rps: Option<u32>,
+    /// TLS certificate (PEM). When both cert and key are set, the WS/HTTP gateway binds TLS.
+    #[serde(default)]
+    pub tls_cert_path: Option<PathBuf>,
+    /// TLS private key (PEM). When both cert and key are set, the WS/HTTP gateway binds TLS.
+    #[serde(default)]
+    pub tls_key_path: Option<PathBuf>,
+    /// Override the plugin registry URL. Default: official veyron-core/veyron-plugins registry.
+    /// Set to a private registry URL for air-gapped or enterprise deployments.
+    #[serde(default)]
+    pub registry_url: Option<String>,
     /// Path this config was loaded from — used by reload_config kernel command.
     #[serde(skip)]
     pub config_file: Option<String>,
@@ -110,6 +124,10 @@ impl Default for Config {
             max_connections: default_max_connections(),
             api_rate_limit_rps: None,
             api_rate_limit_burst: None,
+            ipc_rate_limit_rps: None,
+            tls_cert_path: None,
+            tls_key_path: None,
+            registry_url: None,
             config_file: None,
         }
     }

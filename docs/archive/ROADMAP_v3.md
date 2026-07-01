@@ -34,6 +34,7 @@
 | T-14 | ✅ Done | `#[cfg(not(target_os = "linux"))]` warn in `supervisor.rs::spawn_internal()`; `tracing-test` dev dep; non-Linux unit test asserts warn emitted |
 | T-15 | ✅ Done | `governor` crate; `JwtSubKeyExtractor` middleware keys by JWT `sub` (insecure decode); 429 + `Retry-After: 1` on limit; `api_rate_limit_rps`/`api_rate_limit_burst` in config; inactive when `allow_no_auth` |
 | T-16 | ✅ Done | `default_socket_path()` prefers `$XDG_RUNTIME_DIR/veyron.sock`; fallback `/tmp/veyron.sock`; 2 unit tests pass |
+| T-17 | ✅ Done | `LOG_FORMAT=json` gates `tracing_subscriber::fmt().json()`; plain text default unchanged; `json` feature added to `tracing-subscriber` |
 
 ---
 
@@ -834,7 +835,7 @@ if std::env::var("LOG_FORMAT").as_deref() == Ok("json") {
 | T-14 | macOS sandbox warning | 2.4 | P2 | ✅ 2026-06-30 |
 | T-15 | Per-token rate limiting on HTTP API | 2.4 | P2 | ✅ 2026-06-30 |
 | T-16 | Socket path hardening | 2.4 | P3 | ✅ 2026-06-30 |
-| T-17 | Structured JSON logging | 2.4 | P3 | |
+| T-17 | Structured JSON logging | 2.4 | P3 | ✅ 2026-07-01 |
 
 ---
 

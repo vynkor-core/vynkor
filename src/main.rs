@@ -106,8 +106,8 @@ async fn main() -> Result<()> {
             show_logs(&cfg.log_file, lines)?;
         }
         Commands::Plugin { cmd } => {
-            let port = load_config("config.yaml").map(|c| c.port).unwrap_or(8000);
-            plugin::handle(cmd, port).await?;
+            let cfg = load_config("config.yaml").unwrap_or_default();
+            plugin::handle(cmd, cfg.port, cfg.registry_url.as_deref()).await?;
         }
         Commands::Completions { shell } => {
             complete::generate_completions(shell);

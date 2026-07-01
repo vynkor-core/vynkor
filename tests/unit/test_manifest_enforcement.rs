@@ -192,7 +192,7 @@ async fn invalid_plugin_skipped_valid_loads() {
     ];
 
     let manager = make_manager("/tmp/veyron_manifest_enforcement.sock");
-    PluginLoader::load_all(&defs, &manager).await;
+    PluginLoader::load_all(&defs, &manager, None).await;
     sleep(Duration::from_millis(100)).await;
 
     assert!(

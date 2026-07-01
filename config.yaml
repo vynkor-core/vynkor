@@ -20,6 +20,13 @@ allow_no_auth: true
 # api_rate_limit_rps: 100    # sustained requests/second per JWT token
 # api_rate_limit_burst: 20   # burst allowance on top of sustained rate; excess → 429
 
+# Per-plugin IPC send rate limit. Exceeding returns ERR_RATE_LIMITED without disconnect.
+# ipc_rate_limit_rps: 500    # messages per second per plugin connection; default: unlimited
+
+# TLS for WebSocket/HTTP gateway. When both are set, binds HTTPS/WSS instead of plain HTTP.
+# tls_cert_path: /etc/veyron/tls/cert.pem
+# tls_key_path:  /etc/veyron/tls/key.pem
+
 # Plugins to auto-spawn on kernel start. Each entry maps to a supervised
 # OS process. The process must connect back to `socket_path` and complete
 # the PluginRegister handshake.

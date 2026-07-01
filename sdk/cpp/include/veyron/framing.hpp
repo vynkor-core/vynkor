@@ -13,8 +13,10 @@ static constexpr uint16_t FRAME_MAGIC       = 0x5652;
 static constexpr size_t   FRAME_HEADER_SIZE = 44;
 static constexpr size_t   MAX_PAYLOAD_SIZE  = 1048576; // 1 MiB
 
-static constexpr uint16_t FLAG_MAC_PRESENT = 0x0001; // 32-byte HMAC-SHA256 tag appended after payload
-static constexpr uint16_t FLAG_RAW_BINARY  = 0x0010; // payload is raw bytes (PCM/Opus); skip Protobuf parse
+static constexpr uint16_t FLAG_MAC_PRESENT  = 0x0001; // 32-byte HMAC-SHA256 tag appended after payload
+static constexpr uint16_t FLAG_COMPRESSED   = 0x0002; // payload is zstd-compressed; CRC32 over compressed bytes
+static constexpr uint16_t FLAG_RAW_BINARY   = 0x0010; // payload is raw bytes (PCM/Opus); skip Protobuf parse
+static constexpr size_t   COMPRESS_THRESHOLD = 65536; // payloads >= this size are candidates for compression
 
 // Wire format (all multi-byte fields big-endian):
 //   [0..1]   magic   uint16  = 0x5652
