@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::oneshot;
@@ -11,23 +11,19 @@ use veyron::proto::veyron::{envelope, Envelope, EventAck, PluginManifest};
 use veyron::utils::config::Config;
 use veyron_sdk::VeyronClient;
 
-fn store_config(socket: &str, port: u16, data_dir: &PathBuf) -> Config {
+fn store_config(socket: &str, port: u16, data_dir: &Path) -> Config {
     Config {
         socket_path: socket.to_string(),
         port,
         pid_file: "/tmp/veyron_integ_es.pid".into(),
         log_file: "/tmp/veyron_integ_es.log".into(),
         allow_no_auth: true,
-        data_dir: data_dir.clone(),
+        data_dir: data_dir.to_path_buf(),
         ..Config::default()
     }
 }
 
-async fn start_kernel_with_store(
-    socket: &str,
-    port: u16,
-    data_dir: &PathBuf,
-) -> oneshot::Sender<()> {
+async fn start_kernel_with_store(socket: &str, port: u16, data_dir: &Path) -> oneshot::Sender<()> {
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
     let cfg = store_config(socket, port, data_dir);
     let registry = Arc::new(PluginRegistry::new());

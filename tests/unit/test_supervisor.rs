@@ -292,7 +292,6 @@ fn ignores_sigterm_config(plugin_id: &str, grace_seconds: u32) -> PluginConfig {
         max_restarts: 0,
         grace_seconds,
         sandbox: false,
-        ..Default::default()
     }
 }
 

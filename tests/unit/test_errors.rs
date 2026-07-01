@@ -24,7 +24,7 @@ fn from_prost_decode_error_converts() {
 
 #[test]
 fn all_variants_constructible() {
-    let _io = VeyronError::Io(io::Error::new(io::ErrorKind::Other, "x"));
+    let _io = VeyronError::Io(io::Error::other("x"));
     let _proto = VeyronError::Proto(prost::DecodeError::new("x"));
     let _magic = VeyronError::FrameMagicMismatch;
     let _crc = VeyronError::FrameCrcMismatch;

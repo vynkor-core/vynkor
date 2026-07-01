@@ -6,9 +6,7 @@
 /// identical. Tests are skipped when the binary has not been built.
 use std::process::{Command, Stdio};
 use std::time::Duration;
-use veyron::proto::veyron::{
-    envelope, ActionRequest, ActionResponse, ActionStatus, Envelope, PluginManifest,
-};
+use veyron::proto::veyron::{envelope, ActionRequest, ActionStatus, Envelope, PluginManifest};
 use veyron_sdk::VeyronClient;
 
 use super::sdk_harness::SdkHarness;

@@ -7,7 +7,7 @@ pub fn sandbox_pre_exec() -> io::Result<()> {
     use nix::sched::{unshare, CloneFlags};
 
     unshare(CloneFlags::CLONE_NEWPID | CloneFlags::CLONE_NEWNET)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        .map_err(|e| io::Error::other(e.to_string()))?;
     apply_resource_limits()
 }
 
@@ -21,8 +21,8 @@ pub fn apply_resource_limits() -> io::Result<()> {
     const MAX_VMEM: u64 = 512 * 1024 * 1024; // 512 MiB
 
     setrlimit(Resource::RLIMIT_NPROC, MAX_PROCS, MAX_PROCS)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        .map_err(|e| io::Error::other(e.to_string()))?;
     setrlimit(Resource::RLIMIT_AS, MAX_VMEM, MAX_VMEM)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        .map_err(|e| io::Error::other(e.to_string()))?;
     Ok(())
 }

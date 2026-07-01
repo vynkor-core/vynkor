@@ -125,13 +125,8 @@ impl PluginLoader {
                             }
                         }
                         if let Some(bus) = event_bus {
-                            let events: Vec<String> = manifest
-                                .events
-                                .as_deref()
-                                .unwrap_or(&[])
-                                .iter()
-                                .cloned()
-                                .collect();
+                            let events: Vec<String> =
+                                manifest.events.as_deref().unwrap_or(&[]).to_vec();
                             if !events.is_empty() {
                                 bus.subscribe(&def.id, events);
                                 info!(id = %def.id, "subscribed to manifest-declared events");

@@ -16,6 +16,7 @@ pub fn alloc_port() -> u16 {
 
 /// A live kernel instance for SDK integration tests.
 /// Kernel is shut down when this value is dropped (via `shutdown_tx`).
+#[allow(dead_code)]
 pub struct SdkHarness {
     pub socket_path: PathBuf,
     pub port: u16,
@@ -32,6 +33,7 @@ impl SdkHarness {
     }
 
     /// Start a kernel with JWT auth.
+    #[allow(dead_code)]
     pub async fn start_secured(secret: &str) -> Self {
         let port = alloc_port();
         let socket_path = PathBuf::from(format!("/tmp/veyron_sdk_sec_{port}.sock"));

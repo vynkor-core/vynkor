@@ -129,6 +129,7 @@ pub struct ApiServer {
 }
 
 impl ApiServer {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         port: u16,
         manager: Arc<PluginManager>,

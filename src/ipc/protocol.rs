@@ -66,6 +66,7 @@ impl MessageRouter {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn run_with_context(
         mut rx: mpsc::Receiver<IncomingMessage>,
         registry: Arc<PluginRegistry>,
@@ -178,6 +179,7 @@ impl MessageRouter {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn handle_kernel_message(
         msg: IncomingMessage,
         registry: &PluginRegistry,
