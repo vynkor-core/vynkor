@@ -4,6 +4,7 @@ use crate::ipc::framing::{
     FLAG_MAC_PRESENT, FRAG_HEADER_SIZE, MAX_PAYLOAD_SIZE,
 };
 use crate::ipc::messages::IncomingMessage;
+use crate::proto::veyron::ErrorCode;
 use crate::utils::errors::VeyronError;
 use metrics::counter;
 use std::collections::HashMap;
@@ -136,21 +137,27 @@ impl ConnectionHandler {
                     if let Some(k) = key {
                         // Secured connection: every frame must carry a valid MAC.
                         // A well-formed frame with a bad/missing tag is active
-                        // tampering — drop the connection immediately.
-                        let valid = frame.flags & FLAG_MAC_PRESENT != 0
-                            && match &frame.mac {
-                                Some(tag) => {
-                                    let header = serialize_header(&frame);
-                                    verify_tag(&k, &header, &frame.payload, tag)
-                                }
-                                None => false,
-                            };
+                        // tampering — drop the connection immediately, but tell
+                        // the peer why first (ERR_MAC_MISSING/ERR_MAC_INVALID,
+                        // AUDIT M-05) rather than just going silent.
+                        let tag_present =
+                            frame.flags & FLAG_MAC_PRESENT != 0 && frame.mac.is_some();
+                        let valid = tag_present && {
+                            let header = serialize_header(&frame);
+                            verify_tag(&k, &header, &frame.payload, frame.mac.as_ref().unwrap())
+                        };
                         if !valid {
                             warn!(
                                 conn_id = self.conn_id,
                                 "frame MAC invalid — dropping connection"
                             );
                             counter!("ipc_frame_errors_total", "error" => "mac").increment(1);
+                            let code = if tag_present {
+                                ErrorCode::ErrMacInvalid
+                            } else {
+                                ErrorCode::ErrMacMissing
+                            };
+                            Self::send_error(&self.write_tx, code).await;
                             break;
                         }
                     }
@@ -310,6 +317,40 @@ impl ConnectionHandler {
         info!(conn_id = self.conn_id, "connection closed");
         let _ = self.disconnect_tx.send(self.conn_id).await;
     }
+
+    /// Best-effort notice sent immediately before dropping a connection for a
+    /// wire-level violation (bad/missing MAC). CRC-only — MAC tagging isn't
+    /// meaningful here since the frame is what failed verification.
+    async fn send_error(tx: &mpsc::Sender<Outbound>, code: crate::proto::veyron::ErrorCode) {
+        use crate::proto::veyron::{envelope, Envelope, ErrorMessage};
+        use prost::Message;
+
+        let env = Envelope {
+            payload: Some(envelope::Payload::Error(ErrorMessage {
+                code: code as i32,
+                message: String::new(),
+                details: String::new(),
+            })),
+            ..Default::default()
+        };
+        let mut payload = Vec::new();
+        if env.encode(&mut payload).is_err() {
+            return;
+        }
+        let crc = crc32fast::hash(&payload);
+        let mut target = [0u8; 32];
+        target[..6].copy_from_slice(b"client");
+        let frame = Frame {
+            magic: 0x5652,
+            flags: 0,
+            length: payload.len() as u32,
+            target,
+            crc32: crc,
+            payload,
+            mac: None,
+        };
+        let _ = tx.send(out_frame(frame)).await;
+    }
 }
 
 async fn write_loop(mut write_half: OwnedWriteHalf, mut rx: mpsc::Receiver<Outbound>) {
@@ -460,6 +501,69 @@ mod tests {
             incoming_rx.try_recv().is_err(),
             "forged frame must not be dispatched"
         );
+    }
+
+    fn decode_error(frame: &Frame) -> crate::proto::veyron::ErrorMessage {
+        use crate::proto::veyron::{envelope, Envelope};
+        use prost::Message;
+        let env = Envelope::decode(frame.payload.as_slice()).expect("valid Envelope");
+        match env.payload {
+            Some(envelope::Payload::Error(e)) => e,
+            other => panic!("expected ErrorMessage, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn read_loop_sends_mac_invalid_before_dropping_on_bad_tag() {
+        use crate::proto::veyron::ErrorCode;
+
+        let (client, server) = UnixStream::pair().unwrap();
+        let (incoming_tx, _incoming_rx) = mpsc::channel(8);
+        let (disc_tx, _disc_rx) = mpsc::channel(8);
+
+        let (handler, _wtx) = ConnectionHandler::new(1, server, incoming_tx, disc_tx);
+        let key = derive_session_key(b"s", b"nonce-aaaaaaaaaa", "p");
+        handler.session_key_cell().lock().unwrap().replace(key);
+        tokio::spawn(handler.run());
+
+        let (mut rc, mut wc) = client.into_split();
+        let mut frame = plain("kernel", b"forge");
+        frame.flags = FLAG_MAC_PRESENT;
+        frame.mac = Some([0u8; 32]); // present but wrong — R5-12: must be ERR_MAC_INVALID
+        write_frame_raw(&mut wc, &frame).await.unwrap();
+
+        let resp = tokio::time::timeout(std::time::Duration::from_secs(1), read_frame(&mut rc))
+            .await
+            .expect("must receive an error frame before disconnect")
+            .unwrap();
+        let err = decode_error(&resp);
+        assert_eq!(err.code, ErrorCode::ErrMacInvalid as i32);
+    }
+
+    #[tokio::test]
+    async fn read_loop_sends_mac_missing_before_dropping_on_untagged_frame() {
+        use crate::proto::veyron::ErrorCode;
+
+        let (client, server) = UnixStream::pair().unwrap();
+        let (incoming_tx, _incoming_rx) = mpsc::channel(8);
+        let (disc_tx, _disc_rx) = mpsc::channel(8);
+
+        let (handler, _wtx) = ConnectionHandler::new(1, server, incoming_tx, disc_tx);
+        let key = derive_session_key(b"s", b"nonce-aaaaaaaaaa", "p");
+        handler.session_key_cell().lock().unwrap().replace(key);
+        tokio::spawn(handler.run());
+
+        let (mut rc, mut wc) = client.into_split();
+        // Secured connection, but this frame carries no MAC at all.
+        let frame = plain("kernel", b"unsigned");
+        write_frame_raw(&mut wc, &frame).await.unwrap();
+
+        let resp = tokio::time::timeout(std::time::Duration::from_secs(1), read_frame(&mut rc))
+            .await
+            .expect("must receive an error frame before disconnect")
+            .unwrap();
+        let err = decode_error(&resp);
+        assert_eq!(err.code, ErrorCode::ErrMacMissing as i32);
     }
 
     #[tokio::test]

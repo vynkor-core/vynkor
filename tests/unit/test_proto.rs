@@ -15,7 +15,6 @@ fn envelope_round_trip_serializes_and_deserializes() {
         message_id: "msg-001".to_string(),
         timestamp: 1_000_000,
         sender_id: "weather".to_string(),
-        version: 1,
         payload: Some(envelope::Payload::PluginRegister(register)),
     };
 
@@ -26,7 +25,6 @@ fn envelope_round_trip_serializes_and_deserializes() {
 
     assert_eq!(decoded.message_id, "msg-001");
     assert_eq!(decoded.sender_id, "weather");
-    assert_eq!(decoded.version, 1);
 
     match decoded.payload {
         Some(envelope::Payload::PluginRegister(r)) => {

@@ -13,8 +13,6 @@ fn dummy_manifest() -> PluginManifest {
         permissions: vec![],
         actions: vec![],
         events: vec![],
-        needs_gpu: false,
-        priority: 1,
         ipc_targets: vec![],
     }
 }

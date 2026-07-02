@@ -2,7 +2,7 @@ use super::helpers::start_kernel_secured;
 use crate::jwt_helper::create_test_token;
 use std::time::Duration;
 use tokio::time::timeout;
-use veyron::proto::veyron::{envelope, Envelope, Ping, PluginManifest};
+use veyron::proto::veyron::{envelope, Envelope, ErrorCode, Ping, PluginManifest};
 use veyron_sdk::VeyronClient;
 
 #[tokio::test]
@@ -78,11 +78,24 @@ async fn secured_kernel_rejects_unmaced_client() {
     prost::Message::encode(&env, &mut buf).unwrap();
     let _ = client.send_raw("kernel", buf).await;
 
+    // R5-12: the kernel now sends ERR_MAC_MISSING before dropping the
+    // connection, rather than going silent (AUDIT M-05).
+    let first = timeout(Duration::from_secs(2), client.recv())
+        .await
+        .expect("must receive an error frame before disconnect")
+        .expect("recv should succeed for the error frame");
+    match first.payload {
+        Some(envelope::Payload::Error(e)) => {
+            assert_eq!(e.code, ErrorCode::ErrMacMissing as i32);
+        }
+        other => panic!("expected ErrorMessage, got {other:?}"),
+    }
+
     let got = timeout(Duration::from_secs(2), client.recv()).await;
     let dropped = match got {
-        Err(_) => true,     // timed out (no pong) — connection dead
+        Err(_) => true,     // timed out (connection dead, no further data)
         Ok(Err(_)) => true, // read error — connection closed
-        Ok(Ok(_)) => false, // got a reply — should not happen
+        Ok(Ok(_)) => false, // got another reply — should not happen
     };
     assert!(
         dropped,

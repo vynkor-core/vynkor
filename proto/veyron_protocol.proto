@@ -9,10 +9,9 @@ package veyron;
 // ═══════════════════════════════════════════
 
 message Envelope {
-  string  message_id  = 1; 
-  uint64  timestamp   = 2; 
-  string  sender_id   = 3;  
-  uint32  version     = 4; 
+  string  message_id  = 1;
+  uint64  timestamp   = 2;
+  string  sender_id   = 3;
 
   oneof payload {
     PluginRegister    plugin_register    = 10;
@@ -30,6 +29,10 @@ message Envelope {
     Subscribe         subscribe          = 42;
     Unsubscribe       unsubscribe        = 43;
 
+    // Peer-to-peer plugin<->plugin streaming only — the kernel does not
+    // consume audio itself. Sending this with target "kernel" is a usage
+    // error and gets ERR_UNKNOWN like any other unhandled kernel-targeted
+    // message (docs/FRAMING.md).
     AudioStreamChunk  audio_stream_chunk = 60;
 
     Ping              ping               = 90;
@@ -37,8 +40,11 @@ message Envelope {
     ErrorMessage      error              = 92;
   }
 
-  reserved 50, 51, 52;
-  reserved "ai_request", "ai_response", "ai_stream_chunk";
+  // version (4): never set by any SDK, never checked by the kernel — no
+  // versioning scheme exists yet. Retired rather than half-implemented
+  // (AUDIT M-05, R5-12); a real scheme is future work.
+  reserved 4, 50, 51, 52;
+  reserved "version", "ai_request", "ai_response", "ai_stream_chunk";
 }
 
 
@@ -48,7 +54,13 @@ message Envelope {
 
 message PluginRegister {
   string          plugin_id    = 1;  // уникальное имя, напр. "weather"
-  string          version      = 2;  // semver: "1.0.0"
+  // Plugin's own semver, e.g. "1.0.0". Currently descriptive only — the
+  // kernel does not store, display, or validate it (AUDIT M-05, R5-12).
+  // Version *compatibility* is enforced separately, at install time, via
+  // PluginEntry.min_kernel_version/max_kernel_version in the marketplace
+  // registry (docs/PLUGIN_REGISTRY_SCHEMA.md) — that check already exists
+  // and covers the case this field looked like it should.
+  string          version      = 2;
   string          description  = 3;
   PluginManifest  manifest     = 4;
   string          jwt_token    = 5;  // auth token (required when kernel has jwt_secret configured)
@@ -74,14 +86,16 @@ message PluginManifest {
   repeated string  permissions  = 1;  // см. PermissionType ниже
   repeated string  actions      = 2;  // действия которые плагин умеет делать
   repeated string  events       = 3;  // события на которые хочет подписаться
-  bool             needs_gpu    = 5;  // нужен ли GPU (stt/tts)
-  uint32           priority     = 6;  // приоритет 1–10 (влияет на планировщик)
   // Per-plugin IPC allowlist (T-04). Plugin may only unicast to plugin_ids
   // listed here. Empty list = deny-all (even with PERMISSION_IPC_SEND).
   repeated string  ipc_targets  = 7;
 
-  reserved 4;
-  reserved "needs_ai";
+  // needs_gpu/priority (5, 6): never set by any SDK, never read by the
+  // kernel — there's no scheduler to act on them (AUDIT M-05, R5-12).
+  // Retired rather than wired up: scheduling policy is out of scope for a
+  // "dumb byte router" kernel per the manifesto.
+  reserved 4, 5, 6;
+  reserved "needs_ai", "needs_gpu", "priority";
 }
 
 enum PermissionType {

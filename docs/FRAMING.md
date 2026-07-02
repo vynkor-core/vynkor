@@ -34,6 +34,17 @@ the tag against the normalized (decompressed) header/payload, not the raw wire b
 > WebSocket gateway rejects inbound frames carrying `FLAG_COMPRESSED` with a parse
 > error (R5-03 ✓) rather than mishandle them — see below.
 
+### MAC Failure Wire Behavior (R5-12)
+
+On a secured connection (kernel started with `jwt_secret`), every frame after
+registration must carry a valid `FLAG_MAC_PRESENT` tag. When one doesn't, the
+kernel sends an `ErrorMessage` — `ERR_MAC_MISSING` if the frame carries no tag
+at all, `ERR_MAC_INVALID` if a tag is present but fails verification — then
+drops the connection. The error is sent CRC-only (no MAC), best-effort: the
+kernel does not wait for delivery before closing. This replaces silently
+dropping the connection with no explanation, which made client-side debugging
+of a missing/rotated secret indistinguishable from a network failure.
+
 ### FLAG_FRAGMENTED (Bit 2)
 
 Implemented on the UDS path (kernel side). The first 10 bytes of the payload are the
