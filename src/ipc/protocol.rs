@@ -343,10 +343,14 @@ impl MessageRouter {
                 }
 
                 if result.is_ok() {
+                    let now_ms = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis();
                     event_bus
                         .publish(
                             Event {
-                                event_id: format!("sys-joined-{plugin_id}"),
+                                event_id: format!("sys-joined-{plugin_id}-{now_ms}"),
                                 event_type: "system.plugin_joined".to_string(),
                                 payload_json: format!(r#"{{"plugin_id":"{plugin_id}"}}"#)
                                     .into_bytes(),

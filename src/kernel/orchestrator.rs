@@ -1,6 +1,7 @@
 use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use prost::Message;
 use tokio::signal::unix::{signal, SignalKind};
@@ -225,10 +226,14 @@ impl Kernel {
                 None => continue,
             };
 
+            let now_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis();
             event_bus
                 .publish(
                     Event {
-                        event_id: format!("sys-left-{plugin_id}"),
+                        event_id: format!("sys-left-{plugin_id}-{now_ms}"),
                         event_type: "system.plugin_left".to_string(),
                         payload_json: format!(r#"{{"plugin_id":"{plugin_id}"}}"#).into_bytes(),
                         retry_count: 0,
