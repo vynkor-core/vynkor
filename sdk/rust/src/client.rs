@@ -321,7 +321,7 @@ impl VeyronClient {
                 "received raw-binary frame; use recv_frame() for audio".into(),
             ));
         }
-        Envelope::decode(frame.payload.as_slice()).map_err(VeyronError::Proto)
+        Envelope::decode(frame.payload.as_ref()).map_err(VeyronError::Proto)
     }
 
     /// [`VeyronClient::recv`] bounded by `timeout`. Returns
@@ -412,7 +412,7 @@ impl VeyronClient {
                 length: payload.len() as u32,
                 target,
                 crc32,
-                payload,
+                payload: payload.into(),
                 mac: None,
             }));
         }
@@ -577,7 +577,7 @@ fn build_frame(target: &str, flags: u16, payload: Vec<u8>) -> Frame {
         length: payload.len() as u32,
         target: t,
         crc32: crc32fast::hash(&payload),
-        payload,
+        payload: payload.into(),
         mac: None,
     }
 }

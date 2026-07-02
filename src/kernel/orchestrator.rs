@@ -290,7 +290,7 @@ impl Kernel {
                 length: payload.len() as u32,
                 target,
                 crc32: crc,
-                payload,
+                payload: payload.into(),
                 mac: None,
             };
             let _ = entry.write_tx.send(out_frame(frame)).await;

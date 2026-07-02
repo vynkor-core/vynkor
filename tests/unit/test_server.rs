@@ -35,7 +35,7 @@ async fn server_accepts_connection_and_receives_frame() {
         .expect("recv must not timeout")
         .expect("channel must not close");
 
-    assert_eq!(msg.frame.payload, b"hello");
+    assert_eq!(&*msg.frame.payload, b"hello");
     assert_eq!(
         veyron::ipc::framing::target_as_str(&msg.frame),
         Some("kernel")
@@ -138,7 +138,7 @@ async fn server_detects_client_disconnect() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(msg.frame.payload, b"ping");
+    assert_eq!(&*msg.frame.payload, b"ping");
 
     // channel stays open (server still running), next recv should not panic
     // We just verify the server didn't crash by checking it can still accept
@@ -153,7 +153,7 @@ async fn server_detects_client_disconnect() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(msg2.frame.payload, b"after-disconnect");
+    assert_eq!(&*msg2.frame.payload, b"after-disconnect");
 
     let _ = std::fs::remove_file(&path);
 }
@@ -190,7 +190,7 @@ async fn connection_handler_can_send_frame_back() {
                 t
             },
             crc32: crc32fast::hash(response_payload),
-            payload: response_payload.to_vec(),
+            payload: response_payload.to_vec().into(),
             mac: None,
         }))
         .await
@@ -201,7 +201,7 @@ async fn connection_handler_can_send_frame_back() {
         .expect("read must not timeout")
         .expect("frame must decode");
 
-    assert_eq!(frame.payload, b"response");
+    assert_eq!(&*frame.payload, b"response");
 
     let _ = std::fs::remove_file(&path);
 }

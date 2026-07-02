@@ -217,7 +217,7 @@ fn parse_frame(data: &[u8]) -> Result<Frame, &'static str> {
         length: length as u32,
         target,
         crc32,
-        payload,
+        payload: payload.into(),
         mac,
     })
 }

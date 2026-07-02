@@ -14,7 +14,7 @@ fn empty_frame() -> Frame {
         length: 0,
         target: [0u8; 32],
         crc32: 0,
-        payload: vec![],
+        payload: vec![].into(),
         mac: None,
     }
 }
@@ -54,7 +54,7 @@ fn decode_event_from_frame(item: veyron::ipc::connection::Outbound) -> Event {
         veyron::ipc::connection::Outbound::Frame(f) => *f,
         _ => panic!("expected Outbound::Frame"),
     };
-    let env = Envelope::decode(frame.payload.as_slice()).expect("decode envelope");
+    let env = Envelope::decode(frame.payload.as_ref()).expect("decode envelope");
     match env.payload {
         Some(envelope::Payload::Event(e)) => e,
         other => panic!("expected Event, got {:?}", other),

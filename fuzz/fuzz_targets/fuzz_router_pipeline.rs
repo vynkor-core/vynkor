@@ -104,7 +104,7 @@ fn make_frame(target: &str, payload: Vec<u8>) -> Frame {
         length: payload.len() as u32,
         target: t,
         crc32: crc,
-        payload,
+        payload: payload.into(),
         mac: None,
     }
 }

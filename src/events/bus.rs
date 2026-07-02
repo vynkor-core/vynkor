@@ -120,11 +120,14 @@ impl EventBus {
         if env.encode(&mut payload).is_err() {
             return;
         }
+        // Encoded once per publish; each subscriber below gets an Arc clone
+        // (refcount bump) of these bytes, not its own copy.
+        let payload: Arc<[u8]> = payload.into();
 
         for plugin_id in targets {
             match registry.get(&plugin_id) {
                 Some(entry) => {
-                    let frame = build_frame(&payload, &plugin_id);
+                    let frame = build_frame(payload.clone(), &plugin_id);
                     // Bounded send: a slow subscriber must not stall the publisher.
                     match tokio::time::timeout(
                         EVENT_SEND_TIMEOUT,
@@ -186,8 +189,8 @@ pub async fn run_retry_worker(
     }
 }
 
-fn build_frame(payload: &[u8], target: &str) -> Frame {
-    let crc = crc32fast::hash(payload);
+fn build_frame(payload: Arc<[u8]>, target: &str) -> Frame {
+    let crc = crc32fast::hash(&payload);
     let mut t = [0u8; 32];
     let bytes = target.as_bytes();
     let len = bytes.len().min(32);
@@ -198,7 +201,7 @@ fn build_frame(payload: &[u8], target: &str) -> Frame {
         length: payload.len() as u32,
         target: t,
         crc32: crc,
-        payload: payload.to_vec(),
+        payload,
         mac: None,
     }
 }

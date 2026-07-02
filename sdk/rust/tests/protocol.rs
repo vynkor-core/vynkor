@@ -32,7 +32,7 @@ fn envelope_with_event(event_id: &str) -> Envelope {
 }
 
 fn decode(frame: &Frame) -> Envelope {
-    Envelope::decode(frame.payload.as_slice()).expect("decode envelope")
+    Envelope::decode(frame.payload.as_ref()).expect("decode envelope")
 }
 
 #[tokio::test]
@@ -69,7 +69,7 @@ async fn large_payload_is_compressed_on_wire_and_normalized_on_read() {
     handle.await.unwrap();
 
     // read_frame normalizes: plaintext payload, flags/length/crc32 describe it.
-    assert_eq!(frame.payload, expected);
+    assert_eq!(&*frame.payload, expected);
     assert_eq!(frame.length as usize, expected.len());
     assert_eq!(frame.crc32, crc32fast::hash(&expected));
     assert_eq!(frame.flags & veyron_sdk::framing::FLAG_COMPRESSED, 0);
@@ -112,7 +112,7 @@ async fn mac_secured_registration_and_tagged_frames() {
             length: buf.len() as u32,
             target,
             crc32: crc32fast::hash(&buf),
-            payload: buf,
+            payload: buf.into(),
             mac: None,
         };
         write_frame_raw(&mut kernel_side, &frame).await.unwrap();
@@ -164,7 +164,7 @@ async fn recv_rejects_untagged_frame_when_secured() {
             length: buf.len() as u32,
             target: [0u8; 32],
             crc32: crc32fast::hash(&buf),
-            payload: buf,
+            payload: buf.into(),
             mac: None,
         };
         write_frame_raw(&mut kernel_side, &frame).await.unwrap();
@@ -180,7 +180,7 @@ async fn recv_rejects_untagged_frame_when_secured() {
             length: buf2.len() as u32,
             target: [0u8; 32],
             crc32: crc32fast::hash(&buf2),
-            payload: buf2,
+            payload: buf2.into(),
             mac: None,
         };
         write_frame_raw(&mut kernel_side, &frame2).await.unwrap();
@@ -266,7 +266,7 @@ async fn raw_binary_frame_bypasses_protobuf() {
 
     let frame = receiver.recv_frame().await.unwrap();
     assert_ne!(frame.flags & FLAG_RAW_BINARY, 0);
-    assert_eq!(frame.payload, pcm);
+    assert_eq!(&*frame.payload, pcm);
 }
 
 #[tokio::test]
@@ -300,7 +300,7 @@ fn mac_tag_roundtrip_over_serialized_header() {
         length: 5,
         target: [7u8; 32],
         crc32: 0xDEADBEEF,
-        payload: b"hello".to_vec(),
+        payload: b"hello".to_vec().into(),
         mac: None,
     };
     let header = serialize_header(&frame);
@@ -381,7 +381,7 @@ async fn plugin_serve_loop_handles_ping_event_and_shutdown() {
             length: buf.len() as u32,
             target: [0u8; 32],
             crc32: crc32fast::hash(&buf),
-            payload: buf,
+            payload: buf.into(),
             mac: None,
         };
         write_frame_raw(&mut kernel_side, &frame).await.unwrap();
@@ -395,7 +395,7 @@ async fn plugin_serve_loop_handles_ping_event_and_shutdown() {
                 length: buf.len() as u32,
                 target: [0u8; 32],
                 crc32: crc32fast::hash(&buf),
-                payload: buf,
+                payload: buf.into(),
                 mac: None,
             }
         };

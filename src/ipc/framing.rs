@@ -1,4 +1,5 @@
 use crate::utils::errors::VeyronError;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
@@ -71,7 +72,10 @@ pub struct Frame {
     pub length: u32,
     pub target: [u8; 32],
     pub crc32: u32,
-    pub payload: Vec<u8>,
+    /// Shared, immutable payload bytes. `Arc<[u8]>` so fan-out to N subscribers
+    /// (broadcast, event bus) and per-write framing clone the reference, not
+    /// the bytes.
+    pub payload: Arc<[u8]>,
     /// 32-byte HMAC tag, present iff `flags & FLAG_MAC_PRESENT != 0`.
     pub mac: Option<[u8; 32]>,
 }
@@ -130,12 +134,14 @@ where
 
     // Compress payloads at or above the threshold when FLAG_COMPRESSED is not
     // already set and the payload is not raw binary (audio bypasses compression).
-    let (wire_payload, wire_flags) = if frame.payload.len() >= COMPRESS_THRESHOLD
+    let (wire_payload, wire_flags): (Arc<[u8]>, u16) = if frame.payload.len() >= COMPRESS_THRESHOLD
         && frame.flags & FLAG_COMPRESSED == 0
         && frame.flags & FLAG_RAW_BINARY == 0
     {
         match zstd::bulk::compress(&frame.payload, 3) {
-            Ok(c) if c.len() < frame.payload.len() => (c, frame.flags | FLAG_COMPRESSED),
+            Ok(c) if c.len() < frame.payload.len() => (Arc::from(c), frame.flags | FLAG_COMPRESSED),
+            // Common path: no (re)compression needed, so no byte copy either —
+            // just bump the refcount on the shared payload.
             _ => (frame.payload.clone(), frame.flags),
         }
     } else {
@@ -254,7 +260,7 @@ where
         length,
         target,
         crc32,
-        payload,
+        payload: payload.into(),
         mac,
     })
 }

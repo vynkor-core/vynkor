@@ -263,7 +263,7 @@ async fn ws_mac_tagged_frames_accepted_on_secured_kernel() {
     };
 
     let (ack_payload, _) = parse_ws_frame(&ack_data);
-    let ack_env = Envelope::decode(ack_payload.as_slice()).expect("decode ack");
+    let ack_env = Envelope::decode(ack_payload.as_ref()).expect("decode ack");
     let session_nonce = match ack_env.payload {
         Some(envelope::Payload::PluginRegisterAck(ack)) => {
             assert!(ack.accepted, "registration must succeed");
@@ -303,7 +303,7 @@ async fn ws_mac_tagged_frames_accepted_on_secured_kernel() {
         had_mac,
         "kernel must MAC-tag outbound WS frames on secured kernel"
     );
-    let pong_env = Envelope::decode(pong_payload.as_slice()).expect("decode pong");
+    let pong_env = Envelope::decode(pong_payload.as_ref()).expect("decode pong");
     assert!(
         matches!(pong_env.payload, Some(envelope::Payload::Pong(_))),
         "expected Pong, got {:?}",

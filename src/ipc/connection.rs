@@ -259,7 +259,7 @@ impl ConnectionHandler {
                                 length: payload.len() as u32,
                                 target,
                                 crc32: crc,
-                                payload,
+                                payload: payload.into(),
                                 mac: None,
                             };
                             let msg = IncomingMessage {
@@ -346,7 +346,7 @@ impl ConnectionHandler {
             length: payload.len() as u32,
             target,
             crc32: crc,
-            payload,
+            payload: payload.into(),
             mac: None,
         };
         let _ = tx.send(out_frame(frame)).await;
@@ -427,7 +427,7 @@ mod tests {
             length: payload.len() as u32,
             target: t,
             crc32: crc,
-            payload,
+            payload: payload.into(),
             mac: None,
         }
     }
@@ -442,7 +442,7 @@ mod tests {
             length: payload.len() as u32,
             target: t,
             crc32: crc,
-            payload: payload.to_vec(),
+            payload: payload.into(),
             mac: None,
         }
     }
@@ -506,7 +506,7 @@ mod tests {
     fn decode_error(frame: &Frame) -> crate::proto::veyron::ErrorMessage {
         use crate::proto::veyron::{envelope, Envelope};
         use prost::Message;
-        let env = Envelope::decode(frame.payload.as_slice()).expect("valid Envelope");
+        let env = Envelope::decode(frame.payload.as_ref()).expect("valid Envelope");
         match env.payload {
             Some(envelope::Payload::Error(e)) => e,
             other => panic!("expected ErrorMessage, got {other:?}"),
@@ -592,7 +592,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            msg.frame.payload, b"firstsecondthird",
+            &*msg.frame.payload, b"firstsecondthird",
             "fragments must be reassembled in sequence order"
         );
         assert_eq!(
@@ -630,7 +630,7 @@ mod tests {
             .await
             .expect("plain frame must arrive")
             .unwrap();
-        assert_eq!(msg.frame.payload, b"trigger");
+        assert_eq!(&*msg.frame.payload, b"trigger");
         assert!(
             incoming_rx.try_recv().is_err(),
             "incomplete fragment must not be dispatched"

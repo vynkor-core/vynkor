@@ -71,7 +71,7 @@ async fn frame_round_trip_produces_identical_frame() {
     assert_eq!(frame.magic, 0x5652, "magic must be 0x5652 (VR)");
     assert_eq!(frame.flags, flags);
     assert_eq!(frame.length as usize, payload.len());
-    assert_eq!(frame.payload, payload);
+    assert_eq!(&*frame.payload, payload);
     assert_eq!(target_as_str(&frame), Some(target));
 }
 
@@ -103,7 +103,7 @@ async fn mac_frame_round_trips_with_tag() {
         length: payload.len() as u32,
         target,
         crc32: crc,
-        payload: payload.clone(),
+        payload: payload.clone().into(),
         mac: Some([7u8; 32]),
     };
     write_frame_raw(&mut w, &frame).await.unwrap();
@@ -116,7 +116,7 @@ async fn mac_frame_round_trips_with_tag() {
         payload.len(),
         "length excludes the tag"
     );
-    assert_eq!(got.payload, payload);
+    assert_eq!(&*got.payload, payload);
     assert_eq!(got.mac, Some([7u8; 32]));
 }
 
@@ -137,7 +137,7 @@ async fn target_as_str_trims_null_padding() {
         length: 0,
         target: [0u8; 32],
         crc32: 0,
-        payload: vec![],
+        payload: vec![].into(),
         mac: None,
     };
     frame.target[..6].copy_from_slice(b"kernel");
@@ -152,7 +152,7 @@ async fn target_as_str_returns_none_on_invalid_utf8() {
         length: 0,
         target: [0u8; 32],
         crc32: 0,
-        payload: vec![],
+        payload: vec![].into(),
         mac: None,
     };
     // 0xFF 0xFE is not valid UTF-8
@@ -271,7 +271,7 @@ async fn write_frame_raw_rejects_payload_too_large() {
         length: (MAX_PAYLOAD_SIZE + 1) as u32,
         target: [0u8; 32],
         crc32: 0,
-        payload: vec![0u8; MAX_PAYLOAD_SIZE + 1],
+        payload: vec![0u8; MAX_PAYLOAD_SIZE + 1].into(),
         mac: None,
     };
     let result = write_frame_raw(&mut w, &frame).await;
@@ -293,7 +293,7 @@ async fn large_payload_compressed_in_transit_and_decompressed_on_read() {
         length: payload.len() as u32,
         target: [0u8; 32],
         crc32: crc32fast::hash(&payload),
-        payload: payload.clone(),
+        payload: payload.clone().into(),
         mac: None,
     };
     write_frame_raw(&mut w, &frame).await.expect("write failed");
@@ -301,7 +301,10 @@ async fn large_payload_compressed_in_transit_and_decompressed_on_read() {
     let received = read_frame(&mut r).await.expect("read failed");
     // Router sees plaintext: payload is always decompressed, and flags/length
     // are normalized to describe the plaintext, not the wire bytes.
-    assert_eq!(received.payload, payload, "payload must round-trip intact");
+    assert_eq!(
+        &*received.payload, payload,
+        "payload must round-trip intact"
+    );
     assert_eq!(
         received.flags & FLAG_COMPRESSED,
         0,
@@ -325,13 +328,16 @@ async fn small_payload_not_compressed() {
         length: payload.len() as u32,
         target: [0u8; 32],
         crc32: crc32fast::hash(&payload),
-        payload: payload.clone(),
+        payload: payload.clone().into(),
         mac: None,
     };
     write_frame_raw(&mut w, &frame).await.expect("write failed");
 
     let received = read_frame(&mut r).await.expect("read failed");
-    assert_eq!(received.payload, payload, "payload must round-trip intact");
+    assert_eq!(
+        &*received.payload, payload,
+        "payload must round-trip intact"
+    );
     assert_eq!(
         received.flags & FLAG_COMPRESSED,
         0,
@@ -354,7 +360,7 @@ async fn large_payload_with_mac_verifies_on_auth_connection() {
         length: payload.len() as u32,
         target: [0u8; 32],
         crc32: crc32fast::hash(&payload),
-        payload: payload.clone(),
+        payload: payload.clone().into(),
         mac: None,
     };
     frame.flags |= FLAG_MAC_PRESENT;
@@ -364,7 +370,10 @@ async fn large_payload_with_mac_verifies_on_auth_connection() {
     write_frame_raw(&mut w, &frame).await.expect("write failed");
 
     let received = read_frame(&mut r).await.expect("read failed");
-    assert_eq!(received.payload, payload, "payload must round-trip intact");
+    assert_eq!(
+        &*received.payload, payload,
+        "payload must round-trip intact"
+    );
     let recv_header = serialize_header(&received);
     let tag = received.mac.expect("MAC tag must be present");
     assert!(
@@ -386,7 +395,7 @@ async fn decompressed_frame_recompresses_cleanly_on_forward() {
         length: payload.len() as u32,
         target: [0u8; 32],
         crc32: crc32fast::hash(&payload),
-        payload: payload.clone(),
+        payload: payload.clone().into(),
         mac: None,
     };
     write_frame_raw(&mut w1, &frame)
@@ -402,7 +411,7 @@ async fn decompressed_frame_recompresses_cleanly_on_forward() {
         .expect("forward failed");
     let forwarded = read_frame(&mut r2).await.expect("forwarded read failed");
     assert_eq!(
-        forwarded.payload, payload,
+        &*forwarded.payload, payload,
         "forwarded payload must decompress intact"
     );
 }

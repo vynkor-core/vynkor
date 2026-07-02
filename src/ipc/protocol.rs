@@ -224,7 +224,7 @@ impl MessageRouter {
         event_store: Option<&EventStore>,
         mac_secret: &Option<Arc<Vec<u8>>>,
     ) -> bool {
-        let envelope = match Envelope::decode(msg.frame.payload.as_slice()) {
+        let envelope = match Envelope::decode(msg.frame.payload.as_ref()) {
             Ok(e) => e,
             Err(_) => {
                 Self::send_error(
@@ -770,7 +770,7 @@ impl MessageRouter {
                 t
             },
             crc32: crc,
-            payload,
+            payload: payload.into(),
             mac: None,
         };
         let _ = tx.send(out_frame(frame)).await;

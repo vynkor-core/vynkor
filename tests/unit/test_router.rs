@@ -48,7 +48,7 @@ fn make_frame(target: &str, payload: Vec<u8>) -> Frame {
         length: payload.len() as u32,
         target: t,
         crc32: crc,
-        payload,
+        payload: payload.into(),
         mac: None,
     }
 }
@@ -91,7 +91,7 @@ async fn recv_frame(rx: &mut mpsc::Receiver<Outbound>) -> Frame {
 }
 
 fn decode_envelope(frame: &Frame) -> Envelope {
-    Envelope::decode(frame.payload.as_slice()).expect("failed to decode envelope")
+    Envelope::decode(frame.payload.as_ref()).expect("failed to decode envelope")
 }
 
 // ── tests ────────────────────────────────────────────────────────────────────
@@ -166,7 +166,7 @@ async fn router_forwards_frame_to_target_plugin() {
         .unwrap();
 
     let received = recv_frame(&mut b_write_rx).await;
-    assert_eq!(received.payload, raw_payload);
+    assert_eq!(&*received.payload, raw_payload);
     assert_eq!(target_as_str(&received), Some("plugin_b"));
 }
 
@@ -224,7 +224,7 @@ async fn slow_target_does_not_stall_router() {
     // With an unbounded send the router would block on "slow" forever and "fast"
     // would never arrive. The bounded send must let it through promptly.
     let f = recv_frame(&mut fast_rx).await;
-    assert_eq!(f.payload, b"to-fast");
+    assert_eq!(&*f.payload, b"to-fast");
     assert_eq!(target_as_str(&f), Some("fast"));
 }
 
@@ -258,7 +258,7 @@ async fn router_denies_forward_without_ipc_permission() {
 
     // sender gets an error frame; target receives nothing
     let err = recv_frame(&mut a_write_rx).await;
-    let env = Envelope::decode(err.payload.as_slice()).unwrap();
+    let env = Envelope::decode(err.payload.as_ref()).unwrap();
     assert!(matches!(env.payload, Some(envelope::Payload::Error(_))));
     assert!(b_write_rx.try_recv().is_err());
 }
@@ -296,8 +296,8 @@ async fn router_broadcasts_star_to_all_except_sender() {
     // B and C must receive it
     let fb = recv_frame(&mut b_rx).await;
     let fc = recv_frame(&mut c_rx).await;
-    assert_eq!(fb.payload, payload);
-    assert_eq!(fc.payload, payload);
+    assert_eq!(&*fb.payload, payload);
+    assert_eq!(&*fc.payload, payload);
 
     // A (sender) must NOT receive it
     let a_result = timeout(Duration::from_millis(100), a_rx.recv()).await;
@@ -328,7 +328,7 @@ async fn router_denies_broadcast_without_ipc_permission() {
 
     // sender gets an error; no peer receives the broadcast
     let err = recv_frame(&mut a_rx).await;
-    let env = Envelope::decode(err.payload.as_slice()).unwrap();
+    let env = Envelope::decode(err.payload.as_ref()).unwrap();
     assert!(matches!(env.payload, Some(envelope::Payload::Error(_))));
     assert!(b_rx.try_recv().is_err());
 }
@@ -352,7 +352,7 @@ async fn router_throttles_connection_after_error_burst() {
     }
     for _ in 0..16 {
         let f = recv_frame(&mut rx).await;
-        let env = Envelope::decode(f.payload.as_slice()).unwrap();
+        let env = Envelope::decode(f.payload.as_ref()).unwrap();
         assert!(matches!(env.payload, Some(envelope::Payload::Error(_))));
     }
 
@@ -397,7 +397,7 @@ async fn router_resets_error_budget_on_success() {
         });
         router_tx.send(incoming(1, ping, tx.clone())).await.unwrap();
         let pong = recv_frame(&mut rx).await;
-        let env = Envelope::decode(pong.payload.as_slice()).unwrap();
+        let env = Envelope::decode(pong.payload.as_ref()).unwrap();
         assert!(matches!(env.payload, Some(envelope::Payload::Pong(_))));
     }
 }
@@ -518,7 +518,7 @@ async fn router_denies_forward_with_empty_ipc_targets() {
         .unwrap();
 
     let err = recv_frame(&mut a_rx).await;
-    let env = Envelope::decode(err.payload.as_slice()).unwrap();
+    let env = Envelope::decode(err.payload.as_ref()).unwrap();
     assert!(matches!(env.payload, Some(envelope::Payload::Error(_))));
     assert!(b_rx.try_recv().is_err());
 }
@@ -550,7 +550,7 @@ async fn router_allows_forward_to_listed_ipc_target() {
         .unwrap();
 
     let received = recv_frame(&mut b_rx).await;
-    assert_eq!(received.payload, payload);
+    assert_eq!(&*received.payload, payload);
 }
 
 #[tokio::test]
@@ -586,7 +586,7 @@ async fn router_denies_forward_to_unlisted_ipc_target() {
         .unwrap();
 
     let err = recv_frame(&mut a_rx).await;
-    let env = Envelope::decode(err.payload.as_slice()).unwrap();
+    let env = Envelope::decode(err.payload.as_ref()).unwrap();
     assert!(matches!(env.payload, Some(envelope::Payload::Error(_))));
     assert!(b_rx.try_recv().is_err());
     assert!(c_rx.try_recv().is_err());
