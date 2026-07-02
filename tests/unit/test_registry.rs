@@ -327,11 +327,20 @@ use std::time::{Duration, Instant};
 use veyron::plugins::registry::PendingAction;
 
 fn dummy_pending(original_action_id: &str, deadline: Instant) -> PendingAction {
+    dummy_pending_with_provider(original_action_id, deadline, "provider")
+}
+
+fn dummy_pending_with_provider(
+    original_action_id: &str,
+    deadline: Instant,
+    provider_id: &str,
+) -> PendingAction {
     PendingAction {
         requester_write_tx: dummy_write_tx(),
         original_action_id: original_action_id.to_string(),
         requester_id: "requester".to_string(),
         deadline,
+        provider_id: provider_id.to_string(),
     }
 }
 
@@ -372,4 +381,46 @@ fn sweep_expired_actions_evicts_past_deadline_only() {
     // Fresh entry must remain, expired one must be gone.
     assert!(reg.take_pending_action("kact-fresh").is_some());
     assert!(reg.take_pending_action("kact-expired").is_none());
+}
+
+#[test]
+fn take_pending_action_if_provider_matching_provider_removes_it() {
+    let reg = PluginRegistry::new();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    reg.register_pending_action(
+        "kact-1".to_string(),
+        dummy_pending_with_provider("act-1", deadline, "real-provider"),
+    );
+
+    let taken = reg
+        .take_pending_action_if_provider("kact-1", "real-provider")
+        .expect("must be present for the real provider");
+    assert_eq!(taken.original_action_id, "act-1");
+    assert!(
+        reg.take_pending_action("kact-1").is_none(),
+        "must be removed after a matching take"
+    );
+}
+
+#[test]
+fn take_pending_action_if_provider_mismatched_provider_leaves_it_in_place() {
+    let reg = PluginRegistry::new();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    reg.register_pending_action(
+        "kact-1".to_string(),
+        dummy_pending_with_provider("act-1", deadline, "real-provider"),
+    );
+
+    // An unrelated plugin (not the routed provider) tries to claim the slot.
+    assert!(
+        reg.take_pending_action_if_provider("kact-1", "impostor")
+            .is_none(),
+        "mismatched provider must not be able to take the pending action"
+    );
+
+    // The entry must still be there for the real provider afterwards.
+    let taken = reg
+        .take_pending_action_if_provider("kact-1", "real-provider")
+        .expect("entry must still be present for the real provider");
+    assert_eq!(taken.original_action_id, "act-1");
 }

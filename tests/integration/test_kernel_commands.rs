@@ -308,3 +308,119 @@ async fn kernel_routes_action_to_declared_provider_and_correlates_response() {
 
     let _ = shutdown_tx.send(());
 }
+
+#[tokio::test]
+async fn action_response_from_non_provider_plugin_is_rejected_not_proxied() {
+    // AUDIT (Critical): the internal correlation id handed to the provider
+    // is minted from a global, monotonic, zero-entropy counter
+    // (`kact-<n>`), so it's trivially predictable/observable by any other
+    // registered plugin. A registered plugin with no declared actions must
+    // not be able to answer on behalf of the real provider — either to
+    // inject falsified data or to steal/grief the response slot before the
+    // legitimate provider replies.
+    let (shutdown_tx, _registry, _bus) =
+        start_kernel("/tmp/veyron_integ_action_spoof.sock", 19218).await;
+
+    let mut provider = VeyronClient::connect("/tmp/veyron_integ_action_spoof.sock")
+        .await
+        .unwrap();
+    provider
+        .register(
+            "weather-provider-real",
+            PluginManifest {
+                actions: vec!["get_weather".to_string()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    // An unrelated plugin: registered, but declares no actions at all, so
+    // it was never routed anything by the kernel.
+    let mut impostor = VeyronClient::connect("/tmp/veyron_integ_action_spoof.sock")
+        .await
+        .unwrap();
+    impostor
+        .register("totally-unrelated-plugin", PluginManifest::default())
+        .await
+        .unwrap();
+
+    let mut requester = VeyronClient::connect("/tmp/veyron_integ_action_spoof.sock")
+        .await
+        .unwrap();
+    requester
+        .register("weather-requester-2", PluginManifest::default())
+        .await
+        .unwrap();
+
+    let request_fut = tokio::spawn(async move {
+        requester
+            .send_action("get_weather", br#"{"city":"nyc"}"#, 2000)
+            .await
+    });
+
+    // Real provider receives the routed request and learns the internal
+    // correlation id — in this test we reuse that same id to stand in for
+    // an attacker who has guessed/observed the predictable `kact-<n>` id.
+    let received = timeout(Duration::from_secs(2), provider.recv())
+        .await
+        .expect("provider recv timed out")
+        .expect("provider recv failed");
+    let internal_action_id = match received.payload {
+        Some(veyron::proto::veyron::envelope::Payload::ActionRequest(req)) => {
+            assert_eq!(req.action, "get_weather");
+            req.action_id
+        }
+        other => panic!("expected ActionRequest, got {other:?}"),
+    };
+
+    // Impostor races the real provider and sends a spoofed response first.
+    let spoofed_env = veyron::proto::veyron::Envelope {
+        payload: Some(veyron::proto::veyron::envelope::Payload::ActionResponse(
+            veyron::proto::veyron::ActionResponse {
+                action_id: internal_action_id.clone(),
+                status: ActionStatus::ActionOk as i32,
+                data_json: br#"{"temp_f":-999,"spoofed":true}"#.to_vec(),
+                error: String::new(),
+            },
+        )),
+        ..Default::default()
+    };
+    impostor.send("kernel", spoofed_env).await.unwrap();
+
+    // Give the kernel a moment to process the spoofed response before the
+    // real provider replies, so a bug would actually manifest as the
+    // requester observing the spoofed payload.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Real provider now answers truthfully.
+    let real_env = veyron::proto::veyron::Envelope {
+        payload: Some(veyron::proto::veyron::envelope::Payload::ActionResponse(
+            veyron::proto::veyron::ActionResponse {
+                action_id: internal_action_id,
+                status: ActionStatus::ActionOk as i32,
+                data_json: br#"{"temp_f":72}"#.to_vec(),
+                error: String::new(),
+            },
+        )),
+        ..Default::default()
+    };
+    provider.send("kernel", real_env).await.unwrap();
+
+    let resp = timeout(Duration::from_secs(2), request_fut)
+        .await
+        .expect("timed out waiting for requester's response")
+        .expect("task panicked")
+        .expect("send_action failed");
+
+    // The requester must see the REAL provider's answer, proving the
+    // impostor's spoofed response did not consume the pending-action slot.
+    assert_eq!(resp.status, ActionStatus::ActionOk as i32);
+    assert_eq!(
+        resp.data_json,
+        br#"{"temp_f":72}"#,
+        "requester received spoofed data instead of the real provider's response"
+    );
+
+    let _ = shutdown_tx.send(());
+}

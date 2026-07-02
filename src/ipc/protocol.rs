@@ -425,6 +425,7 @@ impl MessageRouter {
                                 requester_id: sender_id.clone(),
                                 deadline: Instant::now()
                                     + Duration::from_millis(effective_timeout_ms as u64),
+                                provider_id: provider.plugin_id.clone(),
                             },
                         );
 
@@ -464,7 +465,23 @@ impl MessageRouter {
                 // targets "kernel" (it doesn't know who really asked) — this is
                 // where the kernel translates the internal correlation id back to
                 // the original requester's action_id and proxies the response.
-                match registry.take_pending_action(&resp.action_id) {
+                // Resolve the sender's identity BEFORE touching the pending-action
+                // map. We must not remove the entry unless the sender is actually
+                // the provider it was routed to — otherwise any registered plugin
+                // could spoof or steal another provider's response by guessing the
+                // sequential internal action_id (AUDIT: response-spoofing gap).
+                let sender_plugin_id = registry
+                    .get_by_conn_id(msg.conn_id)
+                    .map(|e| e.plugin_id);
+
+                let taken = match &sender_plugin_id {
+                    Some(plugin_id) => {
+                        registry.take_pending_action_if_provider(&resp.action_id, plugin_id)
+                    }
+                    None => None,
+                };
+
+                match taken {
                     Some(pending) => {
                         let response = Envelope {
                             payload: Some(envelope::Payload::ActionResponse(ActionResponse {
@@ -480,7 +497,10 @@ impl MessageRouter {
                     None => {
                         warn!(
                             action_id = %resp.action_id,
-                            "action response with no matching pending request (late, duplicate, or already timed out), dropping"
+                            sender = ?sender_plugin_id,
+                            "action response with no matching pending request for this sender \
+                             (late, duplicate, already timed out, or sender is not the routed \
+                             provider), dropping"
                         );
                     }
                 }

@@ -27,6 +27,11 @@ pub struct PendingAction {
     pub original_action_id: String,
     pub requester_id: String,
     pub deadline: Instant,
+    /// plugin_id of the provider this action was routed to. Checked against
+    /// the sender's identity before an `ActionResponse` is allowed to
+    /// consume this slot, so an unrelated registered plugin can't spoof or
+    /// steal the response for an action it wasn't routed.
+    pub provider_id: String,
 }
 
 #[derive(Debug, Clone)]
@@ -172,6 +177,22 @@ impl PluginRegistry {
 
     pub fn take_pending_action(&self, internal_id: &str) -> Option<PendingAction> {
         self.pending_actions.remove(internal_id).map(|(_, v)| v)
+    }
+
+    /// Atomically remove and return the pending action for `internal_id`
+    /// only if it was routed to `provider_id`. If the entry exists but was
+    /// routed to a different provider, it is left in place (so the real
+    /// provider's later response can still consume it) and `None` is
+    /// returned — this is what prevents a non-provider plugin from
+    /// spoofing or stealing another provider's in-flight response slot.
+    pub fn take_pending_action_if_provider(
+        &self,
+        internal_id: &str,
+        provider_id: &str,
+    ) -> Option<PendingAction> {
+        self.pending_actions
+            .remove_if(internal_id, |_, pending| pending.provider_id == provider_id)
+            .map(|(_, v)| v)
     }
 
     /// Evict and return all pending actions whose deadline has passed as of `now`.
