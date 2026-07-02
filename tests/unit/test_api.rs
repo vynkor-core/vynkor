@@ -11,6 +11,7 @@ use veyron::plugins::manager::PluginManager;
 use veyron::plugins::registry::PluginRegistry;
 use veyron::plugins::supervisor::PluginSupervisor;
 use veyron::proto::veyron::PluginManifest;
+use veyron::utils::config::PluginDef;
 
 fn make_registry() -> Arc<PluginRegistry> {
     Arc::new(PluginRegistry::new())
@@ -386,6 +387,7 @@ async fn rate_limit_applies_only_to_verified_sub_not_forged_tokens() {
         Instant::now(),
         Some(1), // 1 rps
         Some(1), // burst of 1
+        vec![],
     );
 
     // Forged tokens signed with the wrong secret, rotating `sub` every request,
@@ -423,6 +425,7 @@ async fn rate_limit_enforced_per_verified_sub() {
         Instant::now(),
         Some(1), // 1 rps
         Some(1), // burst of 1
+        vec![],
     );
 
     let token = create_test_token("admin", vec![], SECRET, 3600);
@@ -524,4 +527,113 @@ async fn get_metrics_requires_auth_when_jwt_set() {
     .await
     .unwrap();
     assert_eq!(res2.status(), StatusCode::OK);
+}
+
+fn sleep_def(id: &str) -> PluginDef {
+    PluginDef {
+        id: id.to_string(),
+        binary: "/bin/sleep".to_string(),
+        args: vec!["60".to_string()],
+        restart: "never".to_string(),
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn start_plugin_spawns_process_declared_in_config() {
+    let registry = make_registry();
+    let manager = make_manager(registry, make_supervisor());
+    let app = create_router_full(
+        Arc::clone(&manager),
+        None,
+        None,
+        None,
+        Instant::now(),
+        None,
+        None,
+        vec![sleep_def("startable")],
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/plugins/startable/start")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        manager.is_supervised("startable"),
+        "plugin must be supervised after start"
+    );
+    manager.stop("startable").await.ok();
+}
+
+#[tokio::test]
+async fn start_unknown_plugin_returns_404() {
+    let app = create_router_full(
+        make_manager(make_registry(), make_supervisor()),
+        None,
+        None,
+        None,
+        Instant::now(),
+        None,
+        None,
+        vec![sleep_def("declared-elsewhere")],
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/plugins/ghost/start")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn start_already_running_plugin_returns_conflict() {
+    let registry = make_registry();
+    let manager = make_manager(registry, make_supervisor());
+    manager
+        .start(veyron::plugins::supervisor::PluginConfig {
+            plugin_id: "already-up".to_string(),
+            binary_path: "/bin/sleep".into(),
+            args: vec!["60".to_string()],
+            restart_policy: veyron::plugins::supervisor::RestartPolicy::Never,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let app = create_router_full(
+        Arc::clone(&manager),
+        None,
+        None,
+        None,
+        Instant::now(),
+        None,
+        None,
+        vec![sleep_def("already-up")],
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/plugins/already-up/start")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    manager.stop("already-up").await.ok();
 }

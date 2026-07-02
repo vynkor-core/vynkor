@@ -8,12 +8,17 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::auth::jwt::JwtValidator;
+use crate::plugins::loader::PluginLoader;
 use crate::plugins::manager::PluginManager;
+use crate::utils::config::PluginDef;
 
 pub struct AppState {
     pub manager: Arc<PluginManager>,
     pub jwt_validator: Option<Arc<JwtValidator>>,
     pub started_at: Instant,
+    /// Plugins declared under `plugins:` in config.yaml — the set `POST
+    /// /plugins/:id/start` is allowed to spawn (never arbitrary binaries).
+    pub plugin_defs: Vec<PluginDef>,
 }
 
 #[derive(Serialize)]
@@ -74,6 +79,27 @@ pub async fn get_plugin(
             })
         })
         .ok_or(StatusCode::NOT_FOUND)
+}
+
+/// Spawn a plugin declared under `plugins:` in config.yaml. 404 when `id`
+/// isn't declared there (this never runs an arbitrary binary path);
+/// 409 when it's already supervised.
+pub async fn start_plugin(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> StatusCode {
+    if state.manager.is_supervised(&id) {
+        return StatusCode::CONFLICT;
+    }
+    let def = match state.plugin_defs.iter().find(|d| d.id == id) {
+        Some(d) => d,
+        None => return StatusCode::NOT_FOUND,
+    };
+    let config = PluginLoader::config_from_def(def);
+    match state.manager.start(config).await {
+        Ok(_) => StatusCode::OK,
+        Err(_) => StatusCode::UNPROCESSABLE_ENTITY,
+    }
 }
 
 pub async fn stop_plugin(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> StatusCode {

@@ -12,6 +12,28 @@ use tracing::{info, warn};
 pub struct PluginLoader;
 
 impl PluginLoader {
+    /// Build the supervisor's `PluginConfig` from a config.yaml plugin entry.
+    /// Shared by the boot-time loader and the HTTP `POST /plugins/:id/start` route.
+    pub fn config_from_def(def: &PluginDef) -> PluginConfig {
+        let policy = match def.restart.as_str() {
+            "always" => RestartPolicy::Always,
+            "never" => RestartPolicy::Never,
+            _ => RestartPolicy::OnFailure,
+        };
+        PluginConfig {
+            plugin_id: def.id.clone(),
+            binary_path: PathBuf::from(&def.binary),
+            args: def.args.clone(),
+            env: def.env.clone(),
+            restart_policy: policy,
+            max_restarts: def.max_restarts,
+            sandbox: def.sandbox,
+            grace_seconds: def.grace_seconds,
+            max_procs: def.max_procs,
+            max_vmem_mb: def.max_vmem_mb,
+        }
+    }
+
     /// Spawn all plugins declared in `config.yaml` under the `plugins:` key.
     /// Respects `requires` declarations in `plugin.json`: deps are loaded first.
     /// Circular dependencies are refused. Missing deps (not in config) refuse the
@@ -100,23 +122,7 @@ impl PluginLoader {
             }
 
             info!(id = %def.id, binary = %def.binary, "spawning plugin");
-            let policy = match def.restart.as_str() {
-                "always" => RestartPolicy::Always,
-                "never" => RestartPolicy::Never,
-                _ => RestartPolicy::OnFailure,
-            };
-            let config = PluginConfig {
-                plugin_id: def.id.clone(),
-                binary_path: PathBuf::from(&def.binary),
-                args: def.args.clone(),
-                env: def.env.clone(),
-                restart_policy: policy,
-                max_restarts: def.max_restarts,
-                sandbox: def.sandbox,
-                grace_seconds: def.grace_seconds,
-                max_procs: def.max_procs,
-                max_vmem_mb: def.max_vmem_mb,
-            };
+            let config = Self::config_from_def(def);
             match manager.start(config).await {
                 Ok(proc) => {
                     info!(id = %def.id, pid = proc.pid, "plugin spawned");

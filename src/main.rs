@@ -95,9 +95,17 @@ async fn main() -> Result<()> {
             utils::logging::init(&cfg.log_level);
             show_logs(&cfg.log_file, lines)?;
         }
-        Commands::Plugin { cmd } => {
-            let cfg = load_config("config.yaml").unwrap_or_default();
-            plugin::handle(cmd, cfg.port, cfg.registry_url.as_deref()).await?;
+        Commands::Plugin { cmd, config, token } => {
+            let cfg = load_config(&config).unwrap_or_default();
+            let token = token.or_else(|| std::env::var("VEYRON_JWT_TOKEN").ok());
+            plugin::handle(
+                cmd,
+                cfg.port,
+                cfg.registry_url.as_deref(),
+                token.as_deref(),
+                cfg.tls_cert_path.is_some(),
+            )
+            .await?;
         }
         Commands::Completions { shell } => {
             complete::generate_completions(shell);

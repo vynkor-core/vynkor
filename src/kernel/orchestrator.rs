@@ -198,6 +198,7 @@ impl Kernel {
             config.api_rate_limit_burst,
             config.tls_cert_path.clone(),
             config.tls_key_path.clone(),
+            config.plugins.clone(),
         );
         tokio::spawn(async move {
             if let Err(e) = api.run().await {

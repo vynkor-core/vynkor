@@ -18,6 +18,13 @@ pub enum Commands {
     Plugin {
         #[command(subcommand)]
         cmd: PluginCmd,
+
+        #[arg(short, long, default_value = "config.yaml")]
+        config: String,
+
+        /// JWT bearer token for a secured kernel. Falls back to VEYRON_JWT_TOKEN.
+        #[arg(long)]
+        token: Option<String>,
     },
     Start {
         #[arg(short, long)]

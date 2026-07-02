@@ -38,7 +38,17 @@ pub enum PluginCmd {
     },
 }
 
-pub async fn handle(cmd: PluginCmd, port: u16, registry_url: Option<&str>) -> anyhow::Result<()> {
+/// `port`/`tls`: derive the kernel API's base URL (scheme + host + port).
+/// `token`: presented as `Authorization: Bearer <token>` on every request —
+/// required against a secured kernel (R5-06, AUDIT H-02/H-03).
+#[allow(clippy::too_many_arguments)]
+pub async fn handle(
+    cmd: PluginCmd,
+    port: u16,
+    registry_url: Option<&str>,
+    token: Option<&str>,
+    tls: bool,
+) -> anyhow::Result<()> {
     let fetch = |refresh: bool| {
         let url = registry_url.unwrap_or("");
         async move {
@@ -49,6 +59,7 @@ pub async fn handle(cmd: PluginCmd, port: u16, registry_url: Option<&str>) -> an
             }
         }
     };
+    let base = base_url(port, tls);
 
     match cmd {
         PluginCmd::List { refresh } => {
@@ -69,19 +80,19 @@ pub async fn handle(cmd: PluginCmd, port: u16, registry_url: Option<&str>) -> an
             print_table(&filtered);
         }
         PluginCmd::Start { id } => {
-            api_post(port, &format!("/plugins/{id}/start")).await?;
+            api_post(&base, &format!("/plugins/{id}/start"), token).await?;
             println!("Plugin '{id}' started.");
         }
         PluginCmd::Stop { id } => {
-            api_post(port, &format!("/plugins/{id}/stop")).await?;
+            api_post(&base, &format!("/plugins/{id}/stop"), token).await?;
             println!("Plugin '{id}' stopped.");
         }
         PluginCmd::Restart { id } => {
-            api_post(port, &format!("/plugins/{id}/restart")).await?;
+            api_post(&base, &format!("/plugins/{id}/restart"), token).await?;
             println!("Plugin '{id}' restarted.");
         }
         PluginCmd::Logs { id, lines } => {
-            let body = api_get(port, &format!("/plugins/{id}/logs?lines={lines}")).await?;
+            let body = api_get(&base, &format!("/plugins/{id}/logs?lines={lines}"), token).await?;
             print!("{body}");
         }
         PluginCmd::Install { target, refresh } => {
@@ -101,6 +112,14 @@ pub async fn handle(cmd: PluginCmd, port: u16, registry_url: Option<&str>) -> an
         }
     }
     Ok(())
+}
+
+/// The kernel API's base URL. TLS is on whenever the kernel config declares
+/// `tls_cert_path`/`tls_key_path` (see `ApiServer::run`) — never guessed from
+/// the port.
+fn base_url(port: u16, tls: bool) -> String {
+    let scheme = if tls { "https" } else { "http" };
+    format!("{scheme}://127.0.0.1:{port}")
 }
 
 fn print_table(entries: &[PluginEntry]) {
@@ -174,9 +193,15 @@ fn print_table(entries: &[PluginEntry]) {
     }
 }
 
-async fn api_get(port: u16, path: &str) -> anyhow::Result<String> {
-    let url = format!("http://127.0.0.1:{port}{path}");
-    let resp = reqwest::get(&url)
+async fn api_get(base: &str, path: &str, token: Option<&str>) -> anyhow::Result<String> {
+    let url = format!("{base}{path}");
+    let client = reqwest::Client::new();
+    let mut req = client.get(&url);
+    if let Some(t) = token {
+        req = req.bearer_auth(t);
+    }
+    let resp = req
+        .send()
         .await
         .map_err(|_| anyhow::anyhow!("kernel not running — start it with `vyn start`"))?;
     if !resp.status().is_success() {
@@ -185,11 +210,14 @@ async fn api_get(port: u16, path: &str) -> anyhow::Result<String> {
     Ok(resp.text().await?)
 }
 
-async fn api_post(port: u16, path: &str) -> anyhow::Result<()> {
-    let url = format!("http://127.0.0.1:{port}{path}");
+async fn api_post(base: &str, path: &str, token: Option<&str>) -> anyhow::Result<()> {
+    let url = format!("{base}{path}");
     let client = reqwest::Client::new();
-    let resp = client
-        .post(&url)
+    let mut req = client.post(&url);
+    if let Some(t) = token {
+        req = req.bearer_auth(t);
+    }
+    let resp = req
         .send()
         .await
         .map_err(|_| anyhow::anyhow!("kernel not running — start it with `vyn start`"))?;
@@ -197,4 +225,70 @@ async fn api_post(port: u16, path: &str) -> anyhow::Result<()> {
         anyhow::bail!("API error: HTTP {}", resp.status());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn base_url_defaults_to_http() {
+        assert_eq!(base_url(8080, false), "http://127.0.0.1:8080");
+    }
+
+    #[test]
+    fn base_url_uses_https_when_tls_configured() {
+        assert_eq!(base_url(8443, true), "https://127.0.0.1:8443");
+    }
+
+    #[tokio::test]
+    async fn api_get_attaches_bearer_token_when_present() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/plugins/x/logs")
+            .match_header("authorization", "Bearer tok-123")
+            .with_status(200)
+            .with_body("log line")
+            .create_async()
+            .await;
+
+        let body = api_get(&server.url(), "/plugins/x/logs", Some("tok-123"))
+            .await
+            .unwrap();
+        assert_eq!(body, "log line");
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn api_get_sends_no_authorization_header_without_token() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/plugins/x/logs")
+            .match_header("authorization", mockito::Matcher::Missing)
+            .with_status(200)
+            .with_body("log line")
+            .create_async()
+            .await;
+
+        api_get(&server.url(), "/plugins/x/logs", None)
+            .await
+            .unwrap();
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn api_post_attaches_bearer_token_when_present() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/plugins/x/start")
+            .match_header("authorization", "Bearer tok-456")
+            .with_status(200)
+            .create_async()
+            .await;
+
+        api_post(&server.url(), "/plugins/x/start", Some("tok-456"))
+            .await
+            .unwrap();
+        mock.assert_async().await;
+    }
 }

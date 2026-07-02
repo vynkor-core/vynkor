@@ -17,12 +17,14 @@ use tracing::info;
 use crate::api::middleware::auth_middleware;
 use crate::api::rate_limit::{build_rate_limiter, rate_limit_middleware};
 use crate::api::routes::{
-    get_plugin, get_plugin_logs, health_check, list_plugins, restart_plugin, stop_plugin, AppState,
+    get_plugin, get_plugin_logs, health_check, list_plugins, restart_plugin, start_plugin,
+    stop_plugin, AppState,
 };
 use crate::api::websocket::{ws_handler, WsGateway};
 use crate::auth::jwt::JwtValidator;
 use crate::ipc::messages::IncomingMessage;
 use crate::plugins::manager::PluginManager;
+use crate::utils::config::PluginDef;
 
 /// Convenience constructor for tests (no WebSocket support).
 pub fn create_router(
@@ -37,9 +39,11 @@ pub fn create_router(
         Instant::now(),
         None,
         None,
+        vec![],
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn create_router_full(
     manager: Arc<PluginManager>,
     jwt_validator: Option<Arc<JwtValidator>>,
@@ -48,11 +52,13 @@ pub fn create_router_full(
     started_at: Instant,
     rate_limit_rps: Option<u32>,
     rate_limit_burst: Option<u32>,
+    plugin_defs: Vec<PluginDef>,
 ) -> Router {
     let state = Arc::new(AppState {
         manager,
         jwt_validator: jwt_validator.clone(),
         started_at,
+        plugin_defs,
     });
 
     let public = Router::new().route("/health", get(health_check));
@@ -65,6 +71,7 @@ pub fn create_router_full(
         .route("/plugins", get(list_plugins))
         .route("/plugins/:id", get(get_plugin))
         .route("/plugins/:id/logs", get(get_plugin_logs))
+        .route("/plugins/:id/start", post(start_plugin))
         .route("/plugins/:id/stop", post(stop_plugin))
         .route("/plugins/:id/restart", post(restart_plugin));
 
@@ -136,6 +143,7 @@ pub struct ApiServer {
     rate_limit_burst: Option<u32>,
     tls_cert_path: Option<PathBuf>,
     tls_key_path: Option<PathBuf>,
+    plugin_defs: Vec<PluginDef>,
 }
 
 impl ApiServer {
@@ -151,6 +159,7 @@ impl ApiServer {
         rate_limit_burst: Option<u32>,
         tls_cert_path: Option<PathBuf>,
         tls_key_path: Option<PathBuf>,
+        plugin_defs: Vec<PluginDef>,
     ) -> Self {
         Self {
             port,
@@ -163,6 +172,7 @@ impl ApiServer {
             rate_limit_burst,
             tls_cert_path,
             tls_key_path,
+            plugin_defs,
         }
     }
 
@@ -175,6 +185,7 @@ impl ApiServer {
             self.started_at,
             self.rate_limit_rps,
             self.rate_limit_burst,
+            self.plugin_defs.clone(),
         );
         let addr = SocketAddr::from(([127, 0, 0, 1], self.port));
 

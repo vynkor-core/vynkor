@@ -26,7 +26,7 @@
 | Clippy | clean (`--all-targets --all-features -D warnings`) |
 | Kernel core | ✅ framing/MAC/fragmentation/supervision solid, regression-tested |
 | SDKs | Rust ✅ · Python ✅ · C++ ✅ — frame parity (R5-01/02) and secured-mode (R5-05) closed |
-| CLI | ⚠️ dev-mode only: no JWT/TLS support, `plugin start` route missing (R5-06) |
+| CLI | ✅ JWT bearer auth, TLS-aware scheme, `plugin start` route, `--config` honored (R5-06) |
 
 ### Completed — Phase 4 (audit regression fixes) ✓
 
@@ -125,9 +125,9 @@ Python `Plugin` constructs its client without a secret (first post-registration 
 
 **Done:** Rust `Plugin::run_with`/`VeyronClient::connect` already read `VEYRON_JWT_TOKEN`/`VEYRON_JWT_SECRET` and use `connect_with_secret` — confirmed via existing `mac_secured_registration_and_tagged_frames` integration test, no change needed. Python `Plugin.__init__` now defaults `jwt_token` from `VEYRON_JWT_TOKEN` (when the subclass didn't set one) and passes `VEYRON_JWT_SECRET`'s bytes to `VeyronClient`'s `secret` param (`tests/python/test_plugin_env.py`, 4 cases). C++ `Plugin` gained the same env wiring via new `veyron::resolve_jwt_token`/`resolve_jwt_secret` helpers (`sdk/cpp/include/veyron/env.hpp`) and — since it had no socket-path resolution at all, hardcoding `/tmp/veyron.sock` (a BUG-006 regression AUDIT hadn't flagged for C++) — a `default_socket_path()` mirroring the kernel's XDG_RUNTIME_DIR → `/run/user/<uid>` → `~/.veyron/run` logic; `register_plugin` now sends the resolved token. Tests: `sdk/cpp/tests/test_env.cpp` (8 cases) + `sdk/cpp/tests/test_plugin.cpp` (2 cases), 25/25 passing via `ctest`.
 
-### R5-06 — CLI: JWT header, TLS scheme, fix `plugin start` (High, AUDIT H-02/H-03)
+### R5-06 ✓ — CLI: JWT header, TLS scheme, fix `plugin start` (High, AUDIT H-02/H-03)
 
-**Files:** `src/cli/plugin.rs`, `src/api/server.rs`, `src/main.rs:109`
+**Files:** `src/cli/plugin.rs`, `src/cli/mod.rs`, `src/api/server.rs`, `src/api/routes.rs`, `src/plugins/loader.rs`, `src/kernel/orchestrator.rs`, `src/main.rs`
 
 - `vyn plugin start` POSTs `/plugins/{id}/start` — route doesn't exist (always 404). Add the route (resolve from config `plugins:`, call `PluginManager::start`) or drop the subcommand.
 - `api_get`/`api_post` attach no `Authorization` header and hardcode `http://` — CLI is unusable against a secured/TLS kernel. Accept token via flag/env/config; derive scheme from `tls_cert_path`.
@@ -136,6 +136,8 @@ Python `Plugin` constructs its client without a secret (first post-registration 
 **Acceptance:** route-level test for each CLI-invoked endpoint; secured-kernel CLI smoke test.
 
 **Effort:** 1–2 d
+
+**Done:** `POST /plugins/:id/start` added — `AppState` now carries `plugin_defs: Vec<PluginDef>` (the config.yaml-declared set, threaded from `Kernel::run_with_components` → `ApiServer::new` → `create_router_full`), so the route can only spawn binaries the operator declared, never an arbitrary path; 404 when `id` isn't declared, 409 when already supervised. `PluginLoader::config_from_def` extracted (previously inlined in `load_all`) so both the boot-time loader and this route build `PluginConfig` identically. Tests: `start_plugin_spawns_process_declared_in_config`, `start_unknown_plugin_returns_404`, `start_already_running_plugin_returns_conflict` (`tests/unit/test_api.rs`). CLI: `api_get`/`api_post` now take a `base_url` + `Option<&str>` token and attach `Authorization: Bearer` via `reqwest`'s `bearer_auth` when present (`sdk` parity with the three plugin SDKs' env-var convention); `base_url()` derives `https://` whenever the loaded config has `tls_cert_path` set, `http://` otherwise. `Commands::Plugin` gained `--config` (was hardcoded to `config.yaml`) and `--token` (falls back to `VEYRON_JWT_TOKEN`). Tests: `base_url_defaults_to_http`, `base_url_uses_https_when_tls_configured`, `api_get_attaches_bearer_token_when_present`, `api_get_sends_no_authorization_header_without_token`, `api_post_attaches_bearer_token_when_present` (`src/cli/plugin.rs`, via `mockito`).
 
 ### R5-07 — Decide & implement the Action system (High, AUDIT H-05)
 
