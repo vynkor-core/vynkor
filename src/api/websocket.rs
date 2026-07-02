@@ -149,7 +149,7 @@ async fn handle_socket(
                             let header = serialize_header(&frame);
                             frame.mac = Some(compute_tag(k, &header, &frame.payload));
                         }
-                        if socket.send(Message::Binary(frame_to_bytes(&frame))).await.is_err() {
+                        if socket.send(Message::Binary(frame_to_bytes(&frame).into())).await.is_err() {
                             break;
                         }
                     }

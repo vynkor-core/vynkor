@@ -22,16 +22,16 @@ path = "tests/integration/mod.rs"
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 
-axum = { version = "0.7", features = ["ws"] }
-axum-server = { version = "0.7", features = ["tls-rustls"] }
+axum = { version = "0.8", features = ["ws"] }
+axum-server = { version = "0.8", features = ["tls-rustls"] }
 tower-http = { version = "0.7.0", features = ["timeout"] }
 
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-tracing-opentelemetry = { version = "0.25", optional = true }
-opentelemetry        = { version = "0.24", features = ["trace"], optional = true }
-opentelemetry_sdk    = { version = "0.24", features = ["rt-tokio"], optional = true }
-opentelemetry-otlp   = { version = "0.17", features = ["grpc-tonic"], optional = true }
+tracing-opentelemetry = { version = "0.33", optional = true }
+opentelemetry        = { version = "0.32", features = ["trace"], optional = true }
+opentelemetry_sdk    = { version = "0.32", features = ["rt-tokio"], optional = true }
+opentelemetry-otlp   = { version = "0.32", features = ["grpc-tonic"], optional = true }
 
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
@@ -43,7 +43,7 @@ sha2 = "0.10"
 hkdf = "0.12"
 rand = "0.8"
 
-nix = { version = "0.28", features = ["signal", "process", "fs", "sched", "resource", "user"] }
+nix = { version = "0.31", features = ["signal", "process", "fs", "sched", "resource", "user"] }
 
 clap = { version = "4.6", features = ["derive"] }
 clap_complete = "4"
@@ -66,7 +66,7 @@ governor = "0.8"
 metrics = "0.23"
 metrics-exporter-prometheus = "0.15"
 
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 
 [features]
 otel = ["tracing-opentelemetry", "opentelemetry", "opentelemetry_sdk", "opentelemetry-otlp"]

@@ -69,11 +69,11 @@ pub fn create_router_full(
     let mut protected = Router::new()
         .route("/metrics", get(get_metrics))
         .route("/plugins", get(list_plugins))
-        .route("/plugins/:id", get(get_plugin))
-        .route("/plugins/:id/logs", get(get_plugin_logs))
-        .route("/plugins/:id/start", post(start_plugin))
-        .route("/plugins/:id/stop", post(stop_plugin))
-        .route("/plugins/:id/restart", post(restart_plugin));
+        .route("/plugins/{id}", get(get_plugin))
+        .route("/plugins/{id}/logs", get(get_plugin_logs))
+        .route("/plugins/{id}/start", post(start_plugin))
+        .route("/plugins/{id}/stop", post(stop_plugin))
+        .route("/plugins/{id}/restart", post(restart_plugin));
 
     // Per-token rate limiting: only active when JWT auth is configured. Layered
     // *before* auth_middleware is added below, so auth ends up outermost and

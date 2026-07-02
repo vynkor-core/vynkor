@@ -95,21 +95,21 @@ pub fn set_log_level(level: &str) -> bool {
 /// Build an OTLP tracer from the endpoint env var. Returns `None` when the var is
 /// absent or the pipeline fails to build (logs a warning in that case).
 #[cfg(feature = "otel")]
-fn setup_otel_tracer() -> Option<opentelemetry_sdk::trace::Tracer> {
+fn setup_otel_tracer() -> Option<opentelemetry_sdk::trace::SdkTracer> {
     use opentelemetry_otlp::WithExportConfig;
 
     let endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok()?;
 
-    let exporter = opentelemetry_otlp::new_exporter()
-        .tonic()
-        .with_endpoint(endpoint);
-
-    let tracer_provider = opentelemetry_otlp::new_pipeline()
-        .tracing()
-        .with_exporter(exporter)
-        .install_batch(opentelemetry_sdk::runtime::Tokio)
-        .map_err(|e| tracing::warn!("failed to install OTel OTLP exporter: {e}"))
+    let exporter = opentelemetry_otlp::SpanExporter::builder()
+        .with_tonic()
+        .with_endpoint(endpoint)
+        .build()
+        .map_err(|e| tracing::warn!("failed to build OTel OTLP exporter: {e}"))
         .ok()?;
+
+    let tracer_provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+        .with_batch_exporter(exporter)
+        .build();
 
     Some(opentelemetry::trace::TracerProvider::tracer(
         &tracer_provider,
