@@ -24,6 +24,8 @@ fn sleep_def(id: &str) -> PluginDef {
         env: vec![],
         sandbox: false,
         grace_seconds: 5,
+        max_procs: None,
+        max_vmem_mb: None,
         permissions: vec![],
     }
 }
@@ -38,6 +40,8 @@ fn bad_binary_def(id: &str) -> PluginDef {
         env: vec![],
         sandbox: false,
         grace_seconds: 5,
+        max_procs: None,
+        max_vmem_mb: None,
         permissions: vec![],
     }
 }
@@ -190,6 +194,8 @@ fn mk_def(id: &str) -> PluginDef {
         env: vec![],
         sandbox: false,
         grace_seconds: 5,
+        max_procs: None,
+        max_vmem_mb: None,
         permissions: vec![],
     }
 }

@@ -114,6 +114,8 @@ impl PluginLoader {
                 max_restarts: def.max_restarts,
                 sandbox: def.sandbox,
                 grace_seconds: def.grace_seconds,
+                max_procs: def.max_procs,
+                max_vmem_mb: def.max_vmem_mb,
             };
             match manager.start(config).await {
                 Ok(proc) => {

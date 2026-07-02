@@ -20,6 +20,14 @@ pub struct PluginDef {
     /// Seconds to wait after SIGTERM before SIGKILL on shutdown. 0 = default (5s).
     #[serde(default)]
     pub grace_seconds: u32,
+    /// RLIMIT_NPROC cap. Unset = `runner::DEFAULT_MAX_PROCS`. Applied to
+    /// every plugin, not just sandboxed ones.
+    #[serde(default)]
+    pub max_procs: Option<u64>,
+    /// RLIMIT_AS cap in MiB. Unset = `runner::DEFAULT_MAX_VMEM_MB`. Applied
+    /// to every plugin, not just sandboxed ones.
+    #[serde(default)]
+    pub max_vmem_mb: Option<u64>,
     /// Permissions granted to this plugin by the operator. Any permission declared
     /// in plugin.json but absent here causes the kernel to refuse to load the plugin.
     /// Empty list means "allow all declared permissions" (no restriction).

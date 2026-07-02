@@ -43,3 +43,5 @@ allow_no_auth: true
 #       - LOG_LEVEL=info
 #     sandbox: false                 # true: isolate in new PID+net namespace (Linux)
 #     grace_seconds: 10              # optional, default 5 — seconds to wait after SIGTERM before SIGKILL
+#     max_procs: 64                  # optional, default 64 — RLIMIT_NPROC cap (applied to every plugin, not just sandboxed)
+#     max_vmem_mb: 512               # optional, default 512 — RLIMIT_AS cap in MiB (applied to every plugin, not just sandboxed)

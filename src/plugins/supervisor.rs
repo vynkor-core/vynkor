@@ -39,6 +39,12 @@ pub struct PluginConfig {
     pub sandbox: bool,
     /// Seconds to wait after SIGTERM before SIGKILL. 0 means use default (5s).
     pub grace_seconds: u32,
+    /// RLIMIT_NPROC cap. None = `runner::DEFAULT_MAX_PROCS`. Applied
+    /// unconditionally (not gated by `sandbox`).
+    pub max_procs: Option<u64>,
+    /// RLIMIT_AS cap in MiB. None = `runner::DEFAULT_MAX_VMEM_MB`. Applied
+    /// unconditionally (not gated by `sandbox`).
+    pub max_vmem_mb: Option<u64>,
 }
 
 #[allow(dead_code)]
@@ -136,19 +142,38 @@ impl PluginSupervisor {
                 cmd.env(k, v);
             }
         }
+        let max_procs = config
+            .max_procs
+            .unwrap_or(crate::plugins::runner::DEFAULT_MAX_PROCS);
+        let max_vmem_mb = config
+            .max_vmem_mb
+            .unwrap_or(crate::plugins::runner::DEFAULT_MAX_VMEM_MB);
         #[cfg(target_os = "linux")]
-        if config.sandbox {
+        {
             use std::os::unix::process::CommandExt;
+            let sandbox = config.sandbox;
             unsafe {
-                cmd.as_std_mut()
-                    .pre_exec(crate::plugins::runner::sandbox_pre_exec);
+                cmd.as_std_mut().pre_exec(move || {
+                    if sandbox {
+                        crate::plugins::runner::sandbox_pre_exec(max_procs, max_vmem_mb)
+                    } else {
+                        crate::plugins::runner::apply_resource_limits(max_procs, max_vmem_mb)
+                    }
+                });
             }
         }
         #[cfg(not(target_os = "linux"))]
-        if config.sandbox {
+        {
+            let _ = (max_procs, max_vmem_mb);
+            if config.sandbox {
+                warn!(
+                    plugin_id = %config.plugin_id,
+                    "sandbox=true has no effect on this OS (Linux required for namespace isolation)"
+                );
+            }
             warn!(
                 plugin_id = %config.plugin_id,
-                "sandbox=true has no effect on this OS (Linux required for namespace isolation)"
+                "resource limits (max_procs/max_vmem_mb) unsupported on this OS"
             );
         }
 

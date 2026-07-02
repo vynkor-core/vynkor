@@ -28,6 +28,8 @@ fn def_with_binary(id: &str, binary: &str) -> PluginDef {
         env: vec![],
         sandbox: false,
         grace_seconds: 5,
+        max_procs: None,
+        max_vmem_mb: None,
         permissions: vec![],
     }
 }
@@ -176,6 +178,8 @@ async fn invalid_plugin_skipped_valid_loads() {
             env: vec![],
             sandbox: false,
             grace_seconds: 1,
+            max_procs: None,
+            max_vmem_mb: None,
             permissions: vec![],
         },
         PluginDef {
@@ -187,6 +191,8 @@ async fn invalid_plugin_skipped_valid_loads() {
             env: vec![],
             sandbox: false,
             grace_seconds: 1,
+            max_procs: None,
+            max_vmem_mb: None,
             permissions: vec![],
         },
     ];
