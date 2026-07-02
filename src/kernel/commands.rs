@@ -27,6 +27,10 @@ impl CommandOutcome {
             error,
         }
     }
+
+    pub fn permission_denied(error: String) -> Self {
+        Self::err(CommandStatus::CommandPermissionDenied, error)
+    }
 }
 
 /// Executes kernel control commands (health checks, config reload).

@@ -98,6 +98,7 @@ enum PermissionType {
   PERMISSION_BROWSER    = 9;  // управление браузером
   PERMISSION_IPC_SEND   = 10; // отправка сообщений другим плагинам (peer-to-peer)
   PERMISSION_AUDIO_STREAM = 11; // send/receive raw audio frames via FLAG_RAW_BINARY
+  PERMISSION_KERNEL_ADMIN = 12; // admin KernelCommands (reload_config etc); health_check exempt
 }
 
 
@@ -148,9 +149,10 @@ message KernelCommandAck {
 }
 
 enum CommandStatus {
-  COMMAND_OK      = 0;
-  COMMAND_ERROR   = 1;
-  COMMAND_UNKNOWN = 2;  // плагин не знает такой команды
+  COMMAND_OK                 = 0;
+  COMMAND_ERROR              = 1;
+  COMMAND_UNKNOWN            = 2;  // плагин не знает такой команды
+  COMMAND_PERMISSION_DENIED  = 3;  // плагин не объявил PERMISSION_KERNEL_ADMIN
 }
 
 

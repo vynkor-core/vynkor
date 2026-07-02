@@ -97,7 +97,7 @@ WS `parse_frame` neither decompresses nor reassembles. Either share the UDS norm
 
 **Goal:** the documented production posture (JWT on) is actually usable end-to-end.
 
-### R5-04 — Permission-gate `KernelCommand` (High, AUDIT H-01)
+### R5-04 ✓ — Permission-gate `KernelCommand` (High, AUDIT H-01)
 
 **Files:** `src/ipc/protocol.rs:408-423`, `proto/veyron_protocol.proto`
 
@@ -106,6 +106,8 @@ Any registered plugin can invoke `reload_config` regardless of permissions. Add 
 **Acceptance:** test proving a permissionless plugin gets `ERR_PERMISSION_DENIED` on `reload_config`.
 
 **Effort:** 0.5 d
+
+**Done:** `PERMISSION_KERNEL_ADMIN = 12` added to proto + `KNOWN_PERMISSIONS`; `CommandStatus.COMMAND_PERMISSION_DENIED = 3` added; `MessageRouter` checks it before `CommandHandler::dispatch` for every command except `health_check`. Tests: `reload_config_without_admin_permission_is_denied`, `health_check_exempt_from_admin_permission` (`tests/integration/test_kernel_commands.rs`).
 
 ### R5-05 — SDK plugin base classes: secured-mode support (High, AUDIT H-04)
 

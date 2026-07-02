@@ -194,6 +194,7 @@ String names used in `registry.json` `permissions` and `plugin.json` `permission
 | `browser` | `PERMISSION_BROWSER` | Browser control |
 | `ipc_send` | `PERMISSION_IPC_SEND` | Unicast/broadcast to other plugins (also needs `ipc_targets`) |
 | `audio_stream` | `PERMISSION_AUDIO_STREAM` | Peer-to-peer raw audio via FLAG_RAW_BINARY |
+| `kernel_admin` | `PERMISSION_KERNEL_ADMIN` | Admin `KernelCommand`s (e.g. `reload_config`); `health_check` is exempt |
 
 This list is normative and mirrors `KNOWN_PERMISSIONS` in `src/marketplace/installer.rs` and the
 `PermissionType` enum in `proto/veyron_protocol.proto`.

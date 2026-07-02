@@ -7,7 +7,7 @@ use crate::events::store::EventStore;
 use crate::ipc::connection::{out_frame, Outbound};
 use crate::ipc::framing::{target_as_str, Frame, FLAG_RAW_BINARY};
 use crate::ipc::messages::IncomingMessage;
-use crate::kernel::commands::CommandHandler;
+use crate::kernel::commands::{CommandHandler, CommandOutcome};
 use crate::plugins::registry::PluginRegistry;
 use crate::proto::veyron::{
     envelope, ActionResponse, ActionStatus, Envelope, ErrorCode, ErrorMessage, Event,
@@ -406,8 +406,26 @@ impl MessageRouter {
             }
 
             Some(envelope::Payload::KernelCommand(cmd)) => {
-                let outcome =
-                    CommandHandler::dispatch(&cmd.command, registry, start_time, config_path);
+                let sender_id = registry
+                    .get_by_conn_id(msg.conn_id)
+                    .map(|e| e.plugin_id.clone())
+                    .unwrap_or_default();
+
+                let outcome = if cmd.command != "health_check"
+                    && check_permission(registry, &sender_id, PermissionType::PermissionKernelAdmin)
+                        .is_err()
+                {
+                    warn!(
+                        sender = %sender_id,
+                        command = %cmd.command,
+                        "kernel command permission denied"
+                    );
+                    CommandOutcome::permission_denied(format!(
+                        "{sender_id} lacks PERMISSION_KERNEL_ADMIN"
+                    ))
+                } else {
+                    CommandHandler::dispatch(&cmd.command, registry, start_time, config_path)
+                };
 
                 let ack = Envelope {
                     payload: Some(envelope::Payload::KernelCommandAck(KernelCommandAck {

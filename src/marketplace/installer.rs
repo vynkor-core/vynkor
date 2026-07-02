@@ -21,6 +21,7 @@ const KNOWN_PERMISSIONS: &[&str] = &[
     "browser",
     "ipc_send",
     "audio_stream",
+    "kernel_admin",
 ];
 
 #[derive(Debug, Deserialize)]
