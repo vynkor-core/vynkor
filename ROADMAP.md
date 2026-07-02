@@ -25,7 +25,7 @@
 | Tests | `cargo test --all --all-features`: 263 passing, 0 failing |
 | Clippy | clean (`--all-targets --all-features -D warnings`) |
 | Kernel core | ✅ framing/MAC/fragmentation/supervision solid, regression-tested |
-| SDKs | Rust ✅ · Python ⚠️ · C++ ⚠️ — non-Rust SDKs break on frames ≥ 64 KiB (R5-01) |
+| SDKs | Rust ✅ · Python ✅ · C++ ✅ — frame parity (R5-01/02) and secured-mode (R5-05) closed |
 | CLI | ⚠️ dev-mode only: no JWT/TLS support, `plugin start` route missing (R5-06) |
 
 ### Completed — Phase 4 (audit regression fixes) ✓
@@ -115,13 +115,15 @@ Any registered plugin can invoke `reload_config` regardless of permissions. Add 
 
 **Done:** `PERMISSION_KERNEL_ADMIN = 12` added to proto + `KNOWN_PERMISSIONS`; `CommandStatus.COMMAND_PERMISSION_DENIED = 3` added; `MessageRouter` checks it before `CommandHandler::dispatch` for every command except `health_check`. Tests: `reload_config_without_admin_permission_is_denied`, `health_check_exempt_from_admin_permission` (`tests/integration/test_kernel_commands.rs`).
 
-### R5-05 — SDK plugin base classes: secured-mode support (High, AUDIT H-04)
+### R5-05 ✓ — SDK plugin base classes: secured-mode support (High, AUDIT H-04)
 
-**Files:** `sdk/python/veyron/plugin.py`, `sdk/rust/src/plugin.rs`, `sdk/cpp/include/veyron/plugin.hpp`
+**Files:** `sdk/python/veyron/plugin.py`, `sdk/rust/src/plugin.rs`, `sdk/cpp/include/veyron/plugin.hpp`, `sdk/cpp/include/veyron/env.hpp`, `sdk/cpp/src/env.cpp`
 
 Python `Plugin` constructs its client without a secret (first post-registration send → connection dropped on secured kernel); Rust `Plugin::run` registers with an empty token (rejected outright). Thread `jwt_token` + shared secret through (env vars `VEYRON_JWT_TOKEN` / `VEYRON_SECRET` as default source). Add secured-mode SDK harness tests.
 
 **Effort:** 1–2 d
+
+**Done:** Rust `Plugin::run_with`/`VeyronClient::connect` already read `VEYRON_JWT_TOKEN`/`VEYRON_JWT_SECRET` and use `connect_with_secret` — confirmed via existing `mac_secured_registration_and_tagged_frames` integration test, no change needed. Python `Plugin.__init__` now defaults `jwt_token` from `VEYRON_JWT_TOKEN` (when the subclass didn't set one) and passes `VEYRON_JWT_SECRET`'s bytes to `VeyronClient`'s `secret` param (`tests/python/test_plugin_env.py`, 4 cases). C++ `Plugin` gained the same env wiring via new `veyron::resolve_jwt_token`/`resolve_jwt_secret` helpers (`sdk/cpp/include/veyron/env.hpp`) and — since it had no socket-path resolution at all, hardcoding `/tmp/veyron.sock` (a BUG-006 regression AUDIT hadn't flagged for C++) — a `default_socket_path()` mirroring the kernel's XDG_RUNTIME_DIR → `/run/user/<uid>` → `~/.veyron/run` logic; `register_plugin` now sends the resolved token. Tests: `sdk/cpp/tests/test_env.cpp` (8 cases) + `sdk/cpp/tests/test_plugin.cpp` (2 cases), 25/25 passing via `ctest`.
 
 ### R5-06 — CLI: JWT header, TLS scheme, fix `plugin start` (High, AUDIT H-02/H-03)
 

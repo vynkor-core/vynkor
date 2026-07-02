@@ -5,16 +5,25 @@
 #include <vector>
 
 #include "veyron/client.hpp"
+#include "veyron/env.hpp"
 
 namespace veyron {
 
 class Plugin {
 public:
+    // socket_path: explicit override, else VEYRON_SOCKET_PATH resolution
+    // mirroring the kernel (XDG_RUNTIME_DIR -> /run/user/<uid> -> ~/.veyron/run).
+    // Never the world-writable shared /tmp (BUG-006).
+    // jwt_token/secret: explicit override, else VEYRON_JWT_TOKEN/VEYRON_JWT_SECRET
+    // (secured-kernel support, R5-05).
     explicit Plugin(std::string plugin_id,
-                    std::string socket_path = "/tmp/veyron.sock",
-                    std::vector<uint8_t> secret = {})
+                    std::string socket_path = "",
+                    std::vector<uint8_t> secret = {},
+                    std::string jwt_token = "")
         : plugin_id_(std::move(plugin_id))
-        , client_(std::move(socket_path), std::move(secret)) {}
+        , jwt_token_(resolve_jwt_token(jwt_token))
+        , socket_path_(socket_path.empty() ? default_socket_path() : std::move(socket_path))
+        , client_(socket_path_, resolve_jwt_secret(secret)) {}
 
     virtual ~Plugin() = default;
 
@@ -22,10 +31,13 @@ public:
     virtual void on_message(const Envelope& env) = 0;
     virtual void on_shutdown() {}
 
+    const std::string& jwt_token() const { return jwt_token_; }
+    const std::string& socket_path() const { return socket_path_; }
+
     void run() {
         client_.connect();
 
-        Envelope ack = client_.register_plugin(plugin_id_);
+        Envelope ack = client_.register_plugin(plugin_id_, jwt_token_);
         if (!ack.plugin_register_ack().accepted()) {
             throw std::runtime_error(
                 "veyron: registration rejected: " +
@@ -50,6 +62,8 @@ public:
 
 protected:
     std::string  plugin_id_;
+    std::string  jwt_token_;
+    std::string  socket_path_;
     VeyronClient client_;
 };
 

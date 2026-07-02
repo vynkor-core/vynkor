@@ -19,10 +19,12 @@ add_library(veyron_sdk_cpp STATIC
     src/client.cpp
     src/framing.cpp
     src/mac.cpp
+    src/env.cpp
     include/veyron/client.hpp
     include/veyron/framing.hpp
     include/veyron/mac.hpp
     include/veyron/plugin.hpp
+    include/veyron/env.hpp
     ${PROTO_SRCS}
     ${PROTO_HDRS}
 )
@@ -51,7 +53,7 @@ target_link_libraries(veyron_sdk_cpp
 include(CTest)
 find_package(GTest REQUIRED)
 
-add_executable(veyron_sdk_tests tests/test_mac.cpp)
+add_executable(veyron_sdk_tests tests/test_mac.cpp tests/test_env.cpp tests/test_plugin.cpp)
 target_link_libraries(veyron_sdk_tests
     PRIVATE
     veyron_sdk_cpp

@@ -29,7 +29,11 @@ class Plugin(ABC):
 
     def __init__(self):
         socket_path = os.environ.get("VEYRON_SOCKET_PATH") or _default_socket_path()
-        self._client = VeyronClient(socket_path)
+        if not self.jwt_token:
+            self.jwt_token = os.environ.get("VEYRON_JWT_TOKEN", "")
+        secret_env = os.environ.get("VEYRON_JWT_SECRET")
+        secret = secret_env.encode() if secret_env else None
+        self._client = VeyronClient(socket_path, secret=secret)
 
     async def on_init(self) -> None:
         """Called once after successful registration."""
