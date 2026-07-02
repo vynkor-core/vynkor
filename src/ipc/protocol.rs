@@ -390,10 +390,16 @@ impl MessageRouter {
                     .map(|e| e.plugin_id.clone())
                     .unwrap_or_default();
 
+                // R5-07 interim honesty fix (AUDIT H-05): the kernel has no
+                // built-in action executor yet — a passing permission check
+                // used to short-circuit to ACTION_OK, claiming work that
+                // never happened. Report ACTION_NOT_FOUND instead until a
+                // real executor (kernel-side or provider-plugin routing,
+                // decision pending) lands.
                 let status = match action_to_permission(&req.action) {
                     None => ActionStatus::ActionNotFound,
                     Some(perm) => match check_permission(registry, &sender_id, perm) {
-                        Ok(()) => ActionStatus::ActionOk,
+                        Ok(()) => ActionStatus::ActionNotFound,
                         Err(_) => {
                             warn!(
                                 sender = %sender_id,

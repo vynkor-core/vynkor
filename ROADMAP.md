@@ -139,9 +139,9 @@ Python `Plugin` constructs its client without a secret (first post-registration 
 
 **Done:** `POST /plugins/:id/start` added — `AppState` now carries `plugin_defs: Vec<PluginDef>` (the config.yaml-declared set, threaded from `Kernel::run_with_components` → `ApiServer::new` → `create_router_full`), so the route can only spawn binaries the operator declared, never an arbitrary path; 404 when `id` isn't declared, 409 when already supervised. `PluginLoader::config_from_def` extracted (previously inlined in `load_all`) so both the boot-time loader and this route build `PluginConfig` identically. Tests: `start_plugin_spawns_process_declared_in_config`, `start_unknown_plugin_returns_404`, `start_already_running_plugin_returns_conflict` (`tests/unit/test_api.rs`). CLI: `api_get`/`api_post` now take a `base_url` + `Option<&str>` token and attach `Authorization: Bearer` via `reqwest`'s `bearer_auth` when present (`sdk` parity with the three plugin SDKs' env-var convention); `base_url()` derives `https://` whenever the loaded config has `tls_cert_path` set, `http://` otherwise. `Commands::Plugin` gained `--config` (was hardcoded to `config.yaml`) and `--token` (falls back to `VEYRON_JWT_TOKEN`). Tests: `base_url_defaults_to_http`, `base_url_uses_https_when_tls_configured`, `api_get_attaches_bearer_token_when_present`, `api_get_sends_no_authorization_header_without_token`, `api_post_attaches_bearer_token_when_present` (`src/cli/plugin.rs`, via `mockito`).
 
-### R5-07 — Decide & implement the Action system (High, AUDIT H-05)
+### R5-07 ◐ — Decide & implement the Action system (High, AUDIT H-05)
 
-**Files:** `src/ipc/protocol.rs:366-406`, `proto/veyron_protocol.proto`, `src/plugins/loader.rs:122-126`
+**Files:** `src/ipc/protocol.rs:385-406`, `proto/veyron_protocol.proto`, `src/plugins/loader.rs:122-126`
 
 `ActionRequest` checks permissions then returns `ACTION_OK` with empty data — a stub that misleads callers. Decision required (manifesto says dumb core → option b):
 (a) kernel-executed built-in actions, or
@@ -149,6 +149,8 @@ Python `Plugin` constructs its client without a secret (first post-registration 
 Interim: return `ACTION_NOT_FOUND` instead of fake success.
 
 **Effort:** decision + 3–5 d (option b) / 0.5 h (interim honesty fix)
+
+**Interim done:** kernel-targeted `ActionRequest`s (target `"kernel"`) that pass the permission check now report `ACTION_NOT_FOUND` instead of a fake `ACTION_OK` — the permission gate itself is unchanged (still denies undeclared permissions with `ACTION_PERMISSION_DENY`). Peer-to-peer `ActionRequest`s routed *to a plugin* (e.g. the `echo` reference plugin in `test_sdk_rust.rs`/`test_sdk_cpp.rs`) are untouched — those never go through this kernel stub. Test: `kernel_targeted_action_request_returns_not_found_not_fake_ok` (`tests/integration/test_kernel_commands.rs`). **Still open:** the (a) vs (b) design decision and full implementation — raise with the team before picking one (manifesto's "dumb core" leans toward (b), routing to provider plugins).
 
 ---
 

@@ -1,7 +1,7 @@
 use super::helpers::start_kernel;
 use std::time::Duration;
 use tokio::time::timeout;
-use veyron::proto::veyron::{CommandStatus, PluginManifest};
+use veyron::proto::veyron::{ActionStatus, CommandStatus, PluginManifest};
 
 fn admin_manifest() -> PluginManifest {
     PluginManifest {
@@ -187,6 +187,46 @@ async fn health_check_exempt_from_admin_permission() {
     .expect("send_command failed");
 
     assert_eq!(ack.status(), CommandStatus::CommandOk);
+
+    let _ = shutdown_tx.send(());
+}
+
+#[tokio::test]
+async fn kernel_targeted_action_request_returns_not_found_not_fake_ok() {
+    // R5-07 interim honesty fix: the kernel's ActionRequest handler is a
+    // permission-check-only stub — it never routes to a provider or executes
+    // anything. Reporting ACTION_OK after a passing permission check would
+    // lie to callers about work that never happened (AUDIT H-05).
+    let (shutdown_tx, _registry, _bus) =
+        start_kernel("/tmp/veyron_integ_cmd_action_stub.sock", 19216).await;
+
+    let mut client = VeyronClient::connect("/tmp/veyron_integ_cmd_action_stub.sock")
+        .await
+        .unwrap();
+    client
+        .register(
+            "action-stub-client",
+            PluginManifest {
+                permissions: vec!["PERMISSION_SYSTEM".to_string()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let resp = timeout(
+        Duration::from_secs(2),
+        client.send_action("get_cpu", b"{}", 2000),
+    )
+    .await
+    .expect("timed out")
+    .expect("send_action failed");
+
+    assert_eq!(
+        resp.status,
+        ActionStatus::ActionNotFound as i32,
+        "kernel has no action executor yet — must not claim ACTION_OK"
+    );
 
     let _ = shutdown_tx.send(());
 }
