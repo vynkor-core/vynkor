@@ -74,8 +74,9 @@ Every message on UDS is wrapped in a strict 44-byte header:
 
 - **Magic `0x5652`** ("VR") — bad magic closes connection instantly, no further read.
 - **Zero-parse routing** — the core routes by the 32-byte target field *without deserializing the Protobuf payload*. A frame destined for `"weather-plugin"` is forwarded with zero copies and zero JSON parsing.
-- **CRC32** — computed over payload only. Corrupt frame → `FrameCrcMismatch` error → connection intact, frame dropped.
+- **CRC32** — computed over payload only. Corrupt frame → `FrameCrcMismatch` → the kernel **drops the connection** (corruption on a local UDS is never line noise; a supervised plugin is restarted per its restart policy).
 - **Flag Bit 0 (`0x0001`)** — `FLAG_MAC_PRESENT`: a 32-byte HMAC-SHA256 tag is appended after the payload. Active on all authenticated connections.
+- **Flag Bit 1 (`0x0002`)** — `FLAG_COMPRESSED`: payloads ≥ 64 KiB are transparently zstd-compressed on the wire. See `docs/FRAMING.md` for the full flag table and MAC interaction.
 - **Payload** — Protobuf `Envelope` (see `proto/veyron_protocol.proto`). The kernel only decodes it when `target == "kernel"`.
 
 ### 4. Security by Default
@@ -113,14 +114,15 @@ The binary is at `target/release/vyn`.
 ```yaml
 # config.yaml
 port: 8080
-socket_path: /tmp/veyron.sock
+# socket_path defaults to $XDG_RUNTIME_DIR/veyron.sock (never shared /tmp);
+# set explicitly only if you need a custom location.
 jwt_secret: "change-me-in-production"
 log_level: info
 
 plugins:
   - id: my-plugin
     binary: ./target/release/my_plugin
-    restart: on_failure
+    restart: on-failure   # always | on-failure | never
     max_restarts: 5
     sandbox: true        # Linux only
 ```
@@ -147,20 +149,31 @@ vyn stop
 ### Write a Plugin (Rust)
 
 ```rust
-use veyron_sdk::Plugin;
+use veyron_sdk::{Plugin, VeyronClient, VeyronError};
+use veyron::proto::veyron::{Envelope, PluginManifest};
 
 struct MyPlugin;
 
 impl Plugin for MyPlugin {
-    fn plugin_id(&self) -> &str { "my-plugin" }
+    fn id(&self) -> &str { "my-plugin" }
+    fn manifest(&self) -> PluginManifest { PluginManifest::default() }
 
-    async fn on_init(&mut self) { /* connect to kernel via VEYRON_SOCKET_PATH */ }
-    async fn on_message(&mut self, msg: Envelope) { /* handle incoming frames */ }
-    async fn on_shutdown(&mut self) { /* clean up */ }
+    async fn on_init(&mut self, _client: &mut VeyronClient) -> Result<(), VeyronError> {
+        Ok(())
+    }
+    async fn on_message(&mut self, _env: Envelope) -> Result<Option<Envelope>, VeyronError> {
+        Ok(None) // return Some(envelope) to reply to the kernel
+    }
+    async fn on_shutdown(&mut self) -> Result<(), VeyronError> { Ok(()) }
 }
+
+// MyPlugin.run().await connects via $VEYRON_SOCKET_PATH and registers.
 ```
 
-SDKs available: `sdk/rust/`, `sdk/cpp/`, `sdk/python/`.
+SDKs available: `sdk/rust/`, `sdk/cpp/`, `sdk/python/`. See `examples/echo_plugin_rs/`.
+
+> **Note:** the SDK `Plugin` base classes currently only work against a kernel
+> started with `allow_no_auth: true` — JWT/secret plumbing is roadmap item R5-05.
 
 ---
 
@@ -190,18 +203,19 @@ sdk/
 
 ## Security
 
-Report vulnerabilities via GitHub Security Advisories (not public issues). See `AUDIT.md` for the full threat model, VULN tracking history, and current audit score.
+Report vulnerabilities via GitHub Security Advisories (not public issues). See `AUDIT.md` for the current audit findings and score.
 
-Current security posture: **85/100** (pre-production). All filed VULNs resolved. Two open items documented in `AUDIT.md`.
+Current posture: **pre-production**. Kernel core (framing, MAC, fragmentation, supervision) is solid and regression-tested; known open items — most notably compressed-frame support missing from the Python/C++ SDKs — are tracked in `AUDIT.md` and `ROADMAP.md` (Phase 5).
 
 ---
 
 ## Protocol Reference
 
-- **Frame format:** `docs/VEYRON_ARCHITECTURE.md`
-- **Message schema:** `proto/veyron_protocol.proto`
-- **Audit & threat model:** `AUDIT.md`
-- **Roadmap:** `docs/ROADMAP_v2.md`
+- **Frame format & flag bits:** `docs/FRAMING.md`
+- **Message schema:** `proto/veyron_protocol.proto` (single source of truth)
+- **Plugin registry schema:** `docs/PLUGIN_REGISTRY_SCHEMA.md`
+- **Audit:** `AUDIT.md`
+- **Roadmap:** `ROADMAP.md` (historical phases in `docs/archive/`)
 
 ---
 

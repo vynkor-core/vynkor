@@ -1,3 +1,4 @@
+use crate::jwt_helper::create_test_token;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use std::sync::Arc;
@@ -5,7 +6,7 @@ use std::time::Instant;
 use tokio::sync::mpsc;
 use tower::ServiceExt;
 use veyron::api::server::{create_router, create_router_full};
-use veyron::auth::jwt::{create_test_token, JwtValidator};
+use veyron::auth::jwt::JwtValidator;
 use veyron::plugins::manager::PluginManager;
 use veyron::plugins::registry::PluginRegistry;
 use veyron::plugins::supervisor::PluginSupervisor;

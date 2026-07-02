@@ -8,11 +8,43 @@ No other file may define flag constants; all SDKs import the values defined here
 | Bit | Hex    | Constant         | Meaning |
 |-----|--------|------------------|---------|
 | 0   | 0x0001 | FLAG_MAC_PRESENT | 32-byte HMAC-SHA256 tag appended after payload |
-| 1   | 0x0002 | FLAG_COMPRESSED  | Payload compressed with zstd (reserved, not yet implemented) |
-| 2   | 0x0004 | FLAG_FRAGMENTED  | Frame is one fragment of a larger message (reserved) |
-| 3   | 0x0008 | FLAG_PRIORITY    | High-priority system frame (reserved) |
+| 1   | 0x0002 | FLAG_COMPRESSED  | Payload zstd-compressed on the wire (implemented — see below) |
+| 2   | 0x0004 | FLAG_FRAGMENTED  | Frame is one fragment of a larger message (implemented — see below) |
+| 3   | 0x0008 | FLAG_PRIORITY    | High-priority system frame (reserved, not yet implemented) |
 | 4   | 0x0010 | FLAG_RAW_BINARY  | Payload is raw bytes (PCM or Opus); router skips Protobuf decode |
 | 5–15 | —     | —                | Reserved |
+
+### FLAG_COMPRESSED (Bit 1)
+
+Implemented on the UDS path. The kernel's write path (`write_frame_raw`) transparently
+zstd-compresses any non-raw-binary payload ≥ 64 KiB (`COMPRESS_THRESHOLD`) when the
+compressed form is smaller, sets this flag, and rewrites `length`/`crc32` to describe
+the wire (compressed) bytes. The read path decompresses and **normalizes**: after
+`read_frame` returns, `payload` is always plaintext and `flags`/`length`/`crc32`
+describe the plaintext.
+
+**MAC interaction:** on secured connections the HMAC tag is computed over the
+*plaintext* header and payload (before compression). Receivers must therefore verify
+the tag against the normalized (decompressed) header/payload, not the raw wire bytes.
+
+> **SDK status:** the Rust SDK (which re-exports the kernel framing) handles this
+> correctly. The Python and C++ SDKs do **not** yet decompress or normalize (R5-01) —
+> until fixed, frames ≥ 64 KiB break non-Rust plugins. The WebSocket gateway also does
+> not accept compressed inbound frames (R5-03).
+
+### FLAG_FRAGMENTED (Bit 2)
+
+Implemented on the UDS path (kernel side). The first 10 bytes of the payload are the
+fragment header: `[fragment_id: u16][sequence: u16][total: u16][stream_id: u32]`,
+all big-endian. The kernel reassembles per `stream_id` with these bounds: max 64
+concurrent streams per connection, reassembled size ≤ 1 MiB (`MAX_PAYLOAD_SIZE`),
+incomplete sets discarded after 30 s. Violations drop the connection. Not supported
+on the WebSocket gateway (R5-03).
+
+> **SDK status:** the Rust SDK implements both sides — `VeyronClient::send_fragmented`
+> emits spec-conformant fragments (each individually MAC'd when secured), and
+> `recv`/`recv_frame` reassemble inbound fragments with the same bounds as the kernel.
+> The Python and C++ SDKs do not implement fragmentation.
 
 ### FLAG_RAW_BINARY (Bit 4)
 

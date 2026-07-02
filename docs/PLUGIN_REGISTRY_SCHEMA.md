@@ -69,8 +69,10 @@ Top-level structure: a JSON array of plugin entries.
 
 ## plugin.json — Plugin Manifest
 
-Every installed plugin directory **must** contain a `plugin.json` at its root. The kernel reads
-this file on every startup before spawning the plugin process.
+Every **marketplace-installed** plugin directory must contain a `plugin.json` at its root
+(`vyn install` validates it in Step 7). For config-declared local plugins the file is
+**optional**: when present the kernel validates it before spawning (compatibility, permissions,
+dependencies); when absent the plugin is spawned with no manifest-derived checks.
 
 ### Schema
 
@@ -85,7 +87,8 @@ this file on every startup before spawning the plugin process.
   },
   "binary": "stt-whisper",
   "events": ["system.ready"],
-  "actions": ["transcribe_audio"]
+  "actions": ["transcribe_audio"],
+  "requires": ["audio-router"]
 }
 ```
 
@@ -100,8 +103,9 @@ this file on every startup before spawning the plugin process.
 | `kernel_compatibility_range.min` | string | Yes | Semver lower bound (inclusive). |
 | `kernel_compatibility_range.max` | string | Yes | Semver upper bound (inclusive) or `"*"`. |
 | `binary` | string | Yes | Relative path to the executable within the plugin directory. |
-| `events` | string[] | No | Event types the plugin subscribes to. Empty array if none. |
+| `events` | string[] | No | Event types the plugin subscribes to (auto-subscribed at load). Empty array if none. |
 | `actions` | string[] | No | Action identifiers the plugin exposes. Empty array if none. |
+| `requires` | string[] | No | Plugin IDs that must be declared in config and are loaded first. Missing deps or dependency cycles refuse the plugin. |
 
 ---
 
@@ -113,10 +117,12 @@ loading remaining plugins — one bad plugin does not crash the kernel.
 
 ### Step 1 — Read manifest
 
-Read `plugin.json` from the plugin's configured directory. If the file is missing or unparseable:
+Read `plugin.json` from the plugin binary's directory. A **missing** file skips all
+manifest-derived checks (Steps 2–4) — the plugin is spawned unvalidated (local/dev plugins).
+A **present but unparseable** file refuses the plugin:
 
 ```
-Refusing to load plugin '<dir>': plugin.json missing or invalid JSON
+Refusing to load plugin '<dir>': Invalid plugin.json: <parse error>
 ```
 
 ### Step 2 — Kernel version compatibility
@@ -178,10 +184,16 @@ String names used in `registry.json` `permissions` and `plugin.json` `permission
 
 | String name | Proto value | Meaning |
 |-------------|-------------|---------|
-| `filesystem` | `PERMISSION_FILESYSTEM` | Read/write local filesystem |
-| `network` | `PERMISSION_NETWORK` | Outbound network access |
-| `ipc` | `PERMISSION_IPC` | Send messages to other plugins |
+| `network` | `PERMISSION_NETWORK` | Outbound HTTP requests |
+| `files_read` | `PERMISSION_FILES_READ` | Read local files |
+| `files_write` | `PERMISSION_FILES_WRITE` | Write/delete local files |
+| `system` | `PERMISSION_SYSTEM` | System metrics (CPU, RAM, disk) |
 | `audio` | `PERMISSION_AUDIO` | play_audio / record_audio via ActionRequest |
+| `notify` | `PERMISSION_NOTIFY` | Send notifications |
+| `scheduler` | `PERMISSION_SCHEDULER` | Timers and alarms |
+| `browser` | `PERMISSION_BROWSER` | Browser control |
+| `ipc_send` | `PERMISSION_IPC_SEND` | Unicast/broadcast to other plugins (also needs `ipc_targets`) |
 | `audio_stream` | `PERMISSION_AUDIO_STREAM` | Peer-to-peer raw audio via FLAG_RAW_BINARY |
 
-See `proto/veyron_protocol.proto` `PermissionType` enum for the full list.
+This list is normative and mirrors `KNOWN_PERMISSIONS` in `src/marketplace/installer.rs` and the
+`PermissionType` enum in `proto/veyron_protocol.proto`.

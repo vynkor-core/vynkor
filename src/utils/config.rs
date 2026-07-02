@@ -92,7 +92,10 @@ pub struct Config {
 /// `$HOME`. Never falls back to the world-writable shared `/tmp` (BUG-006):
 /// if none of those are available, returns an empty string so callers can
 /// fail closed with a clear error instead of binding into `/tmp`.
-fn default_socket_path() -> String {
+///
+/// Public so SDKs resolve the same default as the kernel when
+/// `VEYRON_SOCKET_PATH` is not set.
+pub fn default_socket_path() -> String {
     if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
         return format!("{runtime_dir}/veyron.sock");
     }

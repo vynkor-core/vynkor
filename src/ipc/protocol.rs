@@ -452,7 +452,7 @@ impl MessageRouter {
             counter!("ipc_send_denied_total").increment(1);
             Self::send_error(
                 &msg.write_tx,
-                ErrorCode::ErrUnknown,
+                ErrorCode::ErrPermissionDenied,
                 "PERMISSION_IPC_SEND required",
             )
             .await;
@@ -466,7 +466,7 @@ impl MessageRouter {
             counter!("ipc_send_denied_total").increment(1);
             Self::send_error(
                 &msg.write_tx,
-                ErrorCode::ErrUnknown,
+                ErrorCode::ErrPermissionDenied,
                 "target not in ipc_targets allowlist",
             )
             .await;
@@ -530,7 +530,7 @@ impl MessageRouter {
             counter!("ipc_send_denied_total").increment(1);
             Self::send_error(
                 &msg.write_tx,
-                ErrorCode::ErrUnknown,
+                ErrorCode::ErrPermissionDenied,
                 "PERMISSION_IPC_SEND required",
             )
             .await;

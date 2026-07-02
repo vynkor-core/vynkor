@@ -1,39 +1,148 @@
+//! The [`Plugin`] trait: implement it, call [`Plugin::run`], and the SDK
+//! handles connection, registration, auth, the receive loop, Ping/Pong,
+//! event acknowledgement, and graceful shutdown.
+
 #![allow(async_fn_in_trait)]
 
 use crate::client::VeyronClient;
 use std::env;
-use veyron::proto::veyron::{Envelope, PluginManifest};
+use veyron::proto::veyron::{envelope, Envelope, Event, PluginManifest, Pong};
 use veyron::utils::errors::VeyronError;
 
+fn unix_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// A Veyron plugin. Only [`Plugin::id`], [`Plugin::manifest`] and
+/// [`Plugin::on_message`] are mandatory; everything else has a sensible
+/// default.
+///
+/// Lifecycle driven by [`Plugin::run`]:
+///
+/// 1. Connect to the kernel socket (`VEYRON_SOCKET_PATH` or the per-user
+///    default; never the shared world-writable `/tmp`).
+/// 2. Register, presenting `VEYRON_JWT_TOKEN` if set. When
+///    `VEYRON_JWT_SECRET` is also set, all subsequent frames carry an
+///    HMAC-SHA256 tag (see `docs/FRAMING.md`).
+/// 3. Call [`Plugin::on_init`].
+/// 4. Receive loop: Ping is answered automatically; `PluginShutdown` exits
+///    the loop; [`Event`]s are passed to [`Plugin::on_event`] and
+///    acknowledged when it returns `Ok`; everything else goes to
+///    [`Plugin::on_message`].
+/// 5. Call [`Plugin::on_shutdown`].
 pub trait Plugin {
+    /// Unique plugin id, e.g. `"weather"`.
     fn id(&self) -> &str;
+
+    /// Semver version reported at registration.
+    fn version(&self) -> &str {
+        "1.0.0"
+    }
+
+    /// Declared capabilities: permissions, actions, event subscriptions,
+    /// IPC targets.
     fn manifest(&self) -> PluginManifest;
 
-    async fn on_init(&mut self, client: &mut VeyronClient) -> Result<(), VeyronError>;
-    async fn on_message(
-        &mut self,
-        envelope: Envelope,
-    ) -> Result<Option<Envelope>, VeyronError>;
-    async fn on_shutdown(&mut self) -> Result<(), VeyronError>;
+    /// Called once after successful registration, before the receive loop.
+    /// Use the client to subscribe, negotiate audio streams, etc.
+    async fn on_init(&mut self, client: &mut VeyronClient) -> Result<(), VeyronError> {
+        let _ = client;
+        Ok(())
+    }
 
+    /// Called for every inbound envelope not handled by the SDK
+    /// (Ping/Pong, PluginShutdown and Event have dedicated handling).
+    /// Return `Ok(Some(reply))` to send a response back to the kernel.
+    async fn on_message(&mut self, envelope: Envelope) -> Result<Option<Envelope>, VeyronError>;
+
+    /// Called for each delivered [`Event`]. Returning `Ok(..)` makes the SDK
+    /// send an `EventAck` so the kernel stops retrying. Return a reply
+    /// envelope to send additional traffic.
+    async fn on_event(&mut self, event: Event) -> Result<Option<Envelope>, VeyronError> {
+        let _ = event;
+        Ok(None)
+    }
+
+    /// Called once when the receive loop ends (kernel shutdown request,
+    /// disconnect, or handler error).
+    async fn on_shutdown(&mut self) -> Result<(), VeyronError> {
+        Ok(())
+    }
+
+    /// Connect, register and serve until shutdown. Socket path comes from
+    /// `VEYRON_SOCKET_PATH`, falling back to the same per-user resolution as
+    /// the kernel (XDG_RUNTIME_DIR → /run/user/<uid> → ~/.veyron/run). Never
+    /// the world-writable shared /tmp (BUG-006).
     async fn run(&mut self) -> Result<(), VeyronError> {
-        let socket_path =
-            env::var("VEYRON_SOCKET_PATH").unwrap_or_else(|_| "/tmp/veyron.sock".to_string());
+        let socket_path = env::var("VEYRON_SOCKET_PATH")
+            .unwrap_or_else(|_| veyron::utils::config::default_socket_path());
         self.run_with(&socket_path).await
     }
 
+    /// [`Plugin::run`] against an explicit socket path. JWT credentials are
+    /// still read from `VEYRON_JWT_TOKEN` / `VEYRON_JWT_SECRET` when present.
     async fn run_with(&mut self, socket_path: &str) -> Result<(), VeyronError> {
-        let mut client = VeyronClient::connect(socket_path).await?;
-        let _ack = client.register(self.id(), self.manifest()).await?;
+        let token = env::var("VEYRON_JWT_TOKEN").unwrap_or_default();
+        let secret = env::var("VEYRON_JWT_SECRET").ok().filter(|s| !s.is_empty());
+        let client = match secret {
+            Some(s) => VeyronClient::connect_with_secret(socket_path, s.as_bytes()).await?,
+            None => VeyronClient::connect(socket_path).await?,
+        };
+        self.serve(client, &token).await
+    }
+
+    /// Register on an existing client and run the receive loop. Building
+    /// block for [`Plugin::run`]; also useful in tests.
+    async fn serve(
+        &mut self,
+        mut client: VeyronClient,
+        jwt_token: &str,
+    ) -> Result<(), VeyronError> {
+        let ack = client
+            .register_full(self.id(), self.version(), self.manifest(), jwt_token)
+            .await?;
+        if !ack.accepted {
+            return Err(VeyronError::PermissionDenied(format!(
+                "registration rejected: {}",
+                ack.reject_reason
+            )));
+        }
         self.on_init(&mut client).await?;
         loop {
-            match client.recv().await {
-                Ok(env) => {
+            let env = match client.recv().await {
+                Ok(env) => env,
+                Err(_) => break, // disconnect / EOF
+            };
+            match env.payload {
+                Some(envelope::Payload::Ping(ping)) => {
+                    let pong = Envelope {
+                        payload: Some(envelope::Payload::Pong(Pong {
+                            original_timestamp: ping.timestamp,
+                            server_timestamp: unix_millis(),
+                        })),
+                        ..Default::default()
+                    };
+                    let _ = client.send("kernel", pong).await;
+                }
+                Some(envelope::Payload::PluginShutdown(_)) => break,
+                Some(envelope::Payload::Event(event)) => {
+                    let event_id = event.event_id.clone();
+                    // On handler error no ack is sent — the kernel will retry.
+                    if let Ok(reply) = self.on_event(event).await {
+                        let _ = client.ack_event(&event_id).await;
+                        if let Some(resp) = reply {
+                            let _ = client.send("kernel", resp).await;
+                        }
+                    }
+                }
+                _ => {
                     if let Ok(Some(resp)) = self.on_message(env).await {
                         let _ = client.send("kernel", resp).await;
                     }
                 }
-                Err(_) => break,
             }
         }
         self.on_shutdown().await

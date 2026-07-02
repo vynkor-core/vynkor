@@ -1,3 +1,5 @@
+#[path = "../support/jwt_helper.rs"]
+mod jwt_helper;
 mod test_api;
 mod test_completions;
 mod test_errors;

@@ -247,37 +247,42 @@ impl Kernel {
             return;
         }
 
-        const GRACE_SECONDS: u32 = 5;
+        const DEFAULT_GRACE_SECONDS: u32 = 5;
 
-        let mut payload = Vec::new();
-        let env = Envelope {
-            payload: Some(envelope::Payload::PluginShutdown(PluginShutdown {
-                reason: "kernel shutdown".to_string(),
-                grace_seconds: GRACE_SECONDS,
-            })),
-            ..Default::default()
-        };
-        if env.encode(&mut payload).is_err() {
-            return;
-        }
-        let crc = crc32fast::hash(&payload);
-        let mut target = [0u8; 32];
-        target[..4].copy_from_slice(b"self");
-
-        let frame = Frame {
-            magic: 0x5652,
-            flags: 0,
-            length: payload.len() as u32,
-            target,
-            crc32: crc,
-            payload,
-            mac: None,
-        };
-
+        // Advertise each plugin's real grace window: its supervised config value
+        // when set, else the kernel default — matching what the supervisor will
+        // actually enforce before SIGKILL.
         for entry in entries {
-            let _ = entry.write_tx.send(out_frame(frame.clone())).await;
+            let grace = supervisor
+                .grace_seconds_for(&entry.plugin_id)
+                .unwrap_or(DEFAULT_GRACE_SECONDS);
+            let mut payload = Vec::new();
+            let env = Envelope {
+                payload: Some(envelope::Payload::PluginShutdown(PluginShutdown {
+                    reason: "kernel shutdown".to_string(),
+                    grace_seconds: grace,
+                })),
+                ..Default::default()
+            };
+            if env.encode(&mut payload).is_err() {
+                continue;
+            }
+            let crc = crc32fast::hash(&payload);
+            let mut target = [0u8; 32];
+            target[..4].copy_from_slice(b"self");
+
+            let frame = Frame {
+                magic: 0x5652,
+                flags: 0,
+                length: payload.len() as u32,
+                target,
+                crc32: crc,
+                payload,
+                mac: None,
+            };
+            let _ = entry.write_tx.send(out_frame(frame)).await;
         }
 
-        supervisor.graceful_shutdown(GRACE_SECONDS).await;
+        supervisor.graceful_shutdown(DEFAULT_GRACE_SECONDS).await;
     }
 }

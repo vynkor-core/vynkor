@@ -38,7 +38,7 @@ allow_no_auth: true
 #     max_restarts: 5                # max auto-restarts (default: 5)
 #     args:                          # argv[1..] passed to the binary
 #       - --socket
-#       - /run/user/1000/veyron.sock  # use XDG_RUNTIME_DIR/veyron.sock (fallback: /tmp/veyron.sock)
+#       - /run/user/1000/veyron.sock  # use XDG_RUNTIME_DIR/veyron.sock (fallback: ~/.veyron/run/veyron.sock)
 #     env:                           # extra environment variables
 #       - LOG_LEVEL=info
 #     sandbox: false                 # true: isolate in new PID+net namespace (Linux)

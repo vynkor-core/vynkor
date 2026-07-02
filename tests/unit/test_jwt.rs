@@ -1,4 +1,5 @@
-use veyron::auth::jwt::{create_test_token, JwtValidator};
+use crate::jwt_helper::create_test_token;
+use veyron::auth::jwt::JwtValidator;
 
 const SECRET: &[u8] = b"test-secret-key-for-unit-tests";
 

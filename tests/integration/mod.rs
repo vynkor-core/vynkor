@@ -1,4 +1,6 @@
 mod helpers;
+#[path = "../support/jwt_helper.rs"]
+mod jwt_helper;
 mod sdk_harness;
 mod test_audio_stream_permission;
 mod test_autoload;

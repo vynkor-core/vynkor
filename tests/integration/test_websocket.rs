@@ -1,11 +1,11 @@
 use super::helpers::{start_kernel, start_kernel_secured};
+use crate::jwt_helper::create_test_token;
 use futures_util::{SinkExt, StreamExt};
 use prost::Message;
 use std::time::Duration;
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::protocol::Message as WsMsg;
 use veyron::auth::frame_mac::{compute_tag, derive_session_key, MAC_TAG_LEN};
-use veyron::auth::jwt::create_test_token;
 use veyron::proto::veyron::{envelope, Envelope, Ping, PluginManifest, PluginRegister};
 
 /// Build a frame with HMAC-SHA256 MAC (FLAG_MAC_PRESENT = 0x0001 set, 32-byte tag appended).

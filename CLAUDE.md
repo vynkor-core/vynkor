@@ -17,7 +17,7 @@ A high-performance plugin kernel written in Rust with C++ interop and multi-SDK 
 ┌─ Veyron Main Process (Rust)
 │  ├─ Kernel: Plugin lifecycle, config, signals
 │  ├─ API Server: REST + WebSocket for plugin control
-│  ├─ IPC: Unix sockets / Named pipes to plugins
+│  ├─ IPC: Unix domain sockets to plugins (UDS-only)
 │  ├─ Auth: JWT + permission model
 │  ├─ Events: Global event bus
 │  └─ Plugin Manager: Loader, registry, supervisor
@@ -31,10 +31,10 @@ A high-performance plugin kernel written in Rust with C++ interop and multi-SDK 
 ### Project Structure
 
 **Core Components:**
-- `src/kernel/` — Plugin lifecycle, config, signals
+- `src/kernel/` — Orchestrator (component wiring, shutdown), kernel commands
 - `src/api/` — REST server, WebSocket, routes
 - `src/auth/` — JWT, permissions system
-- `src/ipc/` — IPC protocol, client/server
+- `src/ipc/` — Framing, connection handler, router, UDS server
 - `src/plugins/` — Plugin loader, manager, supervisor
 - `src/events/` — Event bus
 - `src/cli/` — CLI interface
@@ -47,7 +47,9 @@ A high-performance plugin kernel written in Rust with C++ interop and multi-SDK 
 
 **Protocol & Docs:**
 - `proto/veyron_protocol.proto` — IPC message schema (single source of truth)
-- `docs/VEYRON_ARCHITECTURE.md` — Architecture deep dive
+- `docs/FRAMING.md` — Frame format, flag bits (single source of truth for flags)
+- `docs/PLUGIN_REGISTRY_SCHEMA.md` — Marketplace registry schema
+- `docs/archive/` — Historical architecture docs and completed roadmap phases
 
 ### Code Conventions
 
@@ -60,7 +62,7 @@ A high-performance plugin kernel written in Rust with C++ interop and multi-SDK 
 
 **Protobuf:**
 - `proto/veyron_protocol.proto` is **single source of truth** for plugin<->kernel IPC
-- Changes auto-generate Rust code via `proto/build.rs`
+- Changes auto-generate Rust code via the root `build.rs` (prost-build)
 - **Always use `reserved` fields for forward compatibility**
 
 **SDK Pattern:**
@@ -71,10 +73,10 @@ A high-performance plugin kernel written in Rust with C++ interop and multi-SDK 
 ### Critical Files (Edit Carefully)
 
 - **`proto/veyron_protocol.proto`** ← Changes affect ALL plugins
-- **`src/kernel/kernel.rs`** ← Plugin state machine
+- **`src/kernel/orchestrator.rs`** ← Component wiring & shutdown sequencing
 - **`src/plugins/supervisor.rs`** ← Process supervision & resource limits
 - **`src/ipc/protocol.rs`** ← Message routing
-- **`Cargo.toml`** ← Workspace members & dependencies
+- **`Cargo.toml`** ← Dependencies & test targets
 
 ## HOW
 
@@ -115,20 +117,20 @@ cargo fmt --check
 |-------|-------|
 | Plugin doesn't receive messages | `src/ipc/server.rs` — is route registered? Proto version match? |
 | Proto changes break plugins | Use `reserved` fields. Bump proto version. |
-| Plugin leaks memory | `src/plugins/supervisor.rs` — resource limits enforced? |
+| Plugin leaks memory | Resource limits apply only with `sandbox: true` (`src/plugins/runner.rs`) |
 | IPC hangs | `src/ipc/protocol.rs` — timeout handling? Message framing? |
 | Auth fails | `src/auth/jwt.rs` — token expiry? Permissions in `permissions.rs`? |
 
 ### When to Raise Questions
 
 - Modifying IPC protocol (`proto/veyron_protocol.proto`)
-- Changes to plugin lifecycle (`kernel.rs`, `supervisor.rs`)
+- Changes to plugin lifecycle (`orchestrator.rs`, `supervisor.rs`)
 - Cross-SDK compatibility (affects all three SDKs)
 - Performance-critical paths (IPC, event bus, kernel loop)
 
 ## Reference
 
-- **Protocol:** `docs/veyron_protocol.proto`
-- **Architecture:** `docs/VEYRON_ARCHITECTURE.md`
-- **Roadmap:** `docs/ROADMAP_v2.md`
+- **Protocol:** `proto/veyron_protocol.proto`
+- **Architecture:** `docs/archive/VEYRON_ARCHITECTURE.md` (historical) · `README.md` (current)
+- **Roadmap:** `ROADMAP.md`
 - **Config:** `config.yaml`

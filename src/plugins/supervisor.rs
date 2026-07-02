@@ -255,6 +255,15 @@ impl PluginSupervisor {
         self.entries.contains_key(plugin_id)
     }
 
+    /// Configured SIGTERM→SIGKILL grace for a supervised plugin. `None` when the
+    /// plugin is not supervised or its config uses the default (0).
+    pub fn grace_seconds_for(&self, plugin_id: &str) -> Option<u32> {
+        self.entries
+            .get(plugin_id)
+            .map(|e| e.config.grace_seconds)
+            .filter(|g| *g > 0)
+    }
+
     #[allow(dead_code)]
     pub fn restart_count(&self, plugin_id: &str) -> Option<u32> {
         self.entries

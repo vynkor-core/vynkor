@@ -1,7 +1,7 @@
 use super::helpers::start_kernel_secured;
+use crate::jwt_helper::create_test_token;
 use std::time::Duration;
 use tokio::time::timeout;
-use veyron::auth::jwt::create_test_token;
 use veyron::proto::veyron::{envelope, Envelope, Ping, PluginManifest};
 use veyron_sdk::VeyronClient;
 
