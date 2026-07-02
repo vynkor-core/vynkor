@@ -209,13 +209,13 @@ Python `Plugin` constructs its client without a secret (first post-registration 
 |------|-----|-------|
 | Zero-copy hot path (`Arc<[u8]>` payloads; drop per-frame/per-subscriber clones) | AUDIT M-03-adj | `write_frame_raw`, `broadcast` |
 | Two `PluginEntry` / two `PluginManifest` types | AUDIT §7 | rename marketplace pair `RegistryEntry`/`InstallManifest` |
-| `CLK_TCK` hardcoded 100 | AUDIT §7 | `sysconf(_SC_CLK_TCK)` |
+| ~~`CLK_TCK` hardcoded 100~~ ✓ | AUDIT §7 | `supervisor.rs::proc_resource_usage` now calls `nix::unistd::sysconf(SysconfVar::CLK_TCK)`, falling back to 100 only if the syscall fails |
 | Deterministic system `event_id` breaks re-delivery within retention | AUDIT §7 | suffix timestamp/counter |
-| Python `__init__.py` degrades imports to `None` silently | AUDIT §7 | re-raise with actionable message |
-| Env-var mutation in `config.rs` tests (parallel-unsafe) | AUDIT §7 | serialize or use `temp-env` |
+| ~~Python `__init__.py` degrades imports to `None` silently~~ ✓ | AUDIT §7 | `VeyronClient`/`Plugin` now bind to a placeholder type whose `__init__`/`__init_subclass__` raise `ImportError` with the original cause and a fix-it hint, instead of silently becoming `None` |
+| ~~Env-var mutation in `config.rs` tests (parallel-unsafe)~~ ✓ | AUDIT §7 | `default_socket_path_*`/`default_pid_and_log_paths_*` tests now use `temp_env::with_var`/`with_var_unset` (new dev-dep) instead of raw `std::env::set_var`/`remove_var` |
 | Dependency refresh: axum 0.8, nix, rusqlite, opentelemetry stack | AUDIT §6 | no conflicts today; batch upgrade |
 | SIGHUP reload + SIGTERM-ignoring-plugin shutdown tests | AUDIT §4 | lifecycle coverage |
-| Committed `sdk/python/veyron/veyron_protocol_pb2.py` is stale (missing `ipc_targets`, `PERMISSION_AUDIO_STREAM`/`PERMISSION_KERNEL_ADMIN`, `COMMAND_PERMISSION_DENIED`) | found during R5-02 | regenerate via `scripts/gen_proto_python.py` and commit |
+| ~~Committed `sdk/python/veyron/veyron_protocol_pb2.py` is stale~~ ✓ | found during R5-02 | regenerated via `scripts/gen_proto_python.py`; confirmed `ipc_targets`, `PERMISSION_KERNEL_ADMIN`, `COMMAND_PERMISSION_DENIED` all present; `pytest tests/python` (21 passed, 3 skipped) and `cargo test --all --all-features` both green after |
 
 ---
 

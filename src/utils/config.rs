@@ -198,44 +198,45 @@ mod tests {
 
     #[test]
     fn default_socket_path_uses_xdg_runtime_dir() {
-        std::env::set_var("XDG_RUNTIME_DIR", "/run/user/1000");
-        let path = default_socket_path();
-        assert_eq!(path, "/run/user/1000/veyron.sock");
-        std::env::remove_var("XDG_RUNTIME_DIR");
+        temp_env::with_var("XDG_RUNTIME_DIR", Some("/run/user/1000"), || {
+            let path = default_socket_path();
+            assert_eq!(path, "/run/user/1000/veyron.sock");
+        });
     }
 
     #[test]
     fn default_socket_path_never_falls_back_to_shared_tmp() {
-        std::env::remove_var("XDG_RUNTIME_DIR");
-        let path = default_socket_path();
-        assert_ne!(
-            path, "/tmp/veyron.sock",
-            "must not default into world-writable shared /tmp (BUG-006)"
-        );
-        // Must land in a per-user location: either the kernel-provided
-        // /run/user/<uid>, or a private 0o700 dir under $HOME.
-        assert!(
-            path.starts_with("/run/user/") || path.contains("/.veyron/"),
-            "expected a per-user private socket dir, got {path}"
-        );
+        temp_env::with_var_unset("XDG_RUNTIME_DIR", || {
+            let path = default_socket_path();
+            assert_ne!(
+                path, "/tmp/veyron.sock",
+                "must not default into world-writable shared /tmp (BUG-006)"
+            );
+            // Must land in a per-user location: either the kernel-provided
+            // /run/user/<uid>, or a private 0o700 dir under $HOME.
+            assert!(
+                path.starts_with("/run/user/") || path.contains("/.veyron/"),
+                "expected a per-user private socket dir, got {path}"
+            );
+        });
     }
 
     #[test]
     fn default_pid_and_log_paths_never_land_in_shared_tmp() {
-        std::env::set_var("XDG_RUNTIME_DIR", "/run/user/1000");
-        let pid = default_pid_path();
-        let log = default_log_path();
-        std::env::remove_var("XDG_RUNTIME_DIR");
+        temp_env::with_var("XDG_RUNTIME_DIR", Some("/run/user/1000"), || {
+            let pid = default_pid_path();
+            let log = default_log_path();
 
-        assert_eq!(pid, PathBuf::from("/run/user/1000/veyron.pid"));
-        assert_eq!(log, PathBuf::from("/run/user/1000/veyron.log"));
-        assert!(
-            !pid.starts_with("/tmp"),
-            "pid file must not default into /tmp (AUDIT M-09)"
-        );
-        assert!(
-            !log.starts_with("/tmp"),
-            "log file must not default into /tmp (AUDIT M-09)"
-        );
+            assert_eq!(pid, PathBuf::from("/run/user/1000/veyron.pid"));
+            assert_eq!(log, PathBuf::from("/run/user/1000/veyron.log"));
+            assert!(
+                !pid.starts_with("/tmp"),
+                "pid file must not default into /tmp (AUDIT M-09)"
+            );
+            assert!(
+                !log.starts_with("/tmp"),
+                "log file must not default into /tmp (AUDIT M-09)"
+            );
+        });
     }
 }

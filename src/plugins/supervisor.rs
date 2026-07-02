@@ -488,9 +488,11 @@ fn proc_resource_usage(pid: u32) -> Option<(f64, f64)> {
     // utime = field 14 (0-indexed: 13), stime = field 15 (0-indexed: 14)
     let utime: u64 = fields.get(13)?.parse().ok()?;
     let stime: u64 = fields.get(14)?.parse().ok()?;
-    // CLK_TCK is 100 on all modern Linux kernels (USER_HZ = 100).
-    const CLK_TCK: f64 = 100.0;
-    let cpu_seconds = (utime + stime) as f64 / CLK_TCK;
+    let clk_tck = nix::unistd::sysconf(nix::unistd::SysconfVar::CLK_TCK)
+        .ok()
+        .flatten()
+        .unwrap_or(100) as f64;
+    let cpu_seconds = (utime + stime) as f64 / clk_tck;
 
     // --- RSS from /proc/<pid>/status ---
     let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
