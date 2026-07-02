@@ -763,6 +763,42 @@ async fn broadcast_strips_flag_mac_present() {
     );
 }
 
+/// AUDIT M-04: forward() (unicast) must strip FLAG_MAC_PRESENT the same way
+/// broadcast() does — otherwise the recipient's write_loop sees a stale tag
+/// flag from the sender's own session key.
+#[tokio::test]
+async fn forward_strips_flag_mac_present() {
+    let reg = Arc::new(PluginRegistry::new());
+    let bus = Arc::new(EventBus::new());
+
+    let (b_tx, mut b_rx) = make_write_pair();
+    reg.register("plugin_b".to_string(), 2, dummy_manifest(), b_tx)
+        .unwrap();
+
+    let (a_tx, _a_rx) = make_write_pair();
+    reg.register(
+        "plugin_a".to_string(),
+        1,
+        ipc_manifest_with_targets(vec!["plugin_b"]),
+        a_tx.clone(),
+    )
+    .unwrap();
+
+    let router_tx = spawn_router(Arc::clone(&reg), bus);
+
+    let mut frame = plug_frame("plugin_b", b"data".to_vec());
+    frame.flags |= FLAG_MAC_PRESENT;
+
+    router_tx.send(incoming(1, frame, a_tx)).await.unwrap();
+
+    let received = recv_frame(&mut b_rx).await;
+    assert_eq!(
+        received.flags & FLAG_MAC_PRESENT,
+        0,
+        "forward must strip FLAG_MAC_PRESENT from the sender's frame"
+    );
+}
+
 #[tokio::test]
 async fn router_rejects_duplicate_plugin_id_registration() {
     let reg = Arc::new(PluginRegistry::new());

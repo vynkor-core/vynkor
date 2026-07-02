@@ -509,15 +509,24 @@ impl MessageRouter {
 
         match registry.get(plugin_id) {
             Some(entry) => {
+                // Strip FLAG_MAC_PRESENT: the recipient's write_loop re-tags with its own
+                // session key. Forwarding the sender's flag without a fresh tag corrupts
+                // the stream (mirrors broadcast()).
+                let frame = Frame {
+                    magic: msg.frame.magic,
+                    flags: msg.frame.flags & !crate::ipc::framing::FLAG_MAC_PRESENT,
+                    length: msg.frame.length,
+                    target: msg.frame.target,
+                    crc32: msg.frame.crc32,
+                    payload: msg.frame.payload.clone(),
+                    mac: None,
+                };
                 // Bounded send: a slow target must not block the router. Dropping
                 // one frame for a non-draining plugin is not the sender's fault, so
                 // this is not counted against the sender's error budget.
-                if timeout(
-                    WRITE_SEND_TIMEOUT,
-                    entry.write_tx.send(out_frame(msg.frame)),
-                )
-                .await
-                .is_err()
+                if timeout(WRITE_SEND_TIMEOUT, entry.write_tx.send(out_frame(frame)))
+                    .await
+                    .is_err()
                 {
                     warn!(target = %plugin_id, "forward timeout: slow target, frame dropped");
                     counter!("ipc_forward_timeouts_total").increment(1);

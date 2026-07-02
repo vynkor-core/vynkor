@@ -153,8 +153,9 @@ Interim: return `ACTION_NOT_FOUND` instead of fake success.
 ### R5-10 — Resource limits: unconditional + configurable (AUDIT M-03)
 `src/plugins/runner.rs`, `src/plugins/supervisor.rs:139-146`, `src/utils/config.rs` — `RLIMIT_NPROC`/`RLIMIT_AS` apply only with `sandbox: true` and are hardcoded. Apply `apply_resource_limits` unconditionally in `pre_exec`; expose values in `PluginDef`. **0.5 d**
 
-### R5-11 — `forward()` must strip stale MAC like `broadcast()` (AUDIT M-04)
+### R5-11 ✓ — `forward()` must strip stale MAC like `broadcast()` (AUDIT M-04)
 `src/ipc/protocol.rs` — unicast forward keeps the sender's `FLAG_MAC_PRESENT` + tag; broadcast rebuilds without. Normalize both. **0.5 h**
+**Done:** `forward()` now rebuilds the frame with `FLAG_MAC_PRESENT` cleared and `mac: None`, mirroring `broadcast()`. Test: `forward_strips_flag_mac_present` (`tests/unit/test_router.rs`).
 
 ### R5-12 — Retire or implement dead protocol surface (AUDIT M-05)
 `proto/veyron_protocol.proto`, `src/ipc/protocol.rs` — `Envelope.version` never checked (`ERR_PROTOCOL_MISMATCH` unused), `AudioStreamChunk` to `"kernel"` unhandled, `ERR_MAC_MISSING`/`ERR_MAC_INVALID` never sent, `needs_gpu`/`priority`/`PluginRegister.version` ignored. Implement version check at registration; `reserved`-retire the rest or document intent. **1 d**
