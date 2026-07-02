@@ -139,18 +139,26 @@ Python `Plugin` constructs its client without a secret (first post-registration 
 
 **Done:** `POST /plugins/:id/start` added — `AppState` now carries `plugin_defs: Vec<PluginDef>` (the config.yaml-declared set, threaded from `Kernel::run_with_components` → `ApiServer::new` → `create_router_full`), so the route can only spawn binaries the operator declared, never an arbitrary path; 404 when `id` isn't declared, 409 when already supervised. `PluginLoader::config_from_def` extracted (previously inlined in `load_all`) so both the boot-time loader and this route build `PluginConfig` identically. Tests: `start_plugin_spawns_process_declared_in_config`, `start_unknown_plugin_returns_404`, `start_already_running_plugin_returns_conflict` (`tests/unit/test_api.rs`). CLI: `api_get`/`api_post` now take a `base_url` + `Option<&str>` token and attach `Authorization: Bearer` via `reqwest`'s `bearer_auth` when present (`sdk` parity with the three plugin SDKs' env-var convention); `base_url()` derives `https://` whenever the loaded config has `tls_cert_path` set, `http://` otherwise. `Commands::Plugin` gained `--config` (was hardcoded to `config.yaml`) and `--token` (falls back to `VEYRON_JWT_TOKEN`). Tests: `base_url_defaults_to_http`, `base_url_uses_https_when_tls_configured`, `api_get_attaches_bearer_token_when_present`, `api_get_sends_no_authorization_header_without_token`, `api_post_attaches_bearer_token_when_present` (`src/cli/plugin.rs`, via `mockito`).
 
-### R5-07 ◐ — Decide & implement the Action system (High, AUDIT H-05)
+### R5-07 ◐ — Decide & implement the Action system (High, AUDIT H-05) — IN PROGRESS
 
-**Files:** `src/ipc/protocol.rs:385-406`, `proto/veyron_protocol.proto`, `src/plugins/loader.rs:122-126`
+**Files:** `src/ipc/protocol.rs:385-406`, `src/plugins/registry.rs`, `src/auth/permissions.rs`, `proto/veyron_protocol.proto` (unchanged — no wire format changes needed)
 
-`ActionRequest` checks permissions then returns `ACTION_OK` with empty data — a stub that misleads callers. Decision required (manifesto says dumb core → option b):
-(a) kernel-executed built-in actions, or
-(b) route actions to provider plugins that declare them in `manifest.actions` (currently only logged), correlating responses by `action_id`.
-Interim: return `ACTION_NOT_FOUND` instead of fake success.
+**Decision:** option (b) — route actions to provider plugins that declare them in `manifest.actions`, correlating responses by `action_id`. Design approved 2026-07-02, spec at `docs/superpowers/specs/2026-07-02-action-routing-design.md`.
 
-**Effort:** decision + 3–5 d (option b) / 0.5 h (interim honesty fix)
+**Approved design:**
+- Kernel scans registered plugins for one whose `manifest.actions` contains the requested action name. 0 matches → `ACTION_NOT_FOUND`. >1 matches → `ACTION_NOT_FOUND` + `warn!` logging the colliding plugin ids (ambiguous declaration is a deploy misconfiguration, not a kernel routing decision).
+- No new permission gate — "a provider declared it" is sufficient authorization. `action_to_permission()` (the old builtin-name map) and its unit test are retired as dead code once routing no longer consults it.
+- Kernel mints its own internal correlation id per hop (`kact-{seq}`) rather than trusting the requester's `action_id` to be globally unique across plugin processes; tracks `PendingAction { requester_write_tx, original_action_id, requester_id, deadline }` keyed by that internal id in a new `DashMap` on `PluginRegistry`.
+- Provider receives a rewritten `ActionRequest` (internal id in place of the original) via the existing `send_envelope` helper, and — per the one new convention declared-action providers must follow — always answers with `ActionResponse` targeted at `"kernel"` (it doesn't know who really asked).
+- Kernel's `ActionResponse` handling: look up the internal id; if it doesn't match a pending entry, drop silently (late/duplicate, not a protocol error). On match, remove the entry, rewrite `action_id` back to the requester's original id, and proxy `status`/`data_json`/`error` through unchanged — including provider-side failures (`ACTION_ERROR`, `ACTION_PERMISSION_DENY`) relayed as-is, not translated.
+- Timeout: piggybacks on the router's existing 60 s `prune_tick` — sweeps pending actions past their deadline (`timeout_ms`, default 30 s per proto doc), sends `ACTION_TIMEOUT` to the requester, evicts. No new timer task.
+- Disconnect edge cases handled by construction: provider gone → requester times out at next sweep; requester gone → stale `write_tx` send silently no-ops until swept (existing pattern elsewhere in this file already tolerates that).
 
-**Interim done:** kernel-targeted `ActionRequest`s (target `"kernel"`) that pass the permission check now report `ACTION_NOT_FOUND` instead of a fake `ACTION_OK` — the permission gate itself is unchanged (still denies undeclared permissions with `ACTION_PERMISSION_DENY`). Peer-to-peer `ActionRequest`s routed *to a plugin* (e.g. the `echo` reference plugin in `test_sdk_rust.rs`/`test_sdk_cpp.rs`) are untouched — those never go through this kernel stub. Test: `kernel_targeted_action_request_returns_not_found_not_fake_ok` (`tests/integration/test_kernel_commands.rs`). **Still open:** the (a) vs (b) design decision and full implementation — raise with the team before picking one (manifesto's "dumb core" leans toward (b), routing to provider plugins).
+**Testing:** integration test for full provider round-trip; ambiguous-provider test; unit test on `PluginRegistry::sweep_expired_actions`/correlation using synthetic `Instant`s (no real-time waiting — avoids a slow/flaky 60 s+ test). Existing `kernel_targeted_action_request_returns_not_found_not_fake_ok` stays green (no provider registered for `get_cpu`).
+
+**Effort:** 3–5 d (design done; implementation in progress)
+
+**Interim done (superseded by the above once implementation lands):** kernel-targeted `ActionRequest`s (target `"kernel"`) that pass the permission check now report `ACTION_NOT_FOUND` instead of a fake `ACTION_OK` — the permission gate itself is unchanged (still denies undeclared permissions with `ACTION_PERMISSION_DENY`). Peer-to-peer `ActionRequest`s routed *to a plugin* (e.g. the `echo` reference plugin in `test_sdk_rust.rs`/`test_sdk_cpp.rs`) are untouched — those never go through this kernel stub. Test: `kernel_targeted_action_request_returns_not_found_not_fake_ok` (`tests/integration/test_kernel_commands.rs`).
 
 ---
 
