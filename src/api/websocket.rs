@@ -17,7 +17,9 @@ use tracing::{info, warn};
 use crate::auth::frame_mac::{compute_tag, verify_tag};
 use crate::auth::jwt::JwtValidator;
 use crate::ipc::connection::{Outbound, SessionKeyCell};
-use crate::ipc::framing::{serialize_header, Frame, FLAG_MAC_PRESENT, MAX_PAYLOAD_SIZE};
+use crate::ipc::framing::{
+    serialize_header, Frame, FLAG_COMPRESSED, FLAG_FRAGMENTED, FLAG_MAC_PRESENT, MAX_PAYLOAD_SIZE,
+};
 use crate::ipc::messages::IncomingMessage;
 
 const FRAME_HEADER_SIZE: usize = 44;
@@ -174,6 +176,15 @@ fn parse_frame(data: &[u8]) -> Result<Frame, &'static str> {
         return Err("bad magic");
     }
     let flags = u16::from_be_bytes([data[2], data[3]]);
+    // WS has native message framing (no fragment reassembly needed) and the
+    // gateway does not normalize compressed payloads before MAC verification —
+    // reject rather than silently mishandle. See docs/FRAMING.md.
+    if flags & FLAG_COMPRESSED != 0 {
+        return Err("compressed inbound frames not supported over WebSocket");
+    }
+    if flags & FLAG_FRAGMENTED != 0 {
+        return Err("fragmented inbound frames not supported over WebSocket");
+    }
     let length = u32::from_be_bytes([data[4], data[5], data[6], data[7]]) as usize;
     if length > MAX_PAYLOAD_SIZE {
         return Err("payload too large");

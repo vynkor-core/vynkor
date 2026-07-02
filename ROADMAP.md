@@ -87,13 +87,15 @@ No existing test sends a payload ≥ `COMPRESS_THRESHOLD` across SDK boundaries 
 
 **Done:** `SdkHarness` now exposes `registry`/`event_bus` so tests can drive the kernel directly. `python_sdk_large_frame_round_trip` (`tests/integration/test_sdk_python.rs`) subscribes a live Python client to an event type, publishes a 100 KiB `Event` through `EventBus::publish` (kernel compresses since it's ≥ `COMPRESS_THRESHOLD`), and asserts the SDK decompresses it byte-for-byte; skips cleanly when `zstandard`/Python are unavailable. (Peer-to-peer `forward()` unicast wasn't used as the vehicle because the committed `veyron_protocol_pb2.py` predates the `PluginManifest.ipc_targets` field added in R5-04/T-04 and regenerating it was out of scope here — tracked as follow-up.) C++ decompression is covered at the unit level in `sdk/cpp/tests/test_mac.cpp` (`FramingCompressed.*`, 3 cases) since no C++ reference plugin binary exists for the integration harness yet (same stand-in gap `test_sdk_cpp.rs` already documents). Fragmented-message case not yet added.
 
-### R5-03 — WebSocket gateway: define compressed/fragmented inbound behavior (High, AUDIT C-03)
+### R5-03 ✓ — WebSocket gateway: define compressed/fragmented inbound behavior (High, AUDIT C-03)
 
 **Files:** `src/api/websocket.rs:168-212`, `docs/FRAMING.md`
 
 WS `parse_frame` neither decompresses nor reassembles. Either share the UDS normalization/reassembly logic, or explicitly reject frames carrying `FLAG_COMPRESSED`/`FLAG_FRAGMENTED` with a clear error — then document the rule. Rejection is acceptable (WS has native message framing); silence is not.
 
 **Effort:** 0.5 d (reject) / 2 d (full support)
+
+**Done:** `parse_frame` now rejects inbound binary frames carrying `FLAG_COMPRESSED` or `FLAG_FRAGMENTED` with a parse error, before CRC/length parsing proceeds — counted against the existing `MAX_WS_PARSE_ERRORS` budget like any other malformed frame, so a client sending one doesn't get disconnected outright. Documented in `docs/FRAMING.md` (new "WebSocket Gateway Inbound Frame Support" section). Test: `ws_rejects_compressed_and_fragmented_inbound_frames` (`tests/integration/test_websocket.rs`) — sends both flag variants, then confirms the connection survives and a subsequent legitimate frame still round-trips.
 
 ---
 

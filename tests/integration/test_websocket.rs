@@ -63,9 +63,13 @@ fn parse_ws_frame(data: &[u8]) -> (Vec<u8>, bool) {
 }
 
 fn build_frame(target: &str, payload: &[u8]) -> Vec<u8> {
+    build_frame_with_flags(target, payload, 0)
+}
+
+fn build_frame_with_flags(target: &str, payload: &[u8], flags: u16) -> Vec<u8> {
     let mut out = Vec::with_capacity(44 + payload.len());
     out.extend_from_slice(&0x5652u16.to_be_bytes());
-    out.extend_from_slice(&0u16.to_be_bytes());
+    out.extend_from_slice(&flags.to_be_bytes());
     out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
     let mut tgt = [0u8; 32];
     let n = target.len().min(32);
@@ -122,6 +126,82 @@ async fn ws_client_registers_and_receives_ack() {
     match env.payload {
         Some(envelope::Payload::PluginRegisterAck(ack)) => {
             assert!(ack.accepted, "WS plugin registration must be accepted");
+        }
+        other => panic!("expected PluginRegisterAck, got: {:?}", other),
+    }
+
+    let _ = _shutdown_tx.send(());
+}
+
+/// R5-03: the WS gateway does not normalize compressed/fragmented inbound
+/// frames before MAC verification/routing, so it must reject rather than
+/// mishandle them. A single bad frame should not close the connection
+/// (parse-error budget is 16) or corrupt subsequent parsing.
+#[tokio::test]
+async fn ws_rejects_compressed_and_fragmented_inbound_frames() {
+    let (_shutdown_tx, _registry, _bus) =
+        start_kernel("/tmp/veyron_integ_ws_compressed.sock", 19301).await;
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let (mut ws, _) = tokio_tungstenite::connect_async("ws://127.0.0.1:19301/ws")
+        .await
+        .expect("WS connect failed");
+
+    const FLAG_COMPRESSED: u16 = 0x0002;
+    const FLAG_FRAGMENTED: u16 = 0x0004;
+
+    ws.send(WsMsg::Binary(build_frame_with_flags(
+        "kernel",
+        b"not actually compressed",
+        FLAG_COMPRESSED,
+    )))
+    .await
+    .expect("WS send failed");
+    ws.send(WsMsg::Binary(build_frame_with_flags(
+        "kernel",
+        b"not actually a fragment",
+        FLAG_FRAGMENTED,
+    )))
+    .await
+    .expect("WS send failed");
+
+    // Connection must survive both rejected frames and keep working normally.
+    let reg_env = Envelope {
+        payload: Some(envelope::Payload::PluginRegister(PluginRegister {
+            plugin_id: "ws_test_plugin_compressed".to_string(),
+            version: String::new(),
+            description: String::new(),
+            manifest: Some(PluginManifest::default()),
+            jwt_token: String::new(),
+        })),
+        ..Default::default()
+    };
+    let mut buf = Vec::new();
+    reg_env.encode(&mut buf).unwrap();
+    ws.send(WsMsg::Binary(build_frame("kernel", &buf)))
+        .await
+        .expect("WS send failed");
+
+    let reply = timeout(Duration::from_secs(3), ws.next())
+        .await
+        .expect("WS recv timed out")
+        .expect("stream ended")
+        .expect("WS error");
+
+    let data = match reply {
+        WsMsg::Binary(b) => b,
+        other => panic!("expected binary, got: {:?}", other),
+    };
+    assert!(data.len() > 44, "response too short");
+    let payload = &data[44..];
+    let env = Envelope::decode(payload).expect("decode failed");
+    match env.payload {
+        Some(envelope::Payload::PluginRegisterAck(ack)) => {
+            assert!(
+                ack.accepted,
+                "registration after rejected frames must still succeed"
+            );
         }
         other => panic!("expected PluginRegisterAck, got: {:?}", other),
     }

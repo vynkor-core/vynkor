@@ -31,7 +31,8 @@ the tag against the normalized (decompressed) header/payload, not the raw wire b
 > correctly (R5-01 ✓): payload is always plaintext after the read call, and MAC
 > verification (when a session key is supplied) runs against the rebuilt plaintext
 > header. Python depends on `zstandard`; C++ links `libzstd` via pkg-config. The
-> WebSocket gateway does not yet accept compressed inbound frames (R5-03).
+> WebSocket gateway rejects inbound frames carrying `FLAG_COMPRESSED` with a parse
+> error (R5-03 ✓) rather than mishandle them — see below.
 
 ### FLAG_FRAGMENTED (Bit 2)
 
@@ -39,8 +40,8 @@ Implemented on the UDS path (kernel side). The first 10 bytes of the payload are
 fragment header: `[fragment_id: u16][sequence: u16][total: u16][stream_id: u32]`,
 all big-endian. The kernel reassembles per `stream_id` with these bounds: max 64
 concurrent streams per connection, reassembled size ≤ 1 MiB (`MAX_PAYLOAD_SIZE`),
-incomplete sets discarded after 30 s. Violations drop the connection. Not supported
-on the WebSocket gateway (R5-03).
+incomplete sets discarded after 30 s. Violations drop the connection. Rejected on
+the WebSocket gateway (R5-03 ✓) — see below.
 
 > **SDK status:** the Rust SDK implements both sides — `VeyronClient::send_fragmented`
 > emits spec-conformant fragments (each individually MAC'd when secured), and
@@ -55,6 +56,18 @@ the frame without Protobuf decode. Stream metadata must be negotiated out-of-ban
 
 Plugins that send frames with `FLAG_RAW_BINARY` set must hold `PERMISSION_AUDIO_STREAM`.
 See [Audio Permissions](#audio-permissions) below.
+
+## WebSocket Gateway Inbound Frame Support (R5-03)
+
+`parse_frame` (`src/api/websocket.rs`) does not decompress or reassemble frames —
+WS has its own native message framing, so `FLAG_FRAGMENTED` support isn't needed,
+and normalizing `FLAG_COMPRESSED` before MAC verification/routing was out of scope
+for the gateway. Rather than silently mis-verify a MAC or route a still-compressed
+payload downstream, the gateway **rejects** any inbound binary frame carrying
+`FLAG_COMPRESSED` or `FLAG_FRAGMENTED` with a parse error (counted the same as any
+other malformed frame, subject to the existing `MAX_WS_PARSE_ERRORS` budget). This
+does not affect kernel→WS outbound frames, which are never compressed (the gateway
+does not call `write_frame_raw`).
 
 ## WebSocket JWT Delivery
 
