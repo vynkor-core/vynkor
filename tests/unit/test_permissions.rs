@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use veyron::auth::permissions::{action_to_permission, check_ipc_target, check_permission};
+use veyron::auth::permissions::{check_ipc_target, check_permission};
 use veyron::plugins::registry::PluginRegistry;
 use veyron::proto::veyron::{PermissionType, PluginManifest};
 
@@ -53,35 +53,6 @@ fn unknown_plugin_returns_not_found_error() {
     let registry = Arc::new(PluginRegistry::new());
     let result = check_permission(&registry, "ghost", PermissionType::PermissionNetwork);
     assert!(result.is_err());
-}
-
-#[test]
-fn action_http_get_maps_to_network_permission() {
-    assert_eq!(
-        action_to_permission("http_get"),
-        Some(PermissionType::PermissionNetwork)
-    );
-}
-
-#[test]
-fn action_read_file_maps_to_files_read() {
-    assert_eq!(
-        action_to_permission("read_file"),
-        Some(PermissionType::PermissionFilesRead)
-    );
-}
-
-#[test]
-fn action_write_file_maps_to_files_write() {
-    assert_eq!(
-        action_to_permission("write_file"),
-        Some(PermissionType::PermissionFilesWrite)
-    );
-}
-
-#[test]
-fn unknown_action_maps_to_none() {
-    assert_eq!(action_to_permission("fly_to_moon"), None);
 }
 
 // ── T-04: per-plugin IPC allowlist ───────────────────────────────────────────

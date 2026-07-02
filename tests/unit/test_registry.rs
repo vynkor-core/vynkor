@@ -352,7 +352,10 @@ fn pending_action_round_trip_take_returns_and_removes() {
 
     let taken = reg.take_pending_action("kact-1").expect("must be present");
     assert_eq!(taken.original_action_id, "act-1");
-    assert!(reg.take_pending_action("kact-1").is_none(), "must be removed after take");
+    assert!(
+        reg.take_pending_action("kact-1").is_none(),
+        "must be removed after take"
+    );
 }
 
 #[test]

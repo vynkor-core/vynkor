@@ -107,6 +107,18 @@ impl MessageRouter {
                     if let Some(limiter) = &ipc_limiter {
                         limiter.retain_recent();
                     }
+                    for expired in registry.sweep_expired_actions(Instant::now()) {
+                        let response = Envelope {
+                            payload: Some(envelope::Payload::ActionResponse(ActionResponse {
+                                action_id: expired.original_action_id,
+                                status: ActionStatus::ActionTimeout as i32,
+                                data_json: vec![],
+                                error: "action timed out".to_string(),
+                            })),
+                            ..Default::default()
+                        };
+                        Self::send_envelope(&expired.requester_write_tx, response).await;
+                    }
                     continue;
                 }
                 msg = rx.recv() => match msg {
@@ -470,9 +482,7 @@ impl MessageRouter {
                 // the provider it was routed to — otherwise any registered plugin
                 // could spoof or steal another provider's response by guessing the
                 // sequential internal action_id (AUDIT: response-spoofing gap).
-                let sender_plugin_id = registry
-                    .get_by_conn_id(msg.conn_id)
-                    .map(|e| e.plugin_id);
+                let sender_plugin_id = registry.get_by_conn_id(msg.conn_id).map(|e| e.plugin_id);
 
                 let taken = match &sender_plugin_id {
                     Some(plugin_id) => {

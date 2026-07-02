@@ -46,19 +46,3 @@ pub fn check_ipc_target(
         )))
     }
 }
-
-pub fn action_to_permission(action: &str) -> Option<PermissionType> {
-    match action {
-        "http_get" | "http_post" | "http_put" | "http_delete" | "http_patch" => {
-            Some(PermissionType::PermissionNetwork)
-        }
-        "read_file" | "list_dir" => Some(PermissionType::PermissionFilesRead),
-        "write_file" | "delete_file" => Some(PermissionType::PermissionFilesWrite),
-        "get_cpu" | "get_memory" | "get_disk" => Some(PermissionType::PermissionSystem),
-        "play_audio" | "record_audio" => Some(PermissionType::PermissionAudio),
-        "send_notification" => Some(PermissionType::PermissionNotify),
-        "set_timer" | "create_alarm" => Some(PermissionType::PermissionScheduler),
-        "browser_navigate" | "browser_screenshot" => Some(PermissionType::PermissionBrowser),
-        _ => None,
-    }
-}
