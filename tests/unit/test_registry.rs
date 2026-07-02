@@ -322,3 +322,54 @@ fn find_action_provider_returns_ambiguous_for_multiple_providers() {
         other => panic!("expected Ambiguous, got {other:?}"),
     }
 }
+
+use std::time::{Duration, Instant};
+use veyron::plugins::registry::PendingAction;
+
+fn dummy_pending(original_action_id: &str, deadline: Instant) -> PendingAction {
+    PendingAction {
+        requester_write_tx: dummy_write_tx(),
+        original_action_id: original_action_id.to_string(),
+        requester_id: "requester".to_string(),
+        deadline,
+    }
+}
+
+#[test]
+fn pending_action_round_trip_take_returns_and_removes() {
+    let reg = PluginRegistry::new();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    reg.register_pending_action("kact-1".to_string(), dummy_pending("act-1", deadline));
+
+    let taken = reg.take_pending_action("kact-1").expect("must be present");
+    assert_eq!(taken.original_action_id, "act-1");
+    assert!(reg.take_pending_action("kact-1").is_none(), "must be removed after take");
+}
+
+#[test]
+fn pending_action_take_missing_returns_none() {
+    let reg = PluginRegistry::new();
+    assert!(reg.take_pending_action("does-not-exist").is_none());
+}
+
+#[test]
+fn sweep_expired_actions_evicts_past_deadline_only() {
+    let reg = PluginRegistry::new();
+    let now = Instant::now();
+    reg.register_pending_action(
+        "kact-expired".to_string(),
+        dummy_pending("act-expired", now - Duration::from_secs(1)),
+    );
+    reg.register_pending_action(
+        "kact-fresh".to_string(),
+        dummy_pending("act-fresh", now + Duration::from_secs(60)),
+    );
+
+    let expired = reg.sweep_expired_actions(now);
+    assert_eq!(expired.len(), 1);
+    assert_eq!(expired[0].original_action_id, "act-expired");
+
+    // Fresh entry must remain, expired one must be gone.
+    assert!(reg.take_pending_action("kact-fresh").is_some());
+    assert!(reg.take_pending_action("kact-expired").is_none());
+}

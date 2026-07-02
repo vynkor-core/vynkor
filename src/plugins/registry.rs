@@ -18,6 +18,17 @@ pub enum ActionLookup {
     Ambiguous(Vec<String>),
 }
 
+/// A kernel-routed action awaiting the provider's reply. Keyed in
+/// `PluginRegistry::pending_actions` by a kernel-minted internal id (not the
+/// requester's own `action_id`, which is only unique per-process and could
+/// collide across two different plugin connections).
+pub struct PendingAction {
+    pub requester_write_tx: mpsc::Sender<Outbound>,
+    pub original_action_id: String,
+    pub requester_id: String,
+    pub deadline: Instant,
+}
+
 #[derive(Debug, Clone)]
 pub struct PluginEntry {
     pub plugin_id: String,
@@ -32,6 +43,7 @@ pub struct PluginRegistry {
     by_plugin_id: DashMap<String, PluginEntry>,
     by_conn_id: DashMap<u64, String>,
     pong_times: DashMap<String, Instant>,
+    pending_actions: DashMap<String, PendingAction>,
 }
 
 impl PluginRegistry {
@@ -40,6 +52,7 @@ impl PluginRegistry {
             by_plugin_id: DashMap::new(),
             by_conn_id: DashMap::new(),
             pong_times: DashMap::new(),
+            pending_actions: DashMap::new(),
         }
     }
 
@@ -151,6 +164,29 @@ impl PluginRegistry {
             1 => ActionLookup::Found(matches.into_iter().next().unwrap()),
             _ => ActionLookup::Ambiguous(matches.into_iter().map(|e| e.plugin_id).collect()),
         }
+    }
+
+    pub fn register_pending_action(&self, internal_id: String, pending: PendingAction) {
+        self.pending_actions.insert(internal_id, pending);
+    }
+
+    pub fn take_pending_action(&self, internal_id: &str) -> Option<PendingAction> {
+        self.pending_actions.remove(internal_id).map(|(_, v)| v)
+    }
+
+    /// Evict and return all pending actions whose deadline has passed as of `now`.
+    pub fn sweep_expired_actions(&self, now: Instant) -> Vec<PendingAction> {
+        let expired_keys: Vec<String> = self
+            .pending_actions
+            .iter()
+            .filter(|e| e.deadline <= now)
+            .map(|e| e.key().clone())
+            .collect();
+
+        expired_keys
+            .into_iter()
+            .filter_map(|k| self.take_pending_action(&k))
+            .collect()
     }
 }
 
