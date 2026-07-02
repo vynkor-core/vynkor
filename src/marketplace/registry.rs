@@ -13,7 +13,7 @@ const REGISTRY_URL: &str =
 const CACHE_TTL: Duration = Duration::from_secs(3600);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PluginEntry {
+pub struct RegistryEntry {
     pub id: String,
     pub slug: String,
     pub name: String,
@@ -52,12 +52,12 @@ fn cache_is_fresh(path: &PathBuf) -> bool {
         .unwrap_or(false)
 }
 
-fn read_cache(path: &PathBuf) -> Option<Vec<PluginEntry>> {
+fn read_cache(path: &PathBuf) -> Option<Vec<RegistryEntry>> {
     let data = fs::read_to_string(path).ok()?;
     serde_json::from_str(&data).ok()
 }
 
-fn write_cache(path: &PathBuf, entries: &[PluginEntry]) -> Result<(), VeyronError> {
+fn write_cache(path: &PathBuf, entries: &[RegistryEntry]) -> Result<(), VeyronError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .map_err(|e| VeyronError::CacheError(format!("create cache dir: {e}")))?;
@@ -68,7 +68,7 @@ fn write_cache(path: &PathBuf, entries: &[PluginEntry]) -> Result<(), VeyronErro
     Ok(())
 }
 
-async fn fetch_from_network(url: &str) -> Result<Vec<PluginEntry>, VeyronError> {
+async fn fetch_from_network(url: &str) -> Result<Vec<RegistryEntry>, VeyronError> {
     let response = reqwest::get(url)
         .await
         .map_err(|e| VeyronError::NetworkError(format!("fetch registry: {e}")))?;
@@ -100,7 +100,7 @@ async fn fetch_from_network(url: &str) -> Result<Vec<PluginEntry>, VeyronError> 
 /// `refresh = true` bypasses the TTL and re-fetches from the network unconditionally.
 /// On network failure, falls back to stale cache with a warning. Returns error only
 /// when network fails *and* no cache exists.
-pub async fn fetch_registry(refresh: bool) -> Result<Vec<PluginEntry>, VeyronError> {
+pub async fn fetch_registry(refresh: bool) -> Result<Vec<RegistryEntry>, VeyronError> {
     fetch_registry_with_url(REGISTRY_URL, refresh).await
 }
 
@@ -109,7 +109,7 @@ pub async fn fetch_registry(refresh: bool) -> Result<Vec<PluginEntry>, VeyronErr
 pub async fn fetch_registry_with_url(
     url: &str,
     refresh: bool,
-) -> Result<Vec<PluginEntry>, VeyronError> {
+) -> Result<Vec<RegistryEntry>, VeyronError> {
     fetch_registry_from(url, refresh, &cache_path()).await
 }
 
@@ -118,7 +118,7 @@ pub(crate) async fn fetch_registry_from(
     url: &str,
     refresh: bool,
     path: &std::path::Path,
-) -> Result<Vec<PluginEntry>, VeyronError> {
+) -> Result<Vec<RegistryEntry>, VeyronError> {
     let path = path.to_path_buf();
 
     if !refresh && cache_is_fresh(&path) {
@@ -147,7 +147,7 @@ pub(crate) async fn fetch_registry_from(
 
 /// Check whether `running_kernel` falls within the plugin's stated compatibility range.
 pub fn check_kernel_compatibility(
-    entry: &PluginEntry,
+    entry: &RegistryEntry,
     running_kernel: &Version,
 ) -> Result<(), VeyronError> {
     let min = Version::parse(&entry.min_kernel_version).map_err(|e| {
@@ -188,8 +188,8 @@ mod tests {
     use super::*;
     use semver::Version;
 
-    fn make_entry(min: &str, max: &str) -> PluginEntry {
-        PluginEntry {
+    fn make_entry(min: &str, max: &str) -> RegistryEntry {
+        RegistryEntry {
             id: "001".into(),
             slug: "stt-whisper".into(),
             name: "Whisper STT".into(),

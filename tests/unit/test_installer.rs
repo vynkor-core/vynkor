@@ -6,10 +6,10 @@ use semver::Version;
 use tempfile::tempdir;
 
 use veyron::marketplace::installer::{extract_zip, validate_manifest};
-use veyron::marketplace::registry::{check_kernel_compatibility, PluginEntry};
+use veyron::marketplace::registry::{check_kernel_compatibility, RegistryEntry};
 
-fn make_entry(slug: &str, min: &str, max: &str) -> PluginEntry {
-    PluginEntry {
+fn make_entry(slug: &str, min: &str, max: &str) -> RegistryEntry {
+    RegistryEntry {
         id: "001".into(),
         slug: slug.into(),
         name: slug.into(),

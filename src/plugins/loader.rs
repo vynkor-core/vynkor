@@ -1,5 +1,5 @@
 use crate::events::bus::EventBus;
-use crate::marketplace::installer::{validate_manifest, PluginManifest};
+use crate::marketplace::installer::{validate_manifest, InstallManifest};
 use crate::plugins::manager::PluginManager;
 use crate::plugins::supervisor::{PluginConfig, RestartPolicy};
 use crate::utils::config::PluginDef;
@@ -49,7 +49,7 @@ impl PluginLoader {
         info!("loading {} plugin(s) from config", defs.len());
 
         // Validate manifests up front and collect dependency info.
-        let mut manifests: HashMap<&str, Option<PluginManifest>> = HashMap::new();
+        let mut manifests: HashMap<&str, Option<InstallManifest>> = HashMap::new();
         let mut refused: HashSet<&str> = HashSet::new();
 
         for def in defs {
@@ -225,7 +225,7 @@ pub fn topo_sort<'a>(
 /// Validate plugin.json from the plugin's binary directory before spawning.
 /// Returns the parsed manifest if present, or None if no plugin.json exists.
 /// If plugin.json is present it must pass kernel compatibility and permission checks.
-pub fn validate_plugin_def(def: &PluginDef) -> Result<Option<PluginManifest>, VeyronError> {
+pub fn validate_plugin_def(def: &PluginDef) -> Result<Option<InstallManifest>, VeyronError> {
     let binary = PathBuf::from(&def.binary);
     let plugin_dir = match binary.parent() {
         Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),

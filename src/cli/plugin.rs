@@ -1,7 +1,7 @@
 use clap::Subcommand;
 
 use crate::marketplace::installer::{install, uninstall};
-use crate::marketplace::registry::{fetch_registry, fetch_registry_with_url, PluginEntry};
+use crate::marketplace::registry::{fetch_registry, fetch_registry_with_url, RegistryEntry};
 
 #[derive(Subcommand)]
 pub enum PluginCmd {
@@ -122,7 +122,7 @@ fn base_url(port: u16, tls: bool) -> String {
     format!("{scheme}://127.0.0.1:{port}")
 }
 
-fn print_table(entries: &[PluginEntry]) {
+fn print_table(entries: &[RegistryEntry]) {
     const HEADERS: [&str; 7] = [
         "ID",
         "SLUG",

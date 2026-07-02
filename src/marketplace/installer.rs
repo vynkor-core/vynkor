@@ -8,7 +8,7 @@ use semver::Version;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-use crate::marketplace::registry::{check_kernel_compatibility, PluginEntry};
+use crate::marketplace::registry::{check_kernel_compatibility, RegistryEntry};
 use crate::utils::errors::VeyronError;
 
 const KNOWN_PERMISSIONS: &[&str] = &[
@@ -26,7 +26,7 @@ const KNOWN_PERMISSIONS: &[&str] = &[
 ];
 
 #[derive(Debug, Deserialize)]
-pub struct PluginManifest {
+pub struct InstallManifest {
     pub plugin_id: String,
     pub version: String,
     pub permissions: Vec<String>,
@@ -69,7 +69,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 /// Execute the 8-step atomic installation pipeline for a plugin.
-pub async fn install(entries: &[PluginEntry], target: &str) -> Result<(), VeyronError> {
+pub async fn install(entries: &[RegistryEntry], target: &str) -> Result<(), VeyronError> {
     // Step 1 — Resolve metadata
     let entry = entries
         .iter()
@@ -353,15 +353,18 @@ pub fn uninstall(slug: &str) -> Result<(), VeyronError> {
     Ok(())
 }
 
-pub fn validate_manifest(path: &Path, kernel_ver: &Version) -> Result<PluginManifest, VeyronError> {
+pub fn validate_manifest(
+    path: &Path,
+    kernel_ver: &Version,
+) -> Result<InstallManifest, VeyronError> {
     let data = fs::read_to_string(path).map_err(|_| {
         VeyronError::Internal("Invalid plugin.json: file not found or unreadable.".into())
     })?;
 
-    let manifest: PluginManifest = serde_json::from_str(&data)
+    let manifest: InstallManifest = serde_json::from_str(&data)
         .map_err(|e| VeyronError::Internal(format!("Invalid plugin.json: {e}")))?;
 
-    let compat_entry = PluginEntry {
+    let compat_entry = RegistryEntry {
         id: String::new(),
         slug: manifest.plugin_id.clone(),
         name: String::new(),

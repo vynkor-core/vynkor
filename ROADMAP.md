@@ -208,7 +208,7 @@ Python `Plugin` constructs its client without a secret (first post-registration 
 | Item | Ref | Notes |
 |------|-----|-------|
 | Zero-copy hot path (`Arc<[u8]>` payloads; drop per-frame/per-subscriber clones) | AUDIT M-03-adj | `write_frame_raw`, `broadcast` |
-| Two `PluginEntry` / two `PluginManifest` types | AUDIT §7 | rename marketplace pair `RegistryEntry`/`InstallManifest` |
+| ~~Two `PluginEntry` / two `PluginManifest` types~~ ✓ | AUDIT §7 | marketplace pair renamed: `marketplace::registry::PluginEntry` → `RegistryEntry`, `marketplace::installer::PluginManifest` → `InstallManifest` (IPC's protobuf `PluginManifest`/`plugins::registry::PluginEntry` untouched) |
 | ~~`CLK_TCK` hardcoded 100~~ ✓ | AUDIT §7 | `supervisor.rs::proc_resource_usage` now calls `nix::unistd::sysconf(SysconfVar::CLK_TCK)`, falling back to 100 only if the syscall fails |
 | Deterministic system `event_id` breaks re-delivery within retention | AUDIT §7 | suffix timestamp/counter |
 | ~~Python `__init__.py` degrades imports to `None` silently~~ ✓ | AUDIT §7 | `VeyronClient`/`Plugin` now bind to a placeholder type whose `__init__`/`__init_subclass__` raise `ImportError` with the original cause and a fix-it hint, instead of silently becoming `None` |
