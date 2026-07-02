@@ -230,3 +230,81 @@ async fn kernel_targeted_action_request_returns_not_found_not_fake_ok() {
 
     let _ = shutdown_tx.send(());
 }
+
+#[tokio::test]
+async fn kernel_routes_action_to_declared_provider_and_correlates_response() {
+    let (shutdown_tx, _registry, _bus) =
+        start_kernel("/tmp/veyron_integ_action_route.sock", 19217).await;
+
+    // Provider registers first and declares the action.
+    let mut provider = VeyronClient::connect("/tmp/veyron_integ_action_route.sock")
+        .await
+        .unwrap();
+    provider
+        .register(
+            "weather-provider",
+            PluginManifest {
+                actions: vec!["get_weather".to_string()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let mut requester = VeyronClient::connect("/tmp/veyron_integ_action_route.sock")
+        .await
+        .unwrap();
+    requester
+        .register("weather-requester", PluginManifest::default())
+        .await
+        .unwrap();
+
+    // Requester fires the action at "kernel" (existing SDK API, unaware of routing).
+    // Spawned so the request is actually sent now: an `async fn` call produces
+    // a lazy future that does nothing until polled, so binding it without
+    // driving it would leave the provider waiting on a request that was never
+    // written to the socket.
+    let request_fut = tokio::spawn(async move {
+        requester
+            .send_action("get_weather", br#"{"city":"nyc"}"#, 2000)
+            .await
+    });
+
+    // Provider receives the routed request and answers OK, targeted at "kernel".
+    let received = timeout(Duration::from_secs(2), provider.recv())
+        .await
+        .expect("provider recv timed out")
+        .expect("provider recv failed");
+    let internal_action_id = match received.payload {
+        Some(veyron::proto::veyron::envelope::Payload::ActionRequest(req)) => {
+            assert_eq!(req.action, "get_weather");
+            assert_eq!(req.params_json, br#"{"city":"nyc"}"#);
+            req.action_id
+        }
+        other => panic!("expected ActionRequest, got {other:?}"),
+    };
+
+    let resp_env = veyron::proto::veyron::Envelope {
+        payload: Some(veyron::proto::veyron::envelope::Payload::ActionResponse(
+            veyron::proto::veyron::ActionResponse {
+                action_id: internal_action_id,
+                status: ActionStatus::ActionOk as i32,
+                data_json: br#"{"temp_f":72}"#.to_vec(),
+                error: String::new(),
+            },
+        )),
+        ..Default::default()
+    };
+    provider.send("kernel", resp_env).await.unwrap();
+
+    let resp = timeout(Duration::from_secs(2), request_fut)
+        .await
+        .expect("timed out")
+        .expect("task panicked")
+        .expect("send_action failed");
+
+    assert_eq!(resp.status, ActionStatus::ActionOk as i32);
+    assert_eq!(resp.data_json, br#"{"temp_f":72}"#);
+
+    let _ = shutdown_tx.send(());
+}

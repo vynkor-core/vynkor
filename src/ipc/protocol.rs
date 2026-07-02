@@ -1,17 +1,15 @@
 use crate::auth::jwt::JwtValidator;
-use crate::auth::permissions::{
-    action_to_permission, check_ipc_send, check_ipc_target, check_permission,
-};
+use crate::auth::permissions::{check_ipc_send, check_ipc_target, check_permission};
 use crate::events::bus::EventBus;
 use crate::events::store::EventStore;
 use crate::ipc::connection::{out_frame, Outbound};
 use crate::ipc::framing::{target_as_str, Frame, FLAG_RAW_BINARY};
 use crate::ipc::messages::IncomingMessage;
 use crate::kernel::commands::{CommandHandler, CommandOutcome};
-use crate::plugins::registry::PluginRegistry;
+use crate::plugins::registry::{ActionLookup, PendingAction, PluginRegistry};
 use crate::proto::veyron::{
-    envelope, ActionResponse, ActionStatus, Envelope, ErrorCode, ErrorMessage, Event,
-    KernelCommandAck, PermissionType, PluginRegisterAck, Pong,
+    envelope, ActionRequest, ActionResponse, ActionStatus, Envelope, ErrorCode, ErrorMessage,
+    Event, KernelCommandAck, PermissionType, PluginRegisterAck, Pong,
 };
 use governor::{DefaultKeyedRateLimiter, Quota, RateLimiter};
 use metrics::{counter, histogram};
@@ -26,6 +24,11 @@ use tokio::time::timeout;
 use tracing::{info, warn};
 
 static MSG_SEQ: AtomicU64 = AtomicU64::new(0);
+static ACTION_CORRELATION_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Default action timeout when the requester passes `timeout_ms: 0` (matches
+/// the proto doc comment on `ActionRequest.timeout_ms`).
+const DEFAULT_ACTION_TIMEOUT_MS: u32 = 30_000;
 
 /// Consecutive protocol errors from one connection before its messages are
 /// throttled (dropped without a response). Reset on any successful message.
@@ -390,43 +393,97 @@ impl MessageRouter {
                     .map(|e| e.plugin_id.clone())
                     .unwrap_or_default();
 
-                // R5-07 interim honesty fix (AUDIT H-05): the kernel has no
-                // built-in action executor yet — a passing permission check
-                // used to short-circuit to ACTION_OK, claiming work that
-                // never happened. Report ACTION_NOT_FOUND instead until a
-                // real executor (kernel-side or provider-plugin routing,
-                // decision pending) lands.
-                let status = match action_to_permission(&req.action) {
-                    None => ActionStatus::ActionNotFound,
-                    Some(perm) => match check_permission(registry, &sender_id, perm) {
-                        Ok(()) => ActionStatus::ActionNotFound,
-                        Err(_) => {
-                            warn!(
-                                sender = %sender_id,
-                                action = %req.action,
-                                "permission denied"
-                            );
-                            ActionStatus::ActionPermissionDeny
-                        }
-                    },
+                // R5-07 (option b): route to a plugin that declared this action in
+                // its manifest — "declared it" is the entire authorization model,
+                // no extra permission check. Ambiguous declarations (>1 provider)
+                // are refused rather than arbitrarily resolved.
+                let not_found_status = match registry.find_action_provider(&req.action) {
+                    ActionLookup::NotFound => Some(ActionStatus::ActionNotFound),
+                    ActionLookup::Ambiguous(providers) => {
+                        warn!(
+                            action = %req.action,
+                            providers = ?providers,
+                            "ambiguous action declaration: multiple providers, refusing to route"
+                        );
+                        Some(ActionStatus::ActionNotFound)
+                    }
+                    ActionLookup::Found(provider) => {
+                        let internal_id = format!(
+                            "kact-{}",
+                            ACTION_CORRELATION_SEQ.fetch_add(1, Ordering::Relaxed)
+                        );
+                        let effective_timeout_ms = if req.timeout_ms == 0 {
+                            DEFAULT_ACTION_TIMEOUT_MS
+                        } else {
+                            req.timeout_ms
+                        };
+                        registry.register_pending_action(
+                            internal_id.clone(),
+                            PendingAction {
+                                requester_write_tx: msg.write_tx.clone(),
+                                original_action_id: action_id.clone(),
+                                requester_id: sender_id.clone(),
+                                deadline: Instant::now()
+                                    + Duration::from_millis(effective_timeout_ms as u64),
+                            },
+                        );
+
+                        let forwarded = Envelope {
+                            payload: Some(envelope::Payload::ActionRequest(ActionRequest {
+                                action_id: internal_id,
+                                action: req.action.clone(),
+                                params_json: req.params_json.clone(),
+                                timeout_ms: req.timeout_ms,
+                            })),
+                            ..Default::default()
+                        };
+                        Self::send_envelope(&provider.write_tx, forwarded).await;
+                        None
+                    }
                 };
 
-                let response = Envelope {
-                    payload: Some(envelope::Payload::ActionResponse(ActionResponse {
-                        action_id,
-                        status: status as i32,
-                        data_json: vec![],
-                        error: if status == ActionStatus::ActionOk {
-                            String::new()
-                        } else {
-                            format!("{:?}", status)
-                        },
-                    })),
-                    ..Default::default()
-                };
+                if let Some(status) = not_found_status {
+                    let response = Envelope {
+                        payload: Some(envelope::Payload::ActionResponse(ActionResponse {
+                            action_id,
+                            status: status as i32,
+                            data_json: vec![],
+                            error: format!("{:?}", status),
+                        })),
+                        ..Default::default()
+                    };
+                    Self::send_envelope(&msg.write_tx, response).await;
+                }
                 histogram!("action_request_duration_ms")
                     .record(action_start.elapsed().as_millis() as f64);
-                Self::send_envelope(&msg.write_tx, response).await;
+                false
+            }
+
+            Some(envelope::Payload::ActionResponse(resp)) => {
+                // A provider plugin answering a kernel-routed ActionRequest always
+                // targets "kernel" (it doesn't know who really asked) — this is
+                // where the kernel translates the internal correlation id back to
+                // the original requester's action_id and proxies the response.
+                match registry.take_pending_action(&resp.action_id) {
+                    Some(pending) => {
+                        let response = Envelope {
+                            payload: Some(envelope::Payload::ActionResponse(ActionResponse {
+                                action_id: pending.original_action_id,
+                                status: resp.status,
+                                data_json: resp.data_json,
+                                error: resp.error,
+                            })),
+                            ..Default::default()
+                        };
+                        Self::send_envelope(&pending.requester_write_tx, response).await;
+                    }
+                    None => {
+                        warn!(
+                            action_id = %resp.action_id,
+                            "action response with no matching pending request (late, duplicate, or already timed out), dropping"
+                        );
+                    }
+                }
                 false
             }
 
