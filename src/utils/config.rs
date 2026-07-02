@@ -50,7 +50,6 @@ pub struct Config {
     pub pid_file: PathBuf,
     #[serde(default = "default_log_path")]
     pub log_file: PathBuf,
-    #[allow(dead_code)]
     pub data_dir: PathBuf,
     #[serde(default = "default_socket_path")]
     pub socket_path: String,

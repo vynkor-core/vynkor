@@ -25,7 +25,6 @@ use crate::ipc::messages::IncomingMessage;
 use crate::plugins::manager::PluginManager;
 
 /// Convenience constructor for tests (no WebSocket support).
-#[allow(dead_code)]
 pub fn create_router(
     manager: Arc<PluginManager>,
     jwt_validator: Option<Arc<JwtValidator>>,

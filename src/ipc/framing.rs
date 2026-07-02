@@ -35,7 +35,6 @@ pub const FRAG_HEADER_SIZE: usize = 10;
 pub struct FragmentHeader {
     /// Opaque identifier for the fragmented message within a stream.
     /// Parsed from the wire; available for callers but not used by the kernel.
-    #[allow(dead_code)]
     pub fragment_id: u16,
     /// Zero-based position of this fragment in the sequence.
     pub sequence: u16,
@@ -89,7 +88,6 @@ pub fn serialize_header(frame: &Frame) -> [u8; HEADER_SIZE] {
     header
 }
 
-#[allow(dead_code)]
 pub async fn write_frame<W>(
     stream: &mut W,
     target: &str,

@@ -17,7 +17,6 @@ use tokio::process::Command;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{info, warn};
 
-#[allow(dead_code)]
 #[derive(Clone, Default)]
 pub enum RestartPolicy {
     Always,
@@ -47,7 +46,6 @@ pub struct PluginConfig {
     pub max_vmem_mb: Option<u64>,
 }
 
-#[allow(dead_code)]
 pub struct PluginProcess {
     pub plugin_id: String,
     pub pid: u32,
@@ -82,7 +80,6 @@ pub struct PluginSupervisor {
 }
 
 impl PluginSupervisor {
-    #[allow(dead_code)]
     pub fn new(socket_path: &str) -> Self {
         Self::with_log_lines(socket_path, 1000)
     }
@@ -122,7 +119,6 @@ impl PluginSupervisor {
         locked.iter().skip(skip).cloned().collect()
     }
 
-    #[allow(dead_code)]
     pub async fn spawn_plugin(&self, config: PluginConfig) -> Result<PluginProcess, VeyronError> {
         self.spawn_internal(config, 0).await
     }
@@ -245,7 +241,6 @@ impl PluginSupervisor {
         Ok(PluginProcess { plugin_id, pid })
     }
 
-    #[allow(dead_code)]
     pub async fn stop_plugin(&self, plugin_id: &str) -> Result<(), VeyronError> {
         let entry = self
             .entries
@@ -275,7 +270,6 @@ impl PluginSupervisor {
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub fn is_running(&self, plugin_id: &str) -> bool {
         self.entries.contains_key(plugin_id)
     }
@@ -289,7 +283,6 @@ impl PluginSupervisor {
             .filter(|g| *g > 0)
     }
 
-    #[allow(dead_code)]
     pub fn restart_count(&self, plugin_id: &str) -> Option<u32> {
         self.entries
             .get(plugin_id)

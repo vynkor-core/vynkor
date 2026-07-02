@@ -2,7 +2,6 @@ use std::fmt;
 use std::io;
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub enum VeyronError {
     Io(io::Error),
     Proto(prost::DecodeError),

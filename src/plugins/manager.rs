@@ -46,7 +46,6 @@ impl PluginManager {
         self.supervisor.is_running(plugin_id)
     }
 
-    #[allow(dead_code)]
     pub fn is_connected(&self, plugin_id: &str) -> bool {
         self.registry.get(plugin_id).is_some()
     }

@@ -45,7 +45,6 @@ const WRITE_SEND_TIMEOUT: Duration = Duration::from_millis(50);
 pub struct MessageRouter;
 
 impl MessageRouter {
-    #[allow(dead_code)]
     pub async fn run(
         rx: mpsc::Receiver<IncomingMessage>,
         registry: Arc<PluginRegistry>,

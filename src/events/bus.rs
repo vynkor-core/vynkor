@@ -77,7 +77,6 @@ impl EventBus {
         }
     }
 
-    #[allow(dead_code)]
     pub fn subscribers(&self, event_type: &str) -> Vec<String> {
         self.subscriptions
             .get(event_type)

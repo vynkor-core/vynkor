@@ -1,23 +1,13 @@
-mod api;
-mod auth;
-mod cli;
-mod events;
-mod ipc;
-mod kernel;
-mod marketplace;
-mod metrics;
-mod plugins;
-mod proto;
-mod utils;
-
 use anyhow::Result;
 use clap::Parser;
-use cli::{complete, plugin};
-use cli::{Cli, Commands};
 use std::fs;
 use std::process::Command;
 use tracing::{info, warn};
-use utils::config::{load_config, Config};
+use veyron::cli::{complete, plugin};
+use veyron::cli::{Cli, Commands};
+use veyron::kernel;
+use veyron::utils;
+use veyron::utils::config::{load_config, Config};
 
 #[tokio::main]
 async fn main() -> Result<()> {

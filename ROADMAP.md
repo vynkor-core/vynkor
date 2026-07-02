@@ -167,8 +167,9 @@ Interim: return `ACTION_NOT_FOUND` instead of fake success.
 `src/marketplace/installer.rs` — unbounded in-memory download; `extract_zip` lacks decompressed-size/entry-count caps. Add size ceilings (e.g. 256 MiB archive, 1 GiB extracted, 10 k entries). **0.5 d**
 **Done:** `MAX_ARCHIVE_BYTES` (256 MiB, checked against `Content-Length` and streamed total), `MAX_EXTRACTED_BYTES` (1 GiB, enforced on actual bytes written per entry via `Read::take`, not the archive's declared size), `MAX_ARCHIVE_ENTRIES` (10k, checked before any extraction). Tests: `archive_with_excess_entries_rejected`, `zip_bomb_decompressed_size_capped` (`tests/unit/test_installer.rs`).
 
-### R5-14 — Stop compiling the crate twice (AUDIT M-07)
+### R5-14 ✓ — Stop compiling the crate twice (AUDIT M-07)
 `src/main.rs:1-11` — bin re-declares all modules instead of `use veyron::…`. Fix, then sweep now-meaningful `#[allow(dead_code)]`. Halves unit-test duplication (30 tests currently run twice). **0.5–1 d**
+**Done:** `main.rs` dropped its `mod` declarations for `lib.rs`'s tree and now imports via `use veyron::{cli, kernel, utils}` — the bin target no longer recompiles the whole crate as a second copy (confirmed: `unittests src/main.rs` now runs 0 tests, down from the lib's full suite). All 17 `#[allow(dead_code)]` attributes across `src/` were dead-code-lint artifacts of that duplicate compilation and were removed cleanly (verified by a full rebuild with `-D warnings` after removal — zero new warnings).
 
 ### R5-15 ✓ — Atomic registry registration (AUDIT M-08)
 `src/plugins/registry.rs:47-77` — check-then-insert across two DashMaps is TOCTOU-safe only because the router is single-threaded. Linearize via `DashMap::entry` or document the single-caller invariant. **0.5 d**
