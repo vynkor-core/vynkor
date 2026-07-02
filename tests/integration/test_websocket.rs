@@ -35,21 +35,45 @@ async fn ws_connect_with_jwt(
 ) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
     use tokio_tungstenite::tungstenite::handshake::client::generate_key;
     use tokio_tungstenite::tungstenite::http::Request;
-    let req = Request::builder()
-        .method("GET")
-        .uri(format!("ws://127.0.0.1:{port}/ws"))
-        .header("Host", format!("127.0.0.1:{port}"))
-        .header("Connection", "Upgrade")
-        .header("Upgrade", "websocket")
-        .header("Sec-WebSocket-Version", "13")
-        .header("Sec-WebSocket-Key", generate_key())
-        .header("sec-websocket-protocol", format!("veyron, {token}"))
-        .body(())
-        .unwrap();
-    let (ws, _) = tokio_tungstenite::connect_async(req)
-        .await
-        .expect("WS connect failed");
-    ws
+    for attempt in 0..20 {
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!("ws://127.0.0.1:{port}/ws"))
+            .header("Host", format!("127.0.0.1:{port}"))
+            .header("Connection", "Upgrade")
+            .header("Upgrade", "websocket")
+            .header("Sec-WebSocket-Version", "13")
+            .header("Sec-WebSocket-Key", generate_key())
+            .header("sec-websocket-protocol", format!("veyron, {token}"))
+            .body(())
+            .unwrap();
+        match tokio_tungstenite::connect_async(req).await {
+            Ok((ws, _)) => return ws,
+            Err(_) if attempt < 19 => {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            Err(e) => panic!("WS connect failed: {e}"),
+        }
+    }
+    unreachable!()
+}
+
+/// Connect to an unsecured WS kernel, retrying while the HTTP listener spins up
+/// (under parallel test load a fixed sleep is not always enough).
+async fn ws_connect_retry(
+    port: u16,
+) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
+    let url = format!("ws://127.0.0.1:{port}/ws");
+    for attempt in 0..20 {
+        match tokio_tungstenite::connect_async(&url).await {
+            Ok((ws, _)) => return ws,
+            Err(_) if attempt < 19 => {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            Err(e) => panic!("WS connect failed: {e}"),
+        }
+    }
+    unreachable!()
 }
 
 /// Parse raw binary WS data as a frame, returning (payload_bytes, had_mac_flag).
@@ -84,12 +108,7 @@ fn build_frame_with_flags(target: &str, payload: &[u8], flags: u16) -> Vec<u8> {
 async fn ws_client_registers_and_receives_ack() {
     let (_shutdown_tx, _registry, _bus) = start_kernel("/tmp/veyron_integ_ws.sock", 19300).await;
 
-    // give the HTTP server a moment to start
-    tokio::time::sleep(Duration::from_millis(50)).await;
-
-    let (mut ws, _) = tokio_tungstenite::connect_async("ws://127.0.0.1:19300/ws")
-        .await
-        .expect("WS connect failed");
+    let mut ws = ws_connect_retry(19300).await;
 
     // send PluginRegister
     let reg_env = Envelope {
@@ -140,13 +159,9 @@ async fn ws_client_registers_and_receives_ack() {
 #[tokio::test]
 async fn ws_rejects_compressed_and_fragmented_inbound_frames() {
     let (_shutdown_tx, _registry, _bus) =
-        start_kernel("/tmp/veyron_integ_ws_compressed.sock", 19301).await;
+        start_kernel("/tmp/veyron_integ_ws_compressed.sock", 19322).await;
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
-
-    let (mut ws, _) = tokio_tungstenite::connect_async("ws://127.0.0.1:19301/ws")
-        .await
-        .expect("WS connect failed");
+    let mut ws = ws_connect_retry(19322).await;
 
     const FLAG_COMPRESSED: u16 = 0x0002;
     const FLAG_FRAGMENTED: u16 = 0x0004;
@@ -361,11 +376,8 @@ async fn ws_untagged_frames_rejected_on_secured_kernel() {
 #[tokio::test]
 async fn ws_closed_after_max_parse_errors() {
     let (_shutdown, _reg, _bus) = start_kernel("/tmp/veyron_ws_parse_err.sock", 19321).await;
-    tokio::time::sleep(Duration::from_millis(50)).await;
 
-    let (mut ws, _) = tokio_tungstenite::connect_async("ws://127.0.0.1:19321/ws")
-        .await
-        .expect("WS connect failed");
+    let mut ws = ws_connect_retry(19321).await;
 
     // 44 bytes with bad magic — parse_frame returns Err on each
     let bad_frame = vec![0xFFu8; 44];
