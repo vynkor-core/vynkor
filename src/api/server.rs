@@ -79,6 +79,17 @@ pub fn create_router_full(
             rate_limit_rps.unwrap_or(100),
             rate_limit_burst.unwrap_or(20),
         );
+        // The keyed limiter's state grows forever otherwise: `sub` is an
+        // attacker-controlled JWT claim, so a client can mint a fresh one per
+        // request to bloat memory (AUDIT M-01). Evict idle keys periodically.
+        let prune_limiter = Arc::clone(&limiter);
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(60));
+            loop {
+                tick.tick().await;
+                prune_limiter.retain_recent();
+            }
+        });
         protected = protected.layer(middleware::from_fn_with_state(
             limiter,
             rate_limit_middleware,

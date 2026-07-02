@@ -91,7 +91,27 @@ impl MessageRouter {
                 NonZeroU32::new(rps).map(|r| Arc::new(RateLimiter::keyed(Quota::per_second(r))))
             });
 
-        while let Some(msg) = rx.recv().await {
+        // conn_ids are monotonically assigned and never reused, so without
+        // periodic eviction this keyed state grows for the life of the
+        // process (AUDIT M-01). Evict idle keys on the same cadence as the
+        // error-budget map prune.
+        let mut prune_tick = tokio::time::interval(Duration::from_secs(60));
+        prune_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+        loop {
+            let msg = tokio::select! {
+                biased;
+                _ = prune_tick.tick() => {
+                    if let Some(limiter) = &ipc_limiter {
+                        limiter.retain_recent();
+                    }
+                    continue;
+                }
+                msg = rx.recv() => match msg {
+                    Some(msg) => msg,
+                    None => break,
+                },
+            };
             let conn_id = msg.conn_id;
 
             // Per-plugin IPC rate limit: send ERR_RATE_LIMITED without disconnecting.

@@ -144,8 +144,9 @@ Interim: return `ACTION_NOT_FOUND` instead of fake success.
 
 ## Phase 5.3 — Robustness (Medium findings)
 
-### R5-08 — Prune keyed rate limiters (AUDIT M-01)
+### R5-08 ✓ — Prune keyed rate limiters (AUDIT M-01)
 `src/ipc/protocol.rs:89-91`, `src/api/rate_limit.rs:16-21` — `governor` keyed state grows forever (monotonic conn_ids; attacker-chosen `sub`). Call `retain_recent()` periodically (piggyback watchdog tick). **0.5 h**
+**Done:** both keyed limiters (`MessageRouter`'s per-conn IPC limiter, `rate_limit.rs`'s per-`sub` HTTP limiter) now get a 60 s `tokio::time::interval` that calls `retain_recent()`, evicting idle keys instead of retaining them for process lifetime.
 
 ### R5-09 ✓ — Duplicate fragment accounting (AUDIT M-02)
 `src/ipc/connection.rs:235-236` — re-sent sequence overwrites the fragment but double-counts `buffered_bytes` → spurious oversize disconnect. Subtract the replaced fragment's length, or reject duplicate sequences. Regression test. **1 h**
