@@ -220,9 +220,16 @@ impl ConnectionHandler {
                             }
                         });
 
+                        // A re-sent sequence replaces its old bytes rather than adding on
+                        // top of them — otherwise buffered_bytes double-counts and can
+                        // trip the oversize check on a stream that never actually grew.
+                        let replaced_len =
+                            entry.fragments.get(&frag_hdr.sequence).map_or(0, Vec::len);
+
                         // Abort before allocating if this fragment would push the
                         // reassembled payload past the single-frame protocol cap.
-                        if entry.buffered_bytes + frag_data.len() > MAX_PAYLOAD_SIZE {
+                        if entry.buffered_bytes + frag_data.len() - replaced_len > MAX_PAYLOAD_SIZE
+                        {
                             warn!(
                                 conn_id = self.conn_id,
                                 stream_id = frag_hdr.stream_id,
@@ -232,7 +239,7 @@ impl ConnectionHandler {
                                 .increment(1);
                             break;
                         }
-                        entry.buffered_bytes += frag_data.len();
+                        entry.buffered_bytes += frag_data.len() - replaced_len;
                         entry.fragments.insert(frag_hdr.sequence, frag_data);
 
                         if entry.is_complete() {
@@ -614,5 +621,41 @@ mod tests {
             .unwrap();
         assert_eq!(disc, 12);
         assert!(incoming_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn resent_fragment_does_not_double_count_buffered_bytes() {
+        // AUDIT M-02 regression: re-sending a sequence must replace its bytes
+        // in buffered_bytes, not add on top of them, or a stream that never
+        // grew past MAX_PAYLOAD_SIZE trips the oversize disconnect anyway.
+        let (client, server) = UnixStream::pair().unwrap();
+        let (incoming_tx, mut incoming_rx) = mpsc::channel(8);
+        let (disc_tx, mut disc_rx) = mpsc::channel(8);
+        let (handler, _wtx) = ConnectionHandler::new(13, server, incoming_tx, disc_tx);
+        tokio::spawn(handler.run());
+
+        let (_, mut wc) = client.into_split();
+        // Fragment sized so that two *distinct* copies would exceed the cap,
+        // but a single copy (even re-sent) never does.
+        let chunk = vec![b'x'; crate::ipc::framing::MAX_PAYLOAD_SIZE - 1024];
+        // Re-send sequence 0 several times before completing the stream.
+        for _ in 0..3 {
+            write_frame_raw(&mut wc, &frag_frame("kernel", 1, 0, 2, 77, &chunk))
+                .await
+                .unwrap();
+        }
+        write_frame_raw(&mut wc, &frag_frame("kernel", 1, 1, 2, 77, b"tail"))
+            .await
+            .unwrap();
+
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(1), incoming_rx.recv())
+            .await
+            .expect("reassembled message must arrive within 1s")
+            .unwrap();
+        assert_eq!(msg.frame.payload.len(), chunk.len() + 4);
+        assert!(
+            disc_rx.try_recv().is_err(),
+            "duplicate fragment resend must not trip the oversize disconnect"
+        );
     }
 }

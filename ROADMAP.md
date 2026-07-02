@@ -147,8 +147,9 @@ Interim: return `ACTION_NOT_FOUND` instead of fake success.
 ### R5-08 — Prune keyed rate limiters (AUDIT M-01)
 `src/ipc/protocol.rs:89-91`, `src/api/rate_limit.rs:16-21` — `governor` keyed state grows forever (monotonic conn_ids; attacker-chosen `sub`). Call `retain_recent()` periodically (piggyback watchdog tick). **0.5 h**
 
-### R5-09 — Duplicate fragment accounting (AUDIT M-02)
+### R5-09 ✓ — Duplicate fragment accounting (AUDIT M-02)
 `src/ipc/connection.rs:235-236` — re-sent sequence overwrites the fragment but double-counts `buffered_bytes` → spurious oversize disconnect. Subtract the replaced fragment's length, or reject duplicate sequences. Regression test. **1 h**
+**Done:** `buffered_bytes` now nets out the replaced fragment's old length before adding the new one, both in the oversize check and the accumulator. Test: `resent_fragment_does_not_double_count_buffered_bytes` (`src/ipc/connection.rs`).
 
 ### R5-10 — Resource limits: unconditional + configurable (AUDIT M-03)
 `src/plugins/runner.rs`, `src/plugins/supervisor.rs:139-146`, `src/utils/config.rs` — `RLIMIT_NPROC`/`RLIMIT_AS` apply only with `sandbox: true` and are hardcoded. Apply `apply_resource_limits` unconditionally in `pre_exec`; expose values in `PluginDef`. **0.5 d**
