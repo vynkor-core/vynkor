@@ -169,8 +169,9 @@ Interim: return `ACTION_NOT_FOUND` instead of fake success.
 ### R5-14 — Stop compiling the crate twice (AUDIT M-07)
 `src/main.rs:1-11` — bin re-declares all modules instead of `use veyron::…`. Fix, then sweep now-meaningful `#[allow(dead_code)]`. Halves unit-test duplication (30 tests currently run twice). **0.5–1 d**
 
-### R5-15 — Atomic registry registration (AUDIT M-08)
+### R5-15 ✓ — Atomic registry registration (AUDIT M-08)
 `src/plugins/registry.rs:47-77` — check-then-insert across two DashMaps is TOCTOU-safe only because the router is single-threaded. Linearize via `DashMap::entry` or document the single-caller invariant. **0.5 d**
+**Done:** `register()` reserves both `by_conn_id` and `by_plugin_id` slots via `DashMap::entry()` (shard lock held across the check+insert) instead of `contains_key` + `insert`. Test: `concurrent_registration_of_same_plugin_id_has_exactly_one_winner` (`tests/unit/test_registry.rs`, 50 racing threads).
 
 ### R5-16 ✓ — pid/log files out of shared `/tmp` (AUDIT M-09)
 `src/utils/config.rs:138-140`, `config.yaml`, `src/main.rs` — symlink-attack surface; socket got this fix (BUG-006), pid/log did not. Default under `$XDG_RUNTIME_DIR`/`~/.veyron`; open pid file `O_NOFOLLOW`. **0.5 d**

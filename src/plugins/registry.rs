@@ -42,21 +42,34 @@ impl PluginRegistry {
         manifest: PluginManifest,
         write_tx: mpsc::Sender<Outbound>,
     ) -> Result<(), VeyronError> {
+        use dashmap::mapref::entry::Entry;
+
         validate_plugin_id(&plugin_id)?;
 
-        if self.by_plugin_id.contains_key(&plugin_id) {
-            return Err(VeyronError::PluginAlreadyRegistered(plugin_id));
-        }
+        // AUDIT M-08: reserve both slots via `entry()` — which holds the
+        // shard lock for the call — rather than a separate contains_key then
+        // insert. The prior check-then-insert was only TOCTOU-safe because
+        // the router happens to call register() from a single task; entry()
+        // makes that true regardless of caller concurrency.
+        //
+        // One registration per connection. Without this, a connection that
+        // sends a second PluginRegister with a different id would overwrite
+        // its by_conn_id mapping and orphan the first entry — it would leak
+        // in by_plugin_id forever (disconnect only cleans the id the conn
+        // maps to).
+        let conn_slot = match self.by_conn_id.entry(conn_id) {
+            Entry::Occupied(_) => {
+                return Err(VeyronError::PluginAlreadyRegistered(format!(
+                    "connection {conn_id} already has a registered plugin"
+                )))
+            }
+            Entry::Vacant(v) => v,
+        };
 
-        // One registration per connection. Without this, a connection that sends
-        // a second PluginRegister with a different id would overwrite its
-        // by_conn_id mapping and orphan the first entry — it would leak in
-        // by_plugin_id forever (disconnect only cleans the id the conn maps to).
-        if self.by_conn_id.contains_key(&conn_id) {
-            return Err(VeyronError::PluginAlreadyRegistered(format!(
-                "connection {conn_id} already has a registered plugin"
-            )));
-        }
+        let plugin_slot = match self.by_plugin_id.entry(plugin_id.clone()) {
+            Entry::Occupied(_) => return Err(VeyronError::PluginAlreadyRegistered(plugin_id)),
+            Entry::Vacant(v) => v,
+        };
 
         let registered_at = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -72,9 +85,9 @@ impl PluginRegistry {
             state: PluginState::Registered,
         };
 
-        self.by_conn_id.insert(conn_id, plugin_id.clone());
-        self.pong_times.insert(plugin_id.clone(), Instant::now());
-        self.by_plugin_id.insert(plugin_id, entry);
+        conn_slot.insert(plugin_id.clone());
+        self.pong_times.insert(plugin_id, Instant::now());
+        plugin_slot.insert(entry);
         Ok(())
     }
 

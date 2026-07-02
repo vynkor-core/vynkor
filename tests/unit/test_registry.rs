@@ -208,6 +208,38 @@ fn registry_is_thread_safe() {
 }
 
 #[test]
+fn concurrent_registration_of_same_plugin_id_has_exactly_one_winner() {
+    // AUDIT M-08 regression: check-then-insert across by_plugin_id/by_conn_id
+    // was only TOCTOU-safe because the router calls register() from a single
+    // task. Hammer the same plugin_id from many threads/conn_ids concurrently
+    // and assert the registry never ends up with more than one entry for it.
+    let reg = Arc::new(PluginRegistry::new());
+    let mut handles = vec![];
+
+    for conn_id in 0u64..50 {
+        let reg = Arc::clone(&reg);
+        handles.push(std::thread::spawn(move || {
+            reg.register(
+                "contended".to_string(),
+                conn_id,
+                dummy_manifest(),
+                dummy_write_tx(),
+            )
+            .is_ok()
+        }));
+    }
+
+    let successes = handles
+        .into_iter()
+        .map(|h| h.join().unwrap())
+        .filter(|ok| *ok)
+        .count();
+
+    assert_eq!(successes, 1, "exactly one registration must win the race");
+    assert_eq!(reg.list().len(), 1);
+}
+
+#[test]
 fn entry_has_registered_at_timestamp() {
     let reg = PluginRegistry::new();
 
