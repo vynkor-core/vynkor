@@ -1,7 +1,10 @@
 port: 8080
 log_level: debug
-pid_file: /tmp/veyron.pid
-log_file: /tmp/veyron.log
+# pid_file / log_file default to a per-user private dir (XDG_RUNTIME_DIR,
+# /run/user/<uid>, or ~/.veyron/run) — never the shared /tmp (AUDIT M-09).
+# Uncomment to override:
+# pid_file: /run/user/1000/veyron.pid
+# log_file: /run/user/1000/veyron.log
 data_dir: /tmp/veyron
 
 # Authentication is required to start. For production, set a JWT secret:

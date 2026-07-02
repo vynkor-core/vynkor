@@ -172,8 +172,9 @@ Interim: return `ACTION_NOT_FOUND` instead of fake success.
 ### R5-15 — Atomic registry registration (AUDIT M-08)
 `src/plugins/registry.rs:47-77` — check-then-insert across two DashMaps is TOCTOU-safe only because the router is single-threaded. Linearize via `DashMap::entry` or document the single-caller invariant. **0.5 d**
 
-### R5-16 — pid/log files out of shared `/tmp` (AUDIT M-09)
+### R5-16 ✓ — pid/log files out of shared `/tmp` (AUDIT M-09)
 `src/utils/config.rs:138-140`, `config.yaml`, `src/main.rs` — symlink-attack surface; socket got this fix (BUG-006), pid/log did not. Default under `$XDG_RUNTIME_DIR`/`~/.veyron`; open pid file `O_NOFOLLOW`. **0.5 d**
+**Done:** `default_socket_path`'s private-dir resolution factored out into `default_private_dir()`, reused by new `default_pid_path()`/`default_log_path()` (serde defaults on `Config::pid_file`/`log_file`). `run_foreground`'s pid-file open now passes `O_NOFOLLOW`. `config.yaml`'s dev example no longer hardcodes `/tmp`. Test: `default_pid_and_log_paths_never_land_in_shared_tmp`.
 
 ---
 

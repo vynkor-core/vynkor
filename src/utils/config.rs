@@ -46,7 +46,9 @@ fn default_max_restarts() -> u32 {
 pub struct Config {
     pub port: u16,
     pub log_level: String,
+    #[serde(default = "default_pid_path")]
     pub pid_file: PathBuf,
+    #[serde(default = "default_log_path")]
     pub log_file: PathBuf,
     #[allow(dead_code)]
     pub data_dir: PathBuf,
@@ -95,26 +97,20 @@ pub struct Config {
     pub config_file: Option<String>,
 }
 
-/// Picks a per-user socket location, preferring `XDG_RUNTIME_DIR`, then the
+/// Picks a per-user private directory, preferring `XDG_RUNTIME_DIR`, then the
 /// kernel-provided `/run/user/<uid>`, then a private 0o700 directory under
 /// `$HOME`. Never falls back to the world-writable shared `/tmp` (BUG-006):
-/// if none of those are available, returns an empty string so callers can
-/// fail closed with a clear error instead of binding into `/tmp`.
-///
-/// Public so SDKs resolve the same default as the kernel when
-/// `VEYRON_SOCKET_PATH` is not set.
-pub fn default_socket_path() -> String {
+/// if none of those are available, returns `None` so callers can fail closed
+/// with a clear error instead of writing into `/tmp`.
+fn default_private_dir() -> Option<PathBuf> {
     if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
-        return format!("{runtime_dir}/veyron.sock");
+        return Some(PathBuf::from(runtime_dir));
     }
 
     let uid = nix::unistd::Uid::current().as_raw();
     let run_user_dir = PathBuf::from(format!("/run/user/{uid}"));
     if run_user_dir.is_dir() {
-        return run_user_dir
-            .join("veyron.sock")
-            .to_string_lossy()
-            .to_string();
+        return Some(run_user_dir);
     }
 
     if let Ok(home) = std::env::var("HOME") {
@@ -122,11 +118,33 @@ pub fn default_socket_path() -> String {
         if std::fs::create_dir_all(&dir).is_ok()
             && std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).is_ok()
         {
-            return dir.join("veyron.sock").to_string_lossy().to_string();
+            return Some(dir);
         }
     }
 
-    String::new()
+    None
+}
+
+/// Public so SDKs resolve the same default as the kernel when
+/// `VEYRON_SOCKET_PATH` is not set.
+pub fn default_socket_path() -> String {
+    default_private_dir()
+        .map(|dir| dir.join("veyron.sock").to_string_lossy().to_string())
+        .unwrap_or_default()
+}
+
+/// pid/log files got the same symlink-attack surface as the socket
+/// (AUDIT M-09) — default them out of the shared `/tmp` the same way.
+fn default_pid_path() -> PathBuf {
+    default_private_dir()
+        .map(|dir| dir.join("veyron.pid"))
+        .unwrap_or_else(|| PathBuf::from("veyron.pid"))
+}
+
+fn default_log_path() -> PathBuf {
+    default_private_dir()
+        .map(|dir| dir.join("veyron.log"))
+        .unwrap_or_else(|| PathBuf::from("veyron.log"))
 }
 fn default_watchdog_interval() -> u64 {
     30
@@ -146,8 +164,8 @@ impl Default for Config {
         Self {
             port: 8000,
             log_level: "info".to_string(),
-            pid_file: PathBuf::from("/tmp/veyron.pid"),
-            log_file: PathBuf::from("/tmp/veyron.log"),
+            pid_file: default_pid_path(),
+            log_file: default_log_path(),
             data_dir: PathBuf::from("/var/lib/veyron"),
             socket_path: default_socket_path(),
             jwt_secret: None,
@@ -200,6 +218,25 @@ mod tests {
         assert!(
             path.starts_with("/run/user/") || path.contains("/.veyron/"),
             "expected a per-user private socket dir, got {path}"
+        );
+    }
+
+    #[test]
+    fn default_pid_and_log_paths_never_land_in_shared_tmp() {
+        std::env::set_var("XDG_RUNTIME_DIR", "/run/user/1000");
+        let pid = default_pid_path();
+        let log = default_log_path();
+        std::env::remove_var("XDG_RUNTIME_DIR");
+
+        assert_eq!(pid, PathBuf::from("/run/user/1000/veyron.pid"));
+        assert_eq!(log, PathBuf::from("/run/user/1000/veyron.log"));
+        assert!(
+            !pid.starts_with("/tmp"),
+            "pid file must not default into /tmp (AUDIT M-09)"
+        );
+        assert!(
+            !log.starts_with("/tmp"),
+            "log file must not default into /tmp (AUDIT M-09)"
         );
     }
 }

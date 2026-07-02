@@ -234,10 +234,15 @@ fn daemonize_and_run(cfg: &Config, config_path: &str, debug: bool) -> Result<()>
 async fn run_foreground(cfg: Config) -> Result<()> {
     use nix::fcntl::{Flock, FlockArg};
 
+    // O_NOFOLLOW: refuse to write through a symlink planted at the pid path
+    // by another local user (AUDIT M-09 — matches the socket/pid-file hardening
+    // already applied to socket_path, BUG-006).
+    use std::os::unix::fs::OpenOptionsExt;
     let pid_file_handle = fs::OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(false)
+        .custom_flags(nix::libc::O_NOFOLLOW)
         .open(&cfg.pid_file)?;
 
     let _lock = Flock::lock(pid_file_handle, FlockArg::LockExclusiveNonblock).map_err(|_| {
