@@ -1,5 +1,6 @@
 use std::fs;
 use std::io;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use indicatif::{ProgressBar, ProgressStyle};
@@ -185,6 +186,17 @@ pub async fn install(entries: &[PluginEntry], target: &str) -> Result<(), Veyron
     Ok(())
 }
 
+/// Max size of a downloaded plugin archive. Bounds in-memory buffering of
+/// the response body before it ever reaches disk (AUDIT M-06).
+const MAX_ARCHIVE_BYTES: u64 = 256 * 1024 * 1024; // 256 MiB
+/// Max total decompressed size an archive may extract to. Bounds a
+/// zip-bomb-style archive that claims a small file but expands huge
+/// (AUDIT M-06).
+const MAX_EXTRACTED_BYTES: u64 = 1024 * 1024 * 1024; // 1 GiB
+/// Max number of entries in an archive. Bounds an archive with millions of
+/// tiny/empty entries used to exhaust inodes or extraction time (AUDIT M-06).
+const MAX_ARCHIVE_ENTRIES: usize = 10_000;
+
 async fn download_with_progress(url: &str, slug: &str) -> Result<Vec<u8>, VeyronError> {
     let resp = reqwest::get(url)
         .await
@@ -195,6 +207,14 @@ async fn download_with_progress(url: &str, slug: &str) -> Result<Vec<u8>, Veyron
             "download {slug}: HTTP {}",
             resp.status()
         )));
+    }
+
+    if let Some(len) = resp.content_length() {
+        if len > MAX_ARCHIVE_BYTES {
+            return Err(VeyronError::Internal(format!(
+                "download {slug}: archive size {len} exceeds max {MAX_ARCHIVE_BYTES} bytes"
+            )));
+        }
     }
 
     let total = resp.content_length().unwrap_or(0);
@@ -214,6 +234,12 @@ async fn download_with_progress(url: &str, slug: &str) -> Result<Vec<u8>, Veyron
         .await
         .map_err(|e| VeyronError::NetworkError(format!("stream {slug}: {e}")))?
     {
+        if bytes.len() as u64 + chunk.len() as u64 > MAX_ARCHIVE_BYTES {
+            pb.finish_and_clear();
+            return Err(VeyronError::Internal(format!(
+                "download {slug}: archive exceeds max {MAX_ARCHIVE_BYTES} bytes"
+            )));
+        }
         pb.inc(chunk.len() as u64);
         bytes.extend_from_slice(&chunk);
     }
@@ -227,7 +253,15 @@ pub fn extract_zip(archive: &Path, dest: &Path) -> Result<(), VeyronError> {
     let mut zip =
         zip::ZipArchive::new(file).map_err(|e| VeyronError::Internal(format!("open zip: {e}")))?;
 
+    if zip.len() > MAX_ARCHIVE_ENTRIES {
+        return Err(VeyronError::Internal(format!(
+            "Malformed archive: {} entries exceeds max {MAX_ARCHIVE_ENTRIES}. Aborting.",
+            zip.len()
+        )));
+    }
+
     let canon_dest = dest.canonicalize().map_err(VeyronError::Io)?;
+    let mut total_extracted: u64 = 0;
 
     for i in 0..zip.len() {
         let mut entry = zip
@@ -281,7 +315,18 @@ pub fn extract_zip(archive: &Path, dest: &Path) -> Result<(), VeyronError> {
                 }
             }
             let mut out_file = fs::File::create(&out).map_err(VeyronError::Io)?;
-            io::copy(&mut entry, &mut out_file).map_err(VeyronError::Io)?;
+            // Cap on actual bytes written, not the entry's declared/compressed
+            // size — a zip bomb lies about (or omits) the true decompressed
+            // size, so the limit must be enforced on the copy itself.
+            let budget = MAX_EXTRACTED_BYTES.saturating_sub(total_extracted) + 1;
+            let written = io::copy(&mut entry.by_ref().take(budget), &mut out_file)
+                .map_err(VeyronError::Io)?;
+            total_extracted += written;
+            if total_extracted > MAX_EXTRACTED_BYTES {
+                return Err(VeyronError::Internal(format!(
+                    "Malformed archive: decompressed size exceeds max {MAX_EXTRACTED_BYTES} bytes. Aborting."
+                )));
+            }
         }
     }
 

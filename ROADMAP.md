@@ -163,8 +163,9 @@ Interim: return `ACTION_NOT_FOUND` instead of fake success.
 ### R5-12 — Retire or implement dead protocol surface (AUDIT M-05)
 `proto/veyron_protocol.proto`, `src/ipc/protocol.rs` — `Envelope.version` never checked (`ERR_PROTOCOL_MISMATCH` unused), `AudioStreamChunk` to `"kernel"` unhandled, `ERR_MAC_MISSING`/`ERR_MAC_INVALID` never sent, `needs_gpu`/`priority`/`PluginRegister.version` ignored. Implement version check at registration; `reserved`-retire the rest or document intent. **1 d**
 
-### R5-13 — Marketplace: download + zip-bomb caps (AUDIT M-06)
+### R5-13 ✓ — Marketplace: download + zip-bomb caps (AUDIT M-06)
 `src/marketplace/installer.rs` — unbounded in-memory download; `extract_zip` lacks decompressed-size/entry-count caps. Add size ceilings (e.g. 256 MiB archive, 1 GiB extracted, 10 k entries). **0.5 d**
+**Done:** `MAX_ARCHIVE_BYTES` (256 MiB, checked against `Content-Length` and streamed total), `MAX_EXTRACTED_BYTES` (1 GiB, enforced on actual bytes written per entry via `Read::take`, not the archive's declared size), `MAX_ARCHIVE_ENTRIES` (10k, checked before any extraction). Tests: `archive_with_excess_entries_rejected`, `zip_bomb_decompressed_size_capped` (`tests/unit/test_installer.rs`).
 
 ### R5-14 — Stop compiling the crate twice (AUDIT M-07)
 `src/main.rs:1-11` — bin re-declares all modules instead of `use veyron::…`. Fix, then sweep now-meaningful `#[allow(dead_code)]`. Halves unit-test duplication (30 tests currently run twice). **0.5–1 d**
