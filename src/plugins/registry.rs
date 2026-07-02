@@ -10,7 +10,15 @@ pub enum PluginState {
     Registered,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
+pub enum ActionLookup {
+    NotFound,
+    Found(PluginEntry),
+    /// Colliding plugin ids, for the caller to log.
+    Ambiguous(Vec<String>),
+}
+
+#[derive(Debug, Clone)]
 pub struct PluginEntry {
     pub plugin_id: String,
     pub conn_id: u64,
@@ -125,6 +133,24 @@ impl PluginRegistry {
     pub fn get_by_conn_id(&self, conn_id: u64) -> Option<PluginEntry> {
         let plugin_id = self.by_conn_id.get(&conn_id)?;
         self.by_plugin_id.get(plugin_id.value()).map(|e| e.clone())
+    }
+
+    /// Scan registered plugins for one whose `manifest.actions` declares
+    /// `action`. Ambiguity (>1 declarer) is surfaced rather than resolved —
+    /// picking a winner would hide a deploy misconfiguration.
+    pub fn find_action_provider(&self, action: &str) -> ActionLookup {
+        let matches: Vec<PluginEntry> = self
+            .by_plugin_id
+            .iter()
+            .filter(|e| e.manifest.actions.iter().any(|a| a == action))
+            .map(|e| e.value().clone())
+            .collect();
+
+        match matches.len() {
+            0 => ActionLookup::NotFound,
+            1 => ActionLookup::Found(matches.into_iter().next().unwrap()),
+            _ => ActionLookup::Ambiguous(matches.into_iter().map(|e| e.plugin_id).collect()),
+        }
     }
 }
 

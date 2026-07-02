@@ -248,3 +248,77 @@ fn entry_has_registered_at_timestamp() {
     // registered_at should be non-zero (Unix timestamp in seconds)
     assert!(entry.registered_at > 0, "registered_at must be set");
 }
+
+fn manifest_with_actions(actions: &[&str]) -> PluginManifest {
+    PluginManifest {
+        actions: actions.iter().map(|s| s.to_string()).collect(),
+        ..dummy_manifest()
+    }
+}
+
+#[test]
+fn find_action_provider_returns_not_found_when_no_provider() {
+    use veyron::plugins::registry::ActionLookup;
+
+    let reg = PluginRegistry::new();
+    reg.register(
+        "weather".to_string(),
+        1,
+        manifest_with_actions(&["get_forecast"]),
+        dummy_write_tx(),
+    )
+    .unwrap();
+
+    assert!(matches!(
+        reg.find_action_provider("get_weather"),
+        ActionLookup::NotFound
+    ));
+}
+
+#[test]
+fn find_action_provider_returns_found_for_single_provider() {
+    use veyron::plugins::registry::ActionLookup;
+
+    let reg = PluginRegistry::new();
+    reg.register(
+        "weather".to_string(),
+        1,
+        manifest_with_actions(&["get_weather"]),
+        dummy_write_tx(),
+    )
+    .unwrap();
+
+    match reg.find_action_provider("get_weather") {
+        ActionLookup::Found(entry) => assert_eq!(entry.plugin_id, "weather"),
+        other => panic!("expected Found, got {other:?}"),
+    }
+}
+
+#[test]
+fn find_action_provider_returns_ambiguous_for_multiple_providers() {
+    use veyron::plugins::registry::ActionLookup;
+
+    let reg = PluginRegistry::new();
+    reg.register(
+        "weather-a".to_string(),
+        1,
+        manifest_with_actions(&["get_weather"]),
+        dummy_write_tx(),
+    )
+    .unwrap();
+    reg.register(
+        "weather-b".to_string(),
+        2,
+        manifest_with_actions(&["get_weather"]),
+        dummy_write_tx(),
+    )
+    .unwrap();
+
+    match reg.find_action_provider("get_weather") {
+        ActionLookup::Ambiguous(mut ids) => {
+            ids.sort();
+            assert_eq!(ids, vec!["weather-a".to_string(), "weather-b".to_string()]);
+        }
+        other => panic!("expected Ambiguous, got {other:?}"),
+    }
+}
