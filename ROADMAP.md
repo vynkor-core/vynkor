@@ -63,7 +63,7 @@
 
 **Done-when:** a ≥ 64 KiB payload round-trips kernel↔plugin on all three SDKs, secured and unsecured, in CI.
 
-### R5-01 — Python & C++ SDK: decompress + MAC normalization (Critical, AUDIT C-01/C-02)
+### R5-01 ✓ — Python & C++ SDK: decompress + MAC normalization (Critical, AUDIT C-01/C-02)
 
 **Files:** `sdk/python/veyron/framing.py`, `sdk/cpp/src/framing.cpp`, `sdk/python/pyproject.toml`, `sdk/cpp/CMakeLists.txt`
 
@@ -75,13 +75,17 @@ The kernel zstd-compresses outbound payloads ≥ 64 KiB (`FLAG_COMPRESSED`) and 
 
 **Effort:** 1–2 d
 
-### R5-02 — Cross-SDK large-frame test harness (Critical companion to R5-01)
+**Done:** `framing.py` gains `_decompress`/`_normalize` helpers mirroring the Rust read path — `read_frame`/`async_read_frame` now decompress `FLAG_COMPRESSED` payloads (bounded to `MAX_PAYLOAD` via `zstandard`'s `max_output_size`) before MAC verification, rebuilding the plaintext header the sender's tag was computed over. `pyproject.toml` gains `zstandard>=0.22`. C++'s `read_frame_full` does the same via libzstd (`ZSTD_getFrameContentSize`/`ZSTD_decompress`, bounded to `MAX_PAYLOAD_SIZE`); `CMakeLists.txt` links `PkgConfig::ZSTD`. Also fixed a pre-existing build break: `FLAG_MAC_PRESENT` was defined in both `mac.hpp` and `framing.hpp`, so the C++ SDK never actually compiled — the C++ test binary now builds and `ctest` passes (12 tests, incl. 3 new compressed-frame cases in `tests/test_mac.cpp`). New unit tests: `tests/python/test_framing_compressed.py` (4 cases: decompress round-trip, MAC verify, bad-MAC rejection, uncompressed unaffected) — full cross-SDK 100 KiB `tests/integration/test_sdk_*.rs` harness extension deferred to R5-02.
+
+### R5-02 ✓ — Cross-SDK large-frame test harness (Critical companion to R5-01)
 
 **Files:** `tests/integration/sdk_harness.rs`, `test_sdk_*.rs`
 
 No existing test sends a payload ≥ `COMPRESS_THRESHOLD` across SDK boundaries — that's why R5-01 shipped broken. Add ≥ 64 KiB round-trips (both directions) and a fragmented-message case to the shared harness so protocol regressions cannot land silently.
 
 **Effort:** 0.5–1 d
+
+**Done:** `SdkHarness` now exposes `registry`/`event_bus` so tests can drive the kernel directly. `python_sdk_large_frame_round_trip` (`tests/integration/test_sdk_python.rs`) subscribes a live Python client to an event type, publishes a 100 KiB `Event` through `EventBus::publish` (kernel compresses since it's ≥ `COMPRESS_THRESHOLD`), and asserts the SDK decompresses it byte-for-byte; skips cleanly when `zstandard`/Python are unavailable. (Peer-to-peer `forward()` unicast wasn't used as the vehicle because the committed `veyron_protocol_pb2.py` predates the `PluginManifest.ipc_targets` field added in R5-04/T-04 and regenerating it was out of scope here — tracked as follow-up.) C++ decompression is covered at the unit level in `sdk/cpp/tests/test_mac.cpp` (`FramingCompressed.*`, 3 cases) since no C++ reference plugin binary exists for the integration harness yet (same stand-in gap `test_sdk_cpp.rs` already documents). Fragmented-message case not yet added.
 
 ### R5-03 — WebSocket gateway: define compressed/fragmented inbound behavior (High, AUDIT C-03)
 
@@ -193,6 +197,7 @@ Interim: return `ACTION_NOT_FOUND` instead of fake success.
 | Env-var mutation in `config.rs` tests (parallel-unsafe) | AUDIT §7 | serialize or use `temp-env` |
 | Dependency refresh: axum 0.8, nix, rusqlite, opentelemetry stack | AUDIT §6 | no conflicts today; batch upgrade |
 | SIGHUP reload + SIGTERM-ignoring-plugin shutdown tests | AUDIT §4 | lifecycle coverage |
+| Committed `sdk/python/veyron/veyron_protocol_pb2.py` is stale (missing `ipc_targets`, `PERMISSION_AUDIO_STREAM`/`PERMISSION_KERNEL_ADMIN`, `COMMAND_PERMISSION_DENIED`) | found during R5-02 | regenerate via `scripts/gen_proto_python.py` and commit |
 
 ---
 

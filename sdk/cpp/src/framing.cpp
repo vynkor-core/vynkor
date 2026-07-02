@@ -3,6 +3,7 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <zstd.h>
 
 #include <array>
 #include <cstring>
@@ -115,6 +116,37 @@ static void recv_exact(int fd, uint8_t* buf, size_t n) {
     }
 }
 
+// Bounded zstd decompression mirroring src/ipc/framing.rs:234.
+static std::vector<uint8_t> zstd_decompress_bounded(const uint8_t* data, size_t len) {
+    unsigned long long content_size = ZSTD_getFrameContentSize(data, len);
+    if (content_size == ZSTD_CONTENTSIZE_ERROR)
+        throw std::runtime_error("veyron: decompress frame: invalid zstd frame");
+    if (content_size == ZSTD_CONTENTSIZE_UNKNOWN || content_size > MAX_PAYLOAD_SIZE)
+        throw std::runtime_error("veyron: decompress frame: content size unknown or too large");
+
+    std::vector<uint8_t> out(static_cast<size_t>(content_size));
+    size_t result = ZSTD_decompress(out.data(), out.size(), data, len);
+    if (ZSTD_isError(result) || result != out.size())
+        throw std::runtime_error(std::string("veyron: decompress frame: ") + ZSTD_getErrorName(result));
+    return out;
+}
+
+// Rebuilds the 44-byte header exactly as serialize_header (src/ipc/framing.rs)
+// does, for the given flags/target/payload.
+static void build_header(uint8_t out[FRAME_HEADER_SIZE], uint16_t flags,
+                         const uint8_t target[32], const std::vector<uint8_t>& payload) {
+    std::memset(out, 0, FRAME_HEADER_SIZE);
+    const uint16_t magic_be = htons(FRAME_MAGIC);
+    std::memcpy(out + 0, &magic_be, 2);
+    const uint16_t flags_be = htons(flags);
+    std::memcpy(out + 2, &flags_be, 2);
+    const uint32_t len_be = htonl(static_cast<uint32_t>(payload.size()));
+    std::memcpy(out + 4, &len_be, 4);
+    std::memcpy(out + 8, target, 32);
+    const uint32_t crc_be = htonl(veyron_crc32(payload.data(), payload.size()));
+    std::memcpy(out + 40, &crc_be, 4);
+}
+
 // ---------------------------------------------------------------------------
 // read_frame_full
 // ---------------------------------------------------------------------------
@@ -145,12 +177,24 @@ FrameResult read_frame_full(int fd, const std::array<uint8_t, 32>* session_key) 
     if (length > 0)
         recv_exact(fd, payload.data(), length);
 
+    // CRC is over the wire bytes (possibly compressed); verify before decompressing.
     if (veyron_crc32(payload.data(), payload.size()) != expected_crc)
         throw std::runtime_error("veyron: CRC32 mismatch");
 
+    // Normalize the in-memory invariant: payload is always plaintext, and the
+    // header used for MAC verification describes the plaintext — mirroring
+    // src/ipc/framing.rs:228-241.
+    std::array<uint8_t, FRAME_HEADER_SIZE> effective_header;
+    std::memcpy(effective_header.data(), header, FRAME_HEADER_SIZE);
+    if (flags & FLAG_COMPRESSED) {
+        payload = zstd_decompress_bounded(payload.data(), payload.size());
+        flags &= static_cast<uint16_t>(~FLAG_COMPRESSED);
+        build_header(effective_header.data(), flags, header + 8, payload);
+    }
+
     FrameResult result;
     result.flags = flags;
-    std::memcpy(result.raw_header.data(), header, FRAME_HEADER_SIZE);
+    result.raw_header = effective_header;
     result.payload = std::move(payload);
 
     if (flags & FLAG_MAC_PRESENT) {
@@ -158,7 +202,7 @@ FrameResult read_frame_full(int fd, const std::array<uint8_t, 32>* session_key) 
         result.has_mac = true;
         if (session_key != nullptr) {
             if (!verify_tag(*session_key,
-                            header, FRAME_HEADER_SIZE,
+                            effective_header.data(), FRAME_HEADER_SIZE,
                             result.payload.data(), result.payload.size(),
                             result.mac.data(), MAC_TAG_LEN))
                 throw std::runtime_error("veyron: MAC verification failed");

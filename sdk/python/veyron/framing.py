@@ -4,6 +4,8 @@ import struct
 from binascii import crc32
 from typing import Optional
 
+import zstandard
+
 MAGIC = 0x5652
 HEADER_FMT = ">HHI32sI"  # magic, flags, length, target, crc32
 HEADER_SIZE = struct.calcsize(HEADER_FMT)  # 44
@@ -81,10 +83,35 @@ def pack_frame(
     return frame
 
 
+def _decompress(payload: bytes) -> bytes:
+    """Bounded zstd decompression mirroring src/ipc/framing.rs:234."""
+    decompressor = zstandard.ZstdDecompressor()
+    out = decompressor.decompress(payload, max_output_size=MAX_PAYLOAD)
+    if len(out) > MAX_PAYLOAD:
+        raise ValueError(f"decompressed payload too large: {len(out)} > {MAX_PAYLOAD}")
+    return out
+
+
+def _normalize(flags: int, target_bytes: bytes, payload: bytes):
+    """If FLAG_COMPRESSED, decompress and rebuild the plaintext header the MAC
+    was computed over. Mirrors src/ipc/framing.rs:228-241."""
+    if not flags & FLAG_COMPRESSED:
+        return flags, header_bytes_for(flags, target_bytes, payload), payload
+    plain = _decompress(payload)
+    plain_flags = flags & ~FLAG_COMPRESSED
+    plain_header = header_bytes_for(plain_flags, target_bytes, plain)
+    return plain_flags, plain_header, plain
+
+
+def header_bytes_for(flags: int, target_bytes: bytes, payload: bytes) -> bytes:
+    checksum = crc32(payload) & 0xFFFFFFFF
+    return struct.pack(HEADER_FMT, MAGIC, flags, len(payload), target_bytes, checksum)
+
+
 def read_frame(reader, session_key: Optional[bytes] = None) -> bytes:
     """Read one frame from a synchronous file-like reader. Returns payload bytes."""
     header_bytes = _read_exact(reader, HEADER_SIZE)
-    magic, flags, length, _target, stored_crc = struct.unpack(HEADER_FMT, header_bytes)
+    magic, flags, length, target_bytes, stored_crc = struct.unpack(HEADER_FMT, header_bytes)
     if magic != MAGIC:
         raise ValueError(f"bad magic: 0x{magic:04x}")
     if length > MAX_PAYLOAD:
@@ -93,6 +120,9 @@ def read_frame(reader, session_key: Optional[bytes] = None) -> bytes:
     computed = crc32(payload) & 0xFFFFFFFF
     if computed != stored_crc:
         raise ValueError(f"CRC mismatch: got 0x{computed:08x}, want 0x{stored_crc:08x}")
+
+    flags, header_bytes, payload = _normalize(flags, target_bytes, payload)
+
     if flags & FLAG_MAC_PRESENT:
         tag = _read_exact(reader, 32)
         if session_key is not None and not verify_tag(session_key, header_bytes, payload, tag):
@@ -103,7 +133,7 @@ def read_frame(reader, session_key: Optional[bytes] = None) -> bytes:
 async def async_read_frame(reader, session_key: Optional[bytes] = None) -> bytes:
     """Read one frame from an asyncio StreamReader. Returns payload bytes."""
     header_bytes = await reader.readexactly(HEADER_SIZE)
-    magic, flags, length, _target, stored_crc = struct.unpack(HEADER_FMT, header_bytes)
+    magic, flags, length, target_bytes, stored_crc = struct.unpack(HEADER_FMT, header_bytes)
     if magic != MAGIC:
         raise ValueError(f"bad magic: 0x{magic:04x}")
     if length > MAX_PAYLOAD:
@@ -112,6 +142,9 @@ async def async_read_frame(reader, session_key: Optional[bytes] = None) -> bytes
     computed = crc32(payload) & 0xFFFFFFFF
     if computed != stored_crc:
         raise ValueError(f"CRC mismatch: got 0x{computed:08x}, want 0x{stored_crc:08x}")
+
+    flags, header_bytes, payload = _normalize(flags, target_bytes, payload)
+
     if flags & FLAG_MAC_PRESENT:
         tag = await reader.readexactly(32)
         if session_key is not None and not verify_tag(session_key, header_bytes, payload, tag):

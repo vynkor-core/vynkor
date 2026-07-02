@@ -205,7 +205,7 @@ sdk/
 
 Report vulnerabilities via GitHub Security Advisories (not public issues). See `AUDIT.md` for the current audit findings and score.
 
-Current posture: **pre-production**. Kernel core (framing, MAC, fragmentation, supervision) is solid and regression-tested; known open items — most notably compressed-frame support missing from the Python/C++ SDKs — are tracked in `AUDIT.md` and `ROADMAP.md` (Phase 5).
+Current posture: **pre-production**. Kernel core (framing, MAC, fragmentation, supervision) is solid and regression-tested; compressed-frame support now works across all three SDKs (R5-01). Remaining open items are tracked in `AUDIT.md` and `ROADMAP.md` (Phase 5).
 
 ---
 

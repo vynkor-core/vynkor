@@ -21,6 +21,8 @@ pub struct SdkHarness {
     pub socket_path: PathBuf,
     pub port: u16,
     pub jwt_secret: String,
+    pub registry: Arc<PluginRegistry>,
+    pub event_bus: Arc<EventBus>,
     shutdown_tx: Option<oneshot::Sender<()>>,
 }
 
@@ -59,8 +61,8 @@ impl SdkHarness {
 
         tokio::spawn(Kernel::run_with_components(
             cfg,
-            registry,
-            event_bus,
+            registry.clone(),
+            event_bus.clone(),
             async {
                 let _ = shutdown_rx.await;
             },
@@ -73,6 +75,8 @@ impl SdkHarness {
             socket_path,
             port,
             jwt_secret: jwt_secret.unwrap_or_default(),
+            registry,
+            event_bus,
             shutdown_tx: Some(shutdown_tx),
         }
     }

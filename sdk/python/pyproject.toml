@@ -10,6 +10,8 @@ requires-python = ">=3.9"
 dependencies = [
     # pb2 regenerated with protoc 35.1 (gencode 7.35.1); runtime major must match.
     "protobuf>=7.35.1",
+    # decompress FLAG_COMPRESSED frames (kernel zstd-compresses payloads >= 64 KiB)
+    "zstandard>=0.22",
 ]
 
 [project.optional-dependencies]

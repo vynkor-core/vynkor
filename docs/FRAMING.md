@@ -27,10 +27,11 @@ describe the plaintext.
 *plaintext* header and payload (before compression). Receivers must therefore verify
 the tag against the normalized (decompressed) header/payload, not the raw wire bytes.
 
-> **SDK status:** the Rust SDK (which re-exports the kernel framing) handles this
-> correctly. The Python and C++ SDKs do **not** yet decompress or normalize (R5-01) —
-> until fixed, frames ≥ 64 KiB break non-Rust plugins. The WebSocket gateway also does
-> not accept compressed inbound frames (R5-03).
+> **SDK status:** all three SDKs (Rust, Python, C++) decompress and normalize
+> correctly (R5-01 ✓): payload is always plaintext after the read call, and MAC
+> verification (when a session key is supplied) runs against the rebuilt plaintext
+> header. Python depends on `zstandard`; C++ links `libzstd` via pkg-config. The
+> WebSocket gateway does not yet accept compressed inbound frames (R5-03).
 
 ### FLAG_FRAGMENTED (Bit 2)
 

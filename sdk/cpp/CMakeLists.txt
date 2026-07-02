@@ -8,6 +8,8 @@ find_package(Threads REQUIRED)
 find_package(Protobuf REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(absl REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(ZSTD REQUIRED IMPORTED_TARGET libzstd)
 
 # Generate C++ bindings from the shared proto
 set(PROTO_FILE ${CMAKE_CURRENT_SOURCE_DIR}/../../proto/veyron_protocol.proto)
@@ -41,6 +43,7 @@ target_link_libraries(veyron_sdk_cpp
     absl::strings
     absl::log_internal_check_op
     OpenSSL::Crypto
+    PkgConfig::ZSTD
     Threads::Threads
 )
 
