@@ -1,0 +1,249 @@
+syntax = "proto3";
+
+package veyron;
+
+// v 1.2  (frame MAC: session_nonce, ERR_MAC_MISSING/INVALID)
+
+// ═══════════════════════════════════════════
+// КОРНЕВОЙ КОНВЕРТ — каждое сообщение в этом
+// ═══════════════════════════════════════════
+
+message Envelope {
+  string  message_id  = 1;
+  uint64  timestamp   = 2;
+  string  sender_id   = 3;
+
+  oneof payload {
+    PluginRegister    plugin_register    = 10;
+    PluginRegisterAck plugin_register_ack = 11;
+    PluginShutdown    plugin_shutdown    = 12;
+
+    ActionRequest     action_request     = 20;
+    ActionResponse    action_response    = 21;
+
+    KernelCommand     kernel_command     = 30;
+    KernelCommandAck  kernel_command_ack = 31;
+
+    Event             event              = 40;
+    EventAck          event_ack          = 41;
+    Subscribe         subscribe          = 42;
+    Unsubscribe       unsubscribe        = 43;
+
+    // Peer-to-peer plugin<->plugin streaming only — the kernel does not
+    // consume audio itself. Sending this with target "kernel" is a usage
+    // error and gets ERR_UNKNOWN like any other unhandled kernel-targeted
+    // message (docs/FRAMING.md).
+    AudioStreamChunk  audio_stream_chunk = 60;
+
+    Ping              ping               = 90;
+    Pong              pong               = 91;
+    ErrorMessage      error              = 92;
+  }
+
+  // version (4): never set by any SDK, never checked by the kernel — no
+  // versioning scheme exists yet. Retired rather than half-implemented
+  // (AUDIT M-05, R5-12); a real scheme is future work.
+  reserved 4, 50, 51, 52;
+  reserved "version", "ai_request", "ai_response", "ai_stream_chunk";
+}
+
+
+// ═══════════════════════════════════════════
+// ЖИЗНЕННЫЙ ЦИКЛ ПЛАГИНА
+// ═══════════════════════════════════════════
+
+message PluginRegister {
+  string          plugin_id    = 1;  // уникальное имя, напр. "weather"
+  // Plugin's own semver, e.g. "1.0.0". Currently descriptive only — the
+  // kernel does not store, display, or validate it (AUDIT M-05, R5-12).
+  // Version *compatibility* is enforced separately, at install time, via
+  // PluginEntry.min_kernel_version/max_kernel_version in the marketplace
+  // registry (docs/PLUGIN_REGISTRY_SCHEMA.md) — that check already exists
+  // and covers the case this field looked like it should.
+  string          version      = 2;
+  string          description  = 3;
+  PluginManifest  manifest     = 4;
+  string          jwt_token    = 5;  // auth token (required when kernel has jwt_secret configured)
+}
+
+message PluginRegisterAck {
+  bool    accepted       = 1;
+  string  reject_reason  = 2;
+  repeated string granted_permissions = 3;
+  bytes   session_nonce  = 4;  // 16 random bytes; HKDF salt for the frame MAC key
+}
+
+message PluginShutdown {
+  string  reason        = 1;    uint32  grace_seconds = 2; 
+}
+
+
+// ═══════════════════════════════════════════
+// МАНИФЕСТ — ДЕКЛАРАЦИЯ ВОЗМОЖНОСТЕЙ ПЛАГИНА
+// ═══════════════════════════════════════════
+
+message PluginManifest {
+  repeated string  permissions  = 1;  // см. PermissionType ниже
+  repeated string  actions      = 2;  // действия которые плагин умеет делать
+  repeated string  events       = 3;  // события на которые хочет подписаться
+  // Per-plugin IPC allowlist (T-04). Plugin may only unicast to plugin_ids
+  // listed here. Empty list = deny-all (even with PERMISSION_IPC_SEND).
+  repeated string  ipc_targets  = 7;
+
+  // needs_gpu/priority (5, 6): never set by any SDK, never read by the
+  // kernel — there's no scheduler to act on them (AUDIT M-05, R5-12).
+  // Retired rather than wired up: scheduling policy is out of scope for a
+  // "dumb byte router" kernel per the manifesto.
+  reserved 4, 5, 6;
+  reserved "needs_ai", "needs_gpu", "priority";
+}
+
+enum PermissionType {
+  PERMISSION_UNKNOWN    = 0;
+  PERMISSION_NETWORK    = 1;  // исходящие HTTP запросы
+  PERMISSION_FILES_READ = 2;  // чтение файлов
+  PERMISSION_FILES_WRITE = 3; // запись файлов
+  PERMISSION_SYSTEM     = 4;  // системные метрики (CPU, RAM)
+  PERMISSION_AUDIO      = 5;  // микрофон и аудиовыход (stt/tts)
+  PERMISSION_NOTIFY     = 6;  // отправка уведомлений
+  PERMISSION_SCHEDULER  = 8;  // создание таймеров и алармов
+  reserved 7;
+  reserved "PERMISSION_AI";
+  PERMISSION_BROWSER    = 9;  // управление браузером
+  PERMISSION_IPC_SEND   = 10; // отправка сообщений другим плагинам (peer-to-peer)
+  PERMISSION_AUDIO_STREAM = 11; // send/receive raw audio frames via FLAG_RAW_BINARY
+  PERMISSION_KERNEL_ADMIN = 12; // admin KernelCommands (reload_config etc); health_check exempt
+}
+
+
+// ═══════════════════════════════════════════
+// ДЕЙСТВИЯ: ПЛАГИН → ЯДРО
+// Плагин просит ядро что-то сделать
+// ═══════════════════════════════════════════
+
+message ActionRequest {
+  string  action_id   = 1;  // UUID, нужен для сопоставления с ответом
+  string  action      = 2;  // имя действия: "get_weather", "play_audio"...
+  bytes   params_json = 3;  // JSON payload с параметрами действия
+  uint32  timeout_ms  = 4;  // таймаут ожидания ответа в мс (0 = дефолт 30s)
+}
+
+message ActionResponse {
+  string      action_id   = 1;
+  ActionStatus status     = 2;
+  bytes       data_json   = 3;  // JSON с результатом
+  string      error       = 4;  // заполнено если status != OK
+}
+
+enum ActionStatus {
+  ACTION_OK              = 0;
+  ACTION_ERROR           = 1;
+  ACTION_TIMEOUT         = 2;
+  ACTION_PERMISSION_DENY = 3;  // плагин не объявил нужный permission
+  ACTION_NOT_FOUND       = 4;  // такого действия нет в ядре
+}
+
+
+// ═══════════════════════════════════════════
+// КОМАНДЫ ЯДРА: ЯДРО → ПЛАГИН
+// Ядро просит плагин что-то сделать
+// ═══════════════════════════════════════════
+
+message KernelCommand {
+  string  command_id  = 1;
+  string  command     = 2;  // имя команды, напр. "reload_config", "health_check"
+  bytes   params_json = 3;
+}
+
+message KernelCommandAck {
+  string        command_id = 1;
+  CommandStatus status     = 2;
+  bytes         data_json  = 3;
+  string        error      = 4;
+}
+
+enum CommandStatus {
+  COMMAND_OK                 = 0;
+  COMMAND_ERROR              = 1;
+  COMMAND_UNKNOWN            = 2;  // плагин не знает такой команды
+  COMMAND_PERMISSION_DENIED  = 3;  // плагин не объявил PERMISSION_KERNEL_ADMIN
+}
+
+
+// ═══════════════════════════════════════════
+// СОБЫТИЯ: ЯДРО → ПЛАГИНЫ
+// Публикация событий на подписчиков
+// ═══════════════════════════════════════════
+
+message Event {
+  string  event_id    = 1;
+  string  event_type  = 2;  // напр. "alarm.fired", "stt.result", "system.low_memory"
+  bytes   payload_json = 3;
+  uint32  retry_count = 4;  // ядро заполняет при повторной отправке
+}
+
+message EventAck {
+  string event_id = 1;  // подтверждение что плагин получил и обработал
+}
+
+// Плагин → Ядро: подписаться на типы событий
+message Subscribe {
+  repeated string event_types = 1;  // можно использовать "*" для всех
+}
+
+// Плагин → Ядро: отписаться
+message Unsubscribe {
+  repeated string event_types = 1;
+}
+
+
+// ═══════════════════════════════════════════
+// АУДИО СТРИМИНГ
+// ═══════════════════════════════════════════
+
+enum AudioCodec {
+  AUDIO_CODEC_UNSPECIFIED = 0;
+  AUDIO_CODEC_PCM_S16LE  = 1;  // raw PCM, 16-bit signed LE — use for local UDS
+  AUDIO_CODEC_OPUS       = 2;  // Opus — use for WebSocket (bandwidth)
+}
+
+message AudioStreamChunk {
+  uint32     stream_id      = 1;  // identifies stream session; plugins assign this
+  AudioCodec codec          = 2;
+  uint32     sample_rate    = 3;  // Hz: 16000, 44100, 48000
+  uint32     channels       = 4;  // 1 = mono, 2 = stereo
+  bytes      data           = 5;  // raw PCM_S16LE or Opus packet
+  bool       end_of_stream  = 6;  // sender signals stream closed
+}
+
+
+// ═══════════════════════════════════════════
+// СЛУЖЕБНЫЕ СООБЩЕНИЯ
+// ═══════════════════════════════════════════
+
+message Ping {
+  uint64 timestamp = 1;
+}
+
+message Pong {
+  uint64 original_timestamp = 1;
+  uint64 server_timestamp   = 2;
+}
+
+message ErrorMessage {
+  ErrorCode code    = 1;
+  string    message = 2;
+  string    details = 3;  // доп. контекст для дебаггинга
+}
+
+enum ErrorCode {
+  ERR_UNKNOWN           = 0;
+  ERR_PROTOCOL_MISMATCH = 1;  // версия протокола не совпадает
+  ERR_NOT_REGISTERED    = 2;  // плагин не прошёл регистрацию
+  ERR_RATE_LIMITED      = 3;  // слишком много запросов
+  ERR_INTERNAL          = 4;  // внутренняя ошибка ядра
+  ERR_DESERIALIZATION   = 5;  // не удалось разобрать сообщение
+  ERR_MAC_MISSING       = 6;  // registered conn sent an un-MAC'd frame while secured
+  ERR_MAC_INVALID       = 7;  // frame MAC verification failed (tampering)
+  ERR_PERMISSION_DENIED = 8;  // plugin lacks required permission for this operation
+}
