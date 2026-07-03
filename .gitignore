@@ -55,4 +55,5 @@ tmp/
 data/tmp/
 *.sock
 *.socket
+.worktrees/
 
