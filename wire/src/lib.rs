@@ -1,6 +1,7 @@
 pub mod error;
 pub mod framing;
 pub mod mac;
+pub mod socket;
 pub mod proto {
     #![allow(clippy::enum_variant_names)]
     pub mod veyron {

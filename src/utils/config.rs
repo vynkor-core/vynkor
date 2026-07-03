@@ -1,5 +1,4 @@
 use serde::Deserialize;
-use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 /// One plugin entry in the `plugins:` list in config.yaml.
@@ -96,52 +95,20 @@ pub struct Config {
     pub config_file: Option<String>,
 }
 
-/// Picks a per-user private directory, preferring `XDG_RUNTIME_DIR`, then the
-/// kernel-provided `/run/user/<uid>`, then a private 0o700 directory under
-/// `$HOME`. Never falls back to the world-writable shared `/tmp` (BUG-006):
-/// if none of those are available, returns `None` so callers can fail closed
-/// with a clear error instead of writing into `/tmp`.
-fn default_private_dir() -> Option<PathBuf> {
-    if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
-        return Some(PathBuf::from(runtime_dir));
-    }
-
-    let uid = nix::unistd::Uid::current().as_raw();
-    let run_user_dir = PathBuf::from(format!("/run/user/{uid}"));
-    if run_user_dir.is_dir() {
-        return Some(run_user_dir);
-    }
-
-    if let Ok(home) = std::env::var("HOME") {
-        let dir = PathBuf::from(home).join(".veyron").join("run");
-        if std::fs::create_dir_all(&dir).is_ok()
-            && std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).is_ok()
-        {
-            return Some(dir);
-        }
-    }
-
-    None
-}
-
 /// Public so SDKs resolve the same default as the kernel when
 /// `VEYRON_SOCKET_PATH` is not set.
-pub fn default_socket_path() -> String {
-    default_private_dir()
-        .map(|dir| dir.join("veyron.sock").to_string_lossy().to_string())
-        .unwrap_or_default()
-}
+pub use veyron_wire::socket::default_socket_path;
 
 /// pid/log files got the same symlink-attack surface as the socket
 /// (AUDIT M-09) — default them out of the shared `/tmp` the same way.
 fn default_pid_path() -> PathBuf {
-    default_private_dir()
+    veyron_wire::socket::default_private_dir()
         .map(|dir| dir.join("veyron.pid"))
         .unwrap_or_else(|| PathBuf::from("veyron.pid"))
 }
 
 fn default_log_path() -> PathBuf {
-    default_private_dir()
+    veyron_wire::socket::default_private_dir()
         .map(|dir| dir.join("veyron.log"))
         .unwrap_or_else(|| PathBuf::from("veyron.log"))
 }
