@@ -3185,7 +3185,7 @@ dependencies = [
  "crc32fast",
  "prost 0.13.5",
  "tokio",
- "veyron",
+ "veyron-wire",
 ]
 
 [[package]]

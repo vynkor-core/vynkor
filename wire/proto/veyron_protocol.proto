@@ -5,7 +5,7 @@ package veyron;
 // v 1.2  (frame MAC: session_nonce, ERR_MAC_MISSING/INVALID)
 
 // ═══════════════════════════════════════════
-// КОРНЕВОЙ КОНВЕРТ — каждое сообщение в этом
+// root envelope — every message goes through this
 // ═══════════════════════════════════════════
 
 message Envelope {
@@ -49,11 +49,11 @@ message Envelope {
 
 
 // ═══════════════════════════════════════════
-// ЖИЗНЕННЫЙ ЦИКЛ ПЛАГИНА
+// plugin lifecycle
 // ═══════════════════════════════════════════
 
 message PluginRegister {
-  string          plugin_id    = 1;  // уникальное имя, напр. "weather"
+  string          plugin_id    = 1;  // unique name, e.g. "weather"
   // Plugin's own semver, e.g. "1.0.0". Currently descriptive only — the
   // kernel does not store, display, or validate it (AUDIT M-05, R5-12).
   // Version *compatibility* is enforced separately, at install time, via
@@ -74,18 +74,18 @@ message PluginRegisterAck {
 }
 
 message PluginShutdown {
-  string  reason        = 1;    uint32  grace_seconds = 2; 
+  string  reason        = 1;    uint32  grace_seconds = 2;
 }
 
 
 // ═══════════════════════════════════════════
-// МАНИФЕСТ — ДЕКЛАРАЦИЯ ВОЗМОЖНОСТЕЙ ПЛАГИНА
+// manifest — what a plugin declares it can do
 // ═══════════════════════════════════════════
 
 message PluginManifest {
-  repeated string  permissions  = 1;  // см. PermissionType ниже
-  repeated string  actions      = 2;  // действия которые плагин умеет делать
-  repeated string  events       = 3;  // события на которые хочет подписаться
+  repeated string  permissions  = 1;  // see PermissionType below
+  repeated string  actions      = 2;  // actions this plugin can perform
+  repeated string  events       = 3;  // events it wants to subscribe to
   // Per-plugin IPC allowlist (T-04). Plugin may only unicast to plugin_ids
   // listed here. Empty list = deny-all (even with PERMISSION_IPC_SEND).
   repeated string  ipc_targets  = 7;
@@ -100,58 +100,58 @@ message PluginManifest {
 
 enum PermissionType {
   PERMISSION_UNKNOWN    = 0;
-  PERMISSION_NETWORK    = 1;  // исходящие HTTP запросы
-  PERMISSION_FILES_READ = 2;  // чтение файлов
-  PERMISSION_FILES_WRITE = 3; // запись файлов
-  PERMISSION_SYSTEM     = 4;  // системные метрики (CPU, RAM)
-  PERMISSION_AUDIO      = 5;  // микрофон и аудиовыход (stt/tts)
-  PERMISSION_NOTIFY     = 6;  // отправка уведомлений
-  PERMISSION_SCHEDULER  = 8;  // создание таймеров и алармов
+  PERMISSION_NETWORK    = 1;  // outbound http requests
+  PERMISSION_FILES_READ = 2;  // read files
+  PERMISSION_FILES_WRITE = 3; // write files
+  PERMISSION_SYSTEM     = 4;  // system metrics (cpu, ram)
+  PERMISSION_AUDIO      = 5;  // mic and audio out (stt/tts)
+  PERMISSION_NOTIFY     = 6;  // send notifications
+  PERMISSION_SCHEDULER  = 8;  // create timers and alarms
   reserved 7;
   reserved "PERMISSION_AI";
-  PERMISSION_BROWSER    = 9;  // управление браузером
-  PERMISSION_IPC_SEND   = 10; // отправка сообщений другим плагинам (peer-to-peer)
+  PERMISSION_BROWSER    = 9;  // control the browser
+  PERMISSION_IPC_SEND   = 10; // send messages to other plugins (peer-to-peer)
   PERMISSION_AUDIO_STREAM = 11; // send/receive raw audio frames via FLAG_RAW_BINARY
   PERMISSION_KERNEL_ADMIN = 12; // admin KernelCommands (reload_config etc); health_check exempt
 }
 
 
 // ═══════════════════════════════════════════
-// ДЕЙСТВИЯ: ПЛАГИН → ЯДРО
-// Плагин просит ядро что-то сделать
+// actions: plugin → kernel
+// plugin asks the kernel to do something
 // ═══════════════════════════════════════════
 
 message ActionRequest {
-  string  action_id   = 1;  // UUID, нужен для сопоставления с ответом
-  string  action      = 2;  // имя действия: "get_weather", "play_audio"...
-  bytes   params_json = 3;  // JSON payload с параметрами действия
-  uint32  timeout_ms  = 4;  // таймаут ожидания ответа в мс (0 = дефолт 30s)
+  string  action_id   = 1;  // uuid, used to match the response
+  string  action      = 2;  // action name: "get_weather", "play_audio"...
+  bytes   params_json = 3;  // json payload with action params
+  uint32  timeout_ms  = 4;  // response wait timeout in ms (0 = default 30s)
 }
 
 message ActionResponse {
   string      action_id   = 1;
   ActionStatus status     = 2;
-  bytes       data_json   = 3;  // JSON с результатом
-  string      error       = 4;  // заполнено если status != OK
+  bytes       data_json   = 3;  // json with the result
+  string      error       = 4;  // set when status != OK
 }
 
 enum ActionStatus {
   ACTION_OK              = 0;
   ACTION_ERROR           = 1;
   ACTION_TIMEOUT         = 2;
-  ACTION_PERMISSION_DENY = 3;  // плагин не объявил нужный permission
-  ACTION_NOT_FOUND       = 4;  // такого действия нет в ядре
+  ACTION_PERMISSION_DENY = 3;  // plugin didn't declare the required permission
+  ACTION_NOT_FOUND       = 4;  // no such action in the kernel
 }
 
 
 // ═══════════════════════════════════════════
-// КОМАНДЫ ЯДРА: ЯДРО → ПЛАГИН
-// Ядро просит плагин что-то сделать
+// kernel commands: kernel → plugin
+// kernel asks a plugin to do something
 // ═══════════════════════════════════════════
 
 message KernelCommand {
   string  command_id  = 1;
-  string  command     = 2;  // имя команды, напр. "reload_config", "health_check"
+  string  command     = 2;  // command name, e.g. "reload_config", "health_check"
   bytes   params_json = 3;
 }
 
@@ -165,40 +165,40 @@ message KernelCommandAck {
 enum CommandStatus {
   COMMAND_OK                 = 0;
   COMMAND_ERROR              = 1;
-  COMMAND_UNKNOWN            = 2;  // плагин не знает такой команды
-  COMMAND_PERMISSION_DENIED  = 3;  // плагин не объявил PERMISSION_KERNEL_ADMIN
+  COMMAND_UNKNOWN            = 2;  // plugin doesn't know this command
+  COMMAND_PERMISSION_DENIED  = 3;  // plugin didn't declare PERMISSION_KERNEL_ADMIN
 }
 
 
 // ═══════════════════════════════════════════
-// СОБЫТИЯ: ЯДРО → ПЛАГИНЫ
-// Публикация событий на подписчиков
+// events: kernel → plugins
+// publishing events to subscribers
 // ═══════════════════════════════════════════
 
 message Event {
   string  event_id    = 1;
-  string  event_type  = 2;  // напр. "alarm.fired", "stt.result", "system.low_memory"
+  string  event_type  = 2;  // e.g. "alarm.fired", "stt.result", "system.low_memory"
   bytes   payload_json = 3;
-  uint32  retry_count = 4;  // ядро заполняет при повторной отправке
+  uint32  retry_count = 4;  // kernel fills this in on redelivery
 }
 
 message EventAck {
-  string event_id = 1;  // подтверждение что плагин получил и обработал
+  string event_id = 1;  // confirms the plugin received and handled it
 }
 
-// Плагин → Ядро: подписаться на типы событий
+// plugin → kernel: subscribe to event types
 message Subscribe {
-  repeated string event_types = 1;  // можно использовать "*" для всех
+  repeated string event_types = 1;  // "*" subscribes to everything
 }
 
-// Плагин → Ядро: отписаться
+// plugin → kernel: unsubscribe
 message Unsubscribe {
   repeated string event_types = 1;
 }
 
 
 // ═══════════════════════════════════════════
-// АУДИО СТРИМИНГ
+// audio streaming
 // ═══════════════════════════════════════════
 
 enum AudioCodec {
@@ -218,7 +218,7 @@ message AudioStreamChunk {
 
 
 // ═══════════════════════════════════════════
-// СЛУЖЕБНЫЕ СООБЩЕНИЯ
+// housekeeping messages
 // ═══════════════════════════════════════════
 
 message Ping {
@@ -233,16 +233,16 @@ message Pong {
 message ErrorMessage {
   ErrorCode code    = 1;
   string    message = 2;
-  string    details = 3;  // доп. контекст для дебаггинга
+  string    details = 3;  // extra context for debugging
 }
 
 enum ErrorCode {
   ERR_UNKNOWN           = 0;
-  ERR_PROTOCOL_MISMATCH = 1;  // версия протокола не совпадает
-  ERR_NOT_REGISTERED    = 2;  // плагин не прошёл регистрацию
-  ERR_RATE_LIMITED      = 3;  // слишком много запросов
-  ERR_INTERNAL          = 4;  // внутренняя ошибка ядра
-  ERR_DESERIALIZATION   = 5;  // не удалось разобрать сообщение
+  ERR_PROTOCOL_MISMATCH = 1;  // protocol version mismatch
+  ERR_NOT_REGISTERED    = 2;  // plugin hasn't registered yet
+  ERR_RATE_LIMITED      = 3;  // too many requests
+  ERR_INTERNAL          = 4;  // internal kernel error
+  ERR_DESERIALIZATION   = 5;  // failed to parse the message
   ERR_MAC_MISSING       = 6;  // registered conn sent an un-MAC'd frame while secured
   ERR_MAC_INVALID       = 7;  // frame MAC verification failed (tampering)
   ERR_PERMISSION_DENIED = 8;  // plugin lacks required permission for this operation
