@@ -3154,7 +3154,6 @@ dependencies = [
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "prost 0.13.5",
- "prost-build",
  "rand 0.8.6",
  "reqwest 0.12.28",
  "rusqlite",
