@@ -56,4 +56,5 @@ data/tmp/
 *.sock
 *.socket
 .worktrees/
+.cargo/
 

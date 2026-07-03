@@ -1,0 +1,3 @@
+[submodule "sdk/rust"]
+	path = sdk/rust
+	url = https://github.com/veyron-core/veyron-sdk-rust.git

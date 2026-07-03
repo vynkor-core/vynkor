@@ -76,7 +76,7 @@ otel = ["tracing-opentelemetry", "opentelemetry", "opentelemetry_sdk", "opentele
 tokio = { version = "1", features = ["test-util"] }
 clap_complete = "4"
 crc32fast = "1"
-veyron-sdk = { path = "sdk/archive/rust" }
+veyron-sdk = { path = "sdk/rust" }
 tower = "0.5"
 tokio-tungstenite = "0.24"
 futures-util = "0.3"
