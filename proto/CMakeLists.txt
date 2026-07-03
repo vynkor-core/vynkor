@@ -3,7 +3,7 @@ project(veyron_proto CXX)
 
 find_package(Protobuf REQUIRED)
 
-protobuf_generate_cpp(PROTO_SRCS PROTO_HDRS veyron_protocol.proto)
+protobuf_generate_cpp(PROTO_SRCS PROTO_HDRS ${CMAKE_CURRENT_SOURCE_DIR}/../wire/proto/veyron_protocol.proto)
 
 add_library(veyron_proto_lib STATIC
         ${PROTO_SRCS}
