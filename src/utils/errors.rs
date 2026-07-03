@@ -67,3 +67,20 @@ impl From<prost::DecodeError> for VeyronError {
         VeyronError::Proto(e)
     }
 }
+
+impl From<veyron_wire::WireError> for VeyronError {
+    fn from(e: veyron_wire::WireError) -> Self {
+        use veyron_wire::WireError as W;
+        match e {
+            W::Io(e) => VeyronError::Io(e),
+            W::Proto(e) => VeyronError::Proto(e),
+            W::FrameMagicMismatch => VeyronError::FrameMagicMismatch,
+            W::FrameCrcMismatch => VeyronError::FrameCrcMismatch,
+            W::FrameReadTimeout => VeyronError::FrameReadTimeout,
+            W::PayloadTooLarge(n) => VeyronError::PayloadTooLarge(n),
+            W::Timeout => VeyronError::Timeout,
+            W::PermissionDenied(p) => VeyronError::PermissionDenied(p),
+            W::Internal(m) => VeyronError::Internal(m),
+        }
+    }
+}

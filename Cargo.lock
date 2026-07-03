@@ -3174,6 +3174,7 @@ dependencies = [
  "tracing-subscriber",
  "tracing-test",
  "veyron-sdk",
+ "veyron-wire",
  "zip",
  "zstd",
 ]
@@ -3186,6 +3187,21 @@ dependencies = [
  "prost 0.13.5",
  "tokio",
  "veyron",
+]
+
+[[package]]
+name = "veyron-wire"
+version = "0.1.0"
+dependencies = [
+ "crc32fast",
+ "hkdf",
+ "hmac",
+ "nix",
+ "prost 0.13.5",
+ "prost-build",
+ "sha2",
+ "tokio",
+ "zstd",
 ]
 
 [[package]]

@@ -1,4 +1,5 @@
 pub mod error;
+pub mod framing;
 pub mod proto {
     #![allow(clippy::enum_variant_names)]
     pub mod veyron {
