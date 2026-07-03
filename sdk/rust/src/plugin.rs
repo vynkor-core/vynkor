@@ -6,8 +6,8 @@
 
 use crate::client::VeyronClient;
 use std::env;
-use veyron::proto::veyron::{envelope, Envelope, Event, PluginManifest, Pong};
-use veyron::utils::errors::VeyronError;
+use veyron_wire::proto::veyron::{envelope, Envelope, Event, PluginManifest, Pong};
+use veyron_wire::WireError as VeyronError;
 
 fn unix_millis() -> u64 {
     std::time::SystemTime::now()
@@ -78,7 +78,7 @@ pub trait Plugin {
     /// the world-writable shared /tmp (BUG-006).
     async fn run(&mut self) -> Result<(), VeyronError> {
         let socket_path = env::var("VEYRON_SOCKET_PATH")
-            .unwrap_or_else(|_| veyron::utils::config::default_socket_path());
+            .unwrap_or_else(|_| veyron_wire::socket::default_socket_path());
         self.run_with(&socket_path).await
     }
 

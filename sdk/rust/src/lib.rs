@@ -66,14 +66,14 @@ pub mod plugin;
 
 pub use client::VeyronClient;
 pub use plugin::Plugin;
-pub use veyron::utils::errors::VeyronError;
+pub use veyron_wire::WireError as VeyronError;
 
 /// Frame-MAC primitives (HKDF session-key derivation, HMAC-SHA256 tags),
 /// shared with the kernel.
-pub use veyron::auth::frame_mac;
+pub use veyron_wire::mac as frame_mac;
 
 /// Generated Protobuf types for the Veyron protocol
 /// (`proto/veyron_protocol.proto`).
 pub mod proto {
-    pub use veyron::proto::veyron::*;
+    pub use veyron_wire::proto::veyron::*;
 }

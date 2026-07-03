@@ -25,16 +25,16 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::UnixStream;
-use veyron::auth::frame_mac::{compute_tag, derive_session_key, verify_tag};
-use veyron::ipc::framing::{
+use veyron_wire::framing::{
     parse_frag_header, serialize_header, write_frame_raw, FRAG_HEADER_SIZE, MAX_PAYLOAD_SIZE,
 };
-use veyron::proto::veyron::{
+use veyron_wire::mac::{compute_tag, derive_session_key, verify_tag};
+use veyron_wire::proto::veyron::{
     envelope, ActionRequest, ActionResponse, AudioStreamChunk, Envelope, EventAck, KernelCommand,
     KernelCommandAck, Ping, PluginManifest, PluginRegister, PluginRegisterAck, Subscribe,
     Unsubscribe,
 };
-use veyron::utils::errors::VeyronError;
+use veyron_wire::WireError as VeyronError;
 
 /// Mirror of the kernel's inbound reassembly bounds (see `src/ipc/connection.rs`).
 const MAX_REASSEMBLY_STREAMS: usize = 64;
@@ -109,7 +109,7 @@ impl VeyronClient {
     /// `VEYRON_JWT_SECRET` (optional; enables frame MACs when set).
     pub async fn connect_from_env() -> Result<Self, VeyronError> {
         let socket_path = std::env::var("VEYRON_SOCKET_PATH")
-            .unwrap_or_else(|_| veyron::utils::config::default_socket_path());
+            .unwrap_or_else(|_| veyron_wire::socket::default_socket_path());
         match std::env::var("VEYRON_JWT_SECRET") {
             Ok(secret) if !secret.is_empty() => {
                 Self::connect_with_secret(&socket_path, secret.as_bytes()).await
