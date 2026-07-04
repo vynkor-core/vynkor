@@ -1,0 +1,14 @@
+# Kernel config for the docker-compose demo stack. Not for production use
+# (allow_no_auth: true — see the main config.yaml for the hardened defaults).
+port: 8080
+log_level: info
+data_dir: /var/lib/veyron
+
+# Shared UDS socket volume — mounted at the same path in both the kernel and
+# plugin containers (see docker-compose.yaml). The socket is bound 0600, so
+# both containers must also run as the same uid (10001, baked into both
+# Dockerfiles) for the plugin to be able to connect to it.
+socket_path: /run/veyron/veyron.sock
+
+# Dev-only: skip JWT auth so the demo plugin doesn't need a token minted.
+allow_no_auth: true

@@ -1,0 +1,9 @@
+target/
+**/target/
+**/venv/
+**/__pycache__/
+.git/
+.claude/
+docs/
+*.md
+RECOVERY_NEEDED.md
