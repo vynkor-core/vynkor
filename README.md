@@ -172,6 +172,19 @@ impl Plugin for MyPlugin {
 
 SDKs available: `sdk/rust/`, `sdk/cpp/`, `sdk/python/`. See `examples/echo_plugin_rs/`.
 
+Published packages:
+
+| Package | Registry |
+|---|---|
+| [`veyron-sdk`](https://crates.io/crates/veyron-sdk) | crates.io (Rust) |
+| [`veyron-wire`](https://crates.io/crates/veyron-wire) | crates.io (wire protocol types) |
+| [`veyron-sdk`](https://pypi.org/project/veyron-sdk/) | PyPI (Python) |
+
+```bash
+cargo add veyron-sdk    # Rust plugins
+pip install veyron-sdk  # Python plugins
+```
+
 > **Note:** the SDK `Plugin` base classes currently only work against a kernel
 > started with `allow_no_auth: true` — JWT/secret plumbing is roadmap item R5-05.
 
