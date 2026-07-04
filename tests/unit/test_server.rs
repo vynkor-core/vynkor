@@ -21,7 +21,7 @@ async fn server_accepts_connection_and_receives_frame() {
     let path = tmp_socket();
     let (tx, mut rx) = mpsc::channel::<IncomingMessage>(16);
 
-    let (_handle, _disc) = UdsServer::start(&path, tx, 1024)
+    let (_handle, _disc) = UdsServer::start(&path, tx, 1024, 30, 64)
         .await
         .expect("server must start");
 
@@ -49,7 +49,7 @@ async fn server_assigns_unique_conn_ids_to_multiple_connections() {
     let path = tmp_socket();
     let (tx, mut rx) = mpsc::channel::<IncomingMessage>(16);
 
-    let (_handle, _disc) = UdsServer::start(&path, tx, 1024)
+    let (_handle, _disc) = UdsServer::start(&path, tx, 1024, 30, 64)
         .await
         .expect("server must start");
 
@@ -82,13 +82,13 @@ async fn server_cleans_up_stale_socket_on_start() {
     // create a genuine stale UDS socket at the path (e.g. left behind by a
     // crashed prior instance) — this is safe to remove and rebind.
     let (tx0, _rx0) = mpsc::channel::<IncomingMessage>(16);
-    let (_stale_handle, _stale_disc) = UdsServer::start(&path, tx0, 1024)
+    let (_stale_handle, _stale_disc) = UdsServer::start(&path, tx0, 1024, 30, 64)
         .await
         .expect("first bind must succeed");
 
     let (tx, _rx) = mpsc::channel::<IncomingMessage>(16);
     // must not fail even though a stale socket file exists at the path
-    let result = UdsServer::start(&path, tx, 1024).await;
+    let result = UdsServer::start(&path, tx, 1024, 30, 64).await;
     assert!(
         result.is_ok(),
         "server must start even with stale socket file"
@@ -105,7 +105,7 @@ async fn server_refuses_to_bind_over_non_socket_path() {
     std::fs::write(&path, b"not a socket").unwrap();
 
     let (tx, _rx) = mpsc::channel::<IncomingMessage>(16);
-    let result = UdsServer::start(&path, tx, 1024).await;
+    let result = UdsServer::start(&path, tx, 1024, 30, 64).await;
     assert!(
         result.is_err(),
         "server must refuse to bind over a pre-existing non-socket file"
@@ -123,7 +123,7 @@ async fn server_detects_client_disconnect() {
     let path = tmp_socket();
     let (tx, mut rx) = mpsc::channel::<IncomingMessage>(16);
 
-    let (_handle, _disc) = UdsServer::start(&path, tx, 1024).await.unwrap();
+    let (_handle, _disc) = UdsServer::start(&path, tx, 1024, 30, 64).await.unwrap();
 
     {
         let mut client = UnixStream::connect(&path).await.unwrap();
@@ -165,7 +165,7 @@ async fn connection_handler_can_send_frame_back() {
     let path = tmp_socket();
     let (tx, mut rx) = mpsc::channel::<IncomingMessage>(16);
 
-    let (_handle, _disc) = UdsServer::start(&path, tx, 1024).await.unwrap();
+    let (_handle, _disc) = UdsServer::start(&path, tx, 1024, 30, 64).await.unwrap();
 
     let mut client = UnixStream::connect(&path).await.unwrap();
     write_frame(&mut client, "kernel", 0, b"request")

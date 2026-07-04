@@ -77,6 +77,10 @@ pub struct PluginSupervisor {
     /// Final restart_count for plugins that have been removed from `entries` after
     /// exhausting their restart budget (VULN-018). Preserved for historical lookup.
     stopped_counts: Arc<DashMap<String, u32>>,
+    /// Base delay (ms) for exponential restart backoff: `base * 2^restart_count`.
+    backoff_base_ms: u64,
+    /// Ceiling (ms) for exponential restart backoff.
+    backoff_max_ms: u64,
 }
 
 impl PluginSupervisor {
@@ -85,18 +89,23 @@ impl PluginSupervisor {
     }
 
     pub fn with_log_lines(socket_path: &str, max_log_lines: usize) -> Self {
-        Self::with_events(socket_path, max_log_lines, None, None)
+        Self::with_events(socket_path, max_log_lines, None, None, 100, 30_000)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn with_events(
         socket_path: &str,
         max_log_lines: usize,
         event_bus: Option<Arc<EventBus>>,
         plugin_registry: Option<Arc<PluginRegistry>>,
+        backoff_base_ms: u64,
+        backoff_max_ms: u64,
     ) -> Self {
         let (event_tx, event_rx) = mpsc::channel::<ExitEvent>(64);
         PluginSupervisor {
             socket_path: socket_path.to_string(),
+            backoff_base_ms,
+            backoff_max_ms,
             entries: Arc::new(DashMap::new()),
             event_tx,
             event_rx: Arc::new(Mutex::new(event_rx)),
@@ -390,7 +399,7 @@ impl PluginSupervisor {
                     );
                     counter!("plugin_restarts_total", "plugin_id" => config.plugin_id.clone())
                         .increment(1);
-                    tokio::time::sleep(backoff_delay(new_count)).await;
+                    tokio::time::sleep(self.backoff_delay(new_count)).await;
                     let _ = self.spawn_internal(config, new_count).await;
                 }
                 None => {
@@ -476,6 +485,13 @@ impl PluginSupervisor {
             }
         }
     }
+
+    fn backoff_delay(&self, restart_count: u32) -> Duration {
+        let ms = self
+            .backoff_base_ms
+            .saturating_mul(1u64 << restart_count.min(8));
+        Duration::from_millis(ms.min(self.backoff_max_ms))
+    }
 }
 
 /// Read CPU seconds (user+system) and RSS bytes for a given PID from `/proc`.
@@ -506,11 +522,6 @@ fn proc_resource_usage(pid: u32) -> Option<(f64, f64)> {
     let rss_bytes = rss_kb * 1024.0;
 
     Some((cpu_seconds, rss_bytes))
-}
-
-fn backoff_delay(restart_count: u32) -> Duration {
-    let ms = 100u64.saturating_mul(1u64 << restart_count.min(8));
-    Duration::from_millis(ms.min(30_000))
 }
 
 #[cfg(test)]

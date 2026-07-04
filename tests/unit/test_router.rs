@@ -628,6 +628,9 @@ async fn poisoned_session_key_cell_still_installs_mac_key() {
         None,
         Some(Arc::clone(&mac_secret)),
         None,
+        30_000,
+        16,
+        8192,
     ));
 
     let (write_tx, mut write_rx) = make_write_pair();

@@ -104,6 +104,11 @@ async fn main() -> Result<()> {
                 cfg.registry_url.as_deref(),
                 token.as_deref(),
                 cfg.tls_cert_path.is_some(),
+                cfg.registry_cache_ttl_secs,
+                &cfg.tmp_dir,
+                cfg.max_archive_bytes,
+                cfg.max_extracted_bytes,
+                cfg.max_archive_entries,
             )
             .await?;
         }

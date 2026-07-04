@@ -30,6 +30,57 @@ allow_no_auth: true
 # tls_cert_path: /etc/veyron/tls/cert.pem
 # tls_key_path:  /etc/veyron/tls/key.pem
 
+# Base dir for scratch/cache files: marketplace registry cache
+# (~/.cache/veyron/registry.json when $HOME is set) and plugin-install
+# staging. Defaults to the same per-user private dir as pid_file/log_file
+# (XDG_RUNTIME_DIR, /run/user/<uid>, or ~/.veyron/run) — never the shared,
+# world-writable /tmp (AUDIT M-09).
+# tmp_dir: /run/user/1000
+
+# Override the plugin registry URL (private/air-gapped registries).
+# registry_url: https://registry.example.internal/registry.json
+# How long the registry cache is considered fresh before `plugin list --refresh`
+# re-fetches it (default: 3600 = 1h).
+# registry_cache_ttl_secs: 3600
+
+# Default action timeout (ms) when a plugin's ActionRequest.timeout_ms is 0.
+# action_timeout_ms: 30000
+
+# Exponential plugin restart backoff: base * 2^restart_count, capped at max.
+# restart_backoff_base_ms: 100
+# restart_backoff_max_ms: 30000
+
+# Seconds to wait after SIGTERM before SIGKILL when a plugin doesn't set its
+# own grace_seconds (see plugins[].grace_seconds above).
+# default_grace_seconds: 5
+
+# Event bus: max delivery attempts before an event is marked dead, and how
+# long terminal (delivered/dead) events are kept before being pruned.
+# event_max_retries: 5
+# event_retention_secs: 3600
+
+# Capacity of the kernel's inbound IPC message channel (backpressure bound).
+# router_channel_capacity: 1024
+
+# Fragment reassembly limits: how long an incomplete fragmented message is
+# kept before being discarded, and the max concurrent reassembly streams
+# per connection.
+# fragment_timeout_secs: 30
+# max_reassembly_streams: 64
+
+# Consecutive protocol errors from one connection before it is throttled, and
+# the cap on the per-connection error-budget map before idle entries prune.
+# max_conn_errors: 16
+# max_tracked_error_conns: 8192
+
+# Seconds to wait for a WebSocket upgrade handshake before returning 408.
+# ws_handshake_timeout_secs: 5
+
+# Plugin install/marketplace archive limits (zip-bomb protection, AUDIT M-06).
+# max_archive_bytes: 268435456      # 256 MiB
+# max_extracted_bytes: 1073741824   # 1 GiB
+# max_archive_entries: 10000
+
 # Plugins to auto-spawn on kernel start. Each entry maps to a supervised
 # OS process. The process must connect back to `socket_path` and complete
 # the PluginRegister handshake.

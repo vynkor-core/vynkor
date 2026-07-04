@@ -26,20 +26,6 @@ use tracing::{info, warn};
 static MSG_SEQ: AtomicU64 = AtomicU64::new(0);
 static ACTION_CORRELATION_SEQ: AtomicU64 = AtomicU64::new(0);
 
-/// Default action timeout when the requester passes `timeout_ms: 0` (matches
-/// the proto doc comment on `ActionRequest.timeout_ms`).
-const DEFAULT_ACTION_TIMEOUT_MS: u32 = 30_000;
-
-/// Consecutive protocol errors from one connection before its messages are
-/// throttled (dropped without a response). Reset on any successful message.
-const MAX_CONN_ERRORS: u32 = 16;
-
-/// Cap on the per-connection error-budget map. The router never sees
-/// disconnects, so entries for connections that errored and then dropped would
-/// otherwise accumulate. When the map exceeds this, prune entries whose
-/// connection is no longer registered.
-const MAX_TRACKED_ERROR_CONNS: usize = 8192;
-
 /// Max time the router will wait to hand a frame to a plugin's write channel
 /// (capacity-bounded). A plugin that does not drain its channel must not stall
 /// the single-threaded router for everyone else — its frame is dropped instead.
@@ -54,6 +40,7 @@ impl MessageRouter {
         event_bus: Arc<EventBus>,
         jwt_validator: Option<Arc<JwtValidator>>,
     ) {
+        let defaults = crate::utils::config::Config::default();
         Self::run_with_context(
             rx,
             registry,
@@ -64,6 +51,9 @@ impl MessageRouter {
             None,
             None,
             None,
+            defaults.action_timeout_ms,
+            defaults.max_conn_errors,
+            defaults.max_tracked_error_conns,
         )
         .await
     }
@@ -79,6 +69,9 @@ impl MessageRouter {
         event_store: Option<Arc<EventStore>>,
         mac_secret: Option<Arc<Vec<u8>>>,
         ipc_rate_limit_rps: Option<u32>,
+        action_timeout_ms: u32,
+        max_conn_errors: u32,
+        max_tracked_error_conns: usize,
     ) {
         // Per-connection protocol-error budget. A connection that produces a burst
         // of malformed/denied/unhandled messages (which each generate an error
@@ -162,7 +155,7 @@ impl MessageRouter {
                 }
             };
 
-            if error_counts.get(&conn_id).copied().unwrap_or(0) >= MAX_CONN_ERRORS {
+            if error_counts.get(&conn_id).copied().unwrap_or(0) >= max_conn_errors {
                 counter!("ipc_throttled_messages_total").increment(1);
                 continue;
             }
@@ -179,6 +172,7 @@ impl MessageRouter {
                         config_path.as_deref(),
                         event_store.as_deref(),
                         &mac_secret,
+                        action_timeout_ms,
                     )
                     .await
                 }
@@ -193,15 +187,15 @@ impl MessageRouter {
             };
 
             if errored {
-                if error_counts.len() >= MAX_TRACKED_ERROR_CONNS {
+                if error_counts.len() >= max_tracked_error_conns {
                     error_counts.retain(|cid, _| registry.is_registered(*cid));
                 }
                 let count = error_counts.entry(conn_id).or_insert(0);
                 *count += 1;
-                if *count == MAX_CONN_ERRORS {
+                if *count == max_conn_errors {
                     warn!(
                         conn_id,
-                        threshold = MAX_CONN_ERRORS,
+                        threshold = max_conn_errors,
                         "connection exceeded protocol-error budget; throttling further messages"
                     );
                     counter!("ipc_throttled_connections_total").increment(1);
@@ -223,6 +217,7 @@ impl MessageRouter {
         config_path: Option<&str>,
         event_store: Option<&EventStore>,
         mac_secret: &Option<Arc<Vec<u8>>>,
+        action_timeout_ms: u32,
     ) -> bool {
         let envelope = match Envelope::decode(msg.frame.payload.as_ref()) {
             Ok(e) => e,
@@ -429,7 +424,7 @@ impl MessageRouter {
                             ACTION_CORRELATION_SEQ.fetch_add(1, Ordering::Relaxed)
                         );
                         let effective_timeout_ms = if req.timeout_ms == 0 {
-                            DEFAULT_ACTION_TIMEOUT_MS
+                            action_timeout_ms
                         } else {
                             req.timeout_ms
                         };

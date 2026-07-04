@@ -25,6 +25,8 @@ impl UdsServer {
         socket_path: &Path,
         tx: tokio::sync::mpsc::Sender<IncomingMessage>,
         max_connections: usize,
+        fragment_timeout_secs: u64,
+        max_reassembly_streams: usize,
     ) -> Result<(JoinHandle<()>, tokio::sync::mpsc::Receiver<u64>), VeyronError> {
         // Never blindly unlink whatever sits at socket_path (BUG-006) — only
         // remove it if it's actually a socket (i.e. a stale one we or a prior
@@ -86,11 +88,13 @@ impl UdsServer {
                         let conn_id = counter.fetch_add(1, Ordering::Relaxed);
                         let open = open_conns.clone();
                         open.fetch_add(1, Ordering::Relaxed);
-                        let (handler, _write_tx) = ConnectionHandler::new(
+                        let (handler, _write_tx) = ConnectionHandler::with_limits(
                             conn_id,
                             stream,
                             tx.clone(),
                             disconnect_tx.clone(),
+                            Duration::from_secs(fragment_timeout_secs),
+                            max_reassembly_streams,
                         );
                         tokio::spawn(async move {
                             handler.run().await;
@@ -126,7 +130,7 @@ mod tests {
         let _ = std::fs::remove_file(sock_path);
 
         let (tx, _rx) = tokio::sync::mpsc::channel(16);
-        let (_handle, _disc) = UdsServer::start(std::path::Path::new(sock_path), tx, 1)
+        let (_handle, _disc) = UdsServer::start(std::path::Path::new(sock_path), tx, 1, 30, 64)
             .await
             .unwrap();
 

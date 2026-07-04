@@ -76,7 +76,7 @@ fn zip_slip_dotdot_rejected() {
 
     make_zip(&archive, &[("../../evil.txt", b"pwned")]);
 
-    let err = extract_zip(&archive, &dest).unwrap_err();
+    let err = extract_zip(&archive, &dest, 1024 * 1024 * 1024, 10_000).unwrap_err();
     assert!(err.to_string().contains("path traversal"), "{err}");
     assert!(!tmp.path().join("evil.txt").exists());
 }
@@ -91,7 +91,7 @@ fn zip_slip_absolute_path_rejected() {
 
     make_zip(&archive, &[("/etc/evil.txt", b"pwned")]);
 
-    let err = extract_zip(&archive, &dest).unwrap_err();
+    let err = extract_zip(&archive, &dest, 1024 * 1024 * 1024, 10_000).unwrap_err();
     assert!(err.to_string().contains("path traversal"), "{err}");
 }
 
@@ -111,7 +111,7 @@ fn clean_zip_extracts() {
         ],
     );
 
-    extract_zip(&archive, &dest).unwrap();
+    extract_zip(&archive, &dest, 1024 * 1024 * 1024, 10_000).unwrap();
     assert!(dest.join("plugin.json").exists());
     assert!(dest.join("bin/foo").exists());
 }
@@ -129,7 +129,7 @@ fn archive_with_excess_entries_rejected() {
     let entries: Vec<(&str, &[u8])> = names.iter().map(|n| (n.as_str(), b"x".as_ref())).collect();
     make_zip(&archive, &entries);
 
-    let err = extract_zip(&archive, &dest).unwrap_err();
+    let err = extract_zip(&archive, &dest, 1024 * 1024 * 1024, 10_000).unwrap_err();
     assert!(err.to_string().contains("exceeds max"), "{err}");
     assert!(!dest.join("f0").exists(), "no entry should be extracted");
 }
@@ -160,7 +160,7 @@ fn zip_bomb_decompressed_size_capped() {
     }
     zip.finish().unwrap();
 
-    let err = extract_zip(&archive, &dest).unwrap_err();
+    let err = extract_zip(&archive, &dest, 1024 * 1024 * 1024, 10_000).unwrap_err();
     assert!(
         err.to_string().contains("decompressed size exceeds max"),
         "{err}"

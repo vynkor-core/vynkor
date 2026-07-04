@@ -10,8 +10,6 @@ use crate::utils::errors::VeyronError;
 const REGISTRY_URL: &str =
     "https://raw.githubusercontent.com/veyron-core/veyron-plugins/main/registry.json";
 
-const CACHE_TTL: Duration = Duration::from_secs(3600);
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegistryEntry {
     pub id: String,
@@ -27,26 +25,30 @@ pub struct RegistryEntry {
     pub max_kernel_version: String,
 }
 
-fn cache_path() -> PathBuf {
+fn cache_path(tmp_dir: &std::path::Path) -> PathBuf {
     let base = std::env::var("XDG_CACHE_HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| dirs_home().join(".cache"));
+        .unwrap_or_else(|_| dirs_home(tmp_dir).join(".cache"));
     base.join("veyron").join("registry.json")
 }
 
-fn dirs_home() -> PathBuf {
+/// `tmp_dir`: fallback base when `$HOME` is unset. Must be the kernel's
+/// private scratch dir (`Config::tmp_dir`), never the shared, world-writable
+/// `/tmp` (AUDIT M-09) — matches the hardening already applied to
+/// `default_pid_path`/`default_socket_path` in `utils::config`.
+fn dirs_home(tmp_dir: &std::path::Path) -> PathBuf {
     std::env::var("HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/tmp"))
+        .unwrap_or_else(|_| tmp_dir.to_path_buf())
 }
 
-fn cache_is_fresh(path: &PathBuf) -> bool {
+fn cache_is_fresh(path: &PathBuf, ttl: Duration) -> bool {
     fs::metadata(path)
         .and_then(|m| m.modified())
         .map(|mtime| {
             SystemTime::now()
                 .duration_since(mtime)
-                .map(|age| age < CACHE_TTL)
+                .map(|age| age < ttl)
                 .unwrap_or(false)
         })
         .unwrap_or(false)
@@ -100,8 +102,12 @@ async fn fetch_from_network(url: &str) -> Result<Vec<RegistryEntry>, VeyronError
 /// `refresh = true` bypasses the TTL and re-fetches from the network unconditionally.
 /// On network failure, falls back to stale cache with a warning. Returns error only
 /// when network fails *and* no cache exists.
-pub async fn fetch_registry(refresh: bool) -> Result<Vec<RegistryEntry>, VeyronError> {
-    fetch_registry_with_url(REGISTRY_URL, refresh).await
+pub async fn fetch_registry(
+    refresh: bool,
+    cache_ttl_secs: u64,
+    tmp_dir: &std::path::Path,
+) -> Result<Vec<RegistryEntry>, VeyronError> {
+    fetch_registry_with_url(REGISTRY_URL, refresh, cache_ttl_secs, tmp_dir).await
 }
 
 /// Like `fetch_registry` but accepts a custom URL to support private registry overrides
@@ -109,8 +115,10 @@ pub async fn fetch_registry(refresh: bool) -> Result<Vec<RegistryEntry>, VeyronE
 pub async fn fetch_registry_with_url(
     url: &str,
     refresh: bool,
+    cache_ttl_secs: u64,
+    tmp_dir: &std::path::Path,
 ) -> Result<Vec<RegistryEntry>, VeyronError> {
-    fetch_registry_from(url, refresh, &cache_path()).await
+    fetch_registry_from(url, refresh, &cache_path(tmp_dir), cache_ttl_secs).await
 }
 
 /// Internal implementation — separated so tests can inject a URL and cache path.
@@ -118,10 +126,12 @@ pub(crate) async fn fetch_registry_from(
     url: &str,
     refresh: bool,
     path: &std::path::Path,
+    cache_ttl_secs: u64,
 ) -> Result<Vec<RegistryEntry>, VeyronError> {
     let path = path.to_path_buf();
+    let ttl = Duration::from_secs(cache_ttl_secs);
 
-    if !refresh && cache_is_fresh(&path) {
+    if !refresh && cache_is_fresh(&path, ttl) {
         if let Some(entries) = read_cache(&path) {
             return Ok(entries);
         }
@@ -264,7 +274,7 @@ mod tests {
         let url = format!("{}/registry.json", server.url());
 
         // First call: fetches from network and writes cache
-        let result = fetch_registry_from(&url, false, &cache).await.unwrap();
+        let result = fetch_registry_from(&url, false, &cache, 3600).await.unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].slug, "stt-whisper");
         assert!(cache.exists(), "cache file should be written");
@@ -272,7 +282,7 @@ mod tests {
         mock.assert_async().await;
 
         // Second call within TTL: reads from disk (mock not called again)
-        let cached = fetch_registry_from(&url, false, &cache).await.unwrap();
+        let cached = fetch_registry_from(&url, false, &cache, 3600).await.unwrap();
         assert_eq!(cached[0].slug, "stt-whisper");
     }
 
@@ -295,9 +305,9 @@ mod tests {
         let cache = tmp.path().join("registry.json");
         let url = format!("{}/registry.json", server.url());
 
-        fetch_registry_from(&url, false, &cache).await.unwrap();
+        fetch_registry_from(&url, false, &cache, 3600).await.unwrap();
         // refresh = true forces network even though cache is fresh
-        fetch_registry_from(&url, true, &cache).await.unwrap();
+        fetch_registry_from(&url, true, &cache, 3600).await.unwrap();
 
         mock.assert_async().await;
     }
@@ -312,7 +322,7 @@ mod tests {
         write_cache(&cache, &entries).unwrap();
 
         // Use a URL that will definitely fail
-        let result = fetch_registry_from("http://127.0.0.1:1", false, &cache).await;
+        let result = fetch_registry_from("http://127.0.0.1:1", false, &cache, 3600).await;
         assert!(result.is_ok(), "should fall back to stale cache");
         assert_eq!(result.unwrap()[0].slug, "stt-whisper");
     }
@@ -322,7 +332,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cache = tmp.path().join("registry.json");
 
-        let result = fetch_registry_from("http://127.0.0.1:1", false, &cache).await;
+        let result = fetch_registry_from("http://127.0.0.1:1", false, &cache, 3600).await;
         assert!(
             result.is_err(),
             "should error when no cache and network fails"
@@ -345,7 +355,7 @@ mod tests {
         let cache = tmp.path().join("registry.json");
         let url = format!("{}/registry.json", server.url());
 
-        let err = fetch_registry_from(&url, false, &cache).await.unwrap_err();
+        let err = fetch_registry_from(&url, false, &cache, 3600).await.unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains("registry response body was empty"),
@@ -371,7 +381,7 @@ mod tests {
         let cache = tmp.path().join("registry.json");
         let url = format!("{}/registry.json", server.url());
 
-        let err = fetch_registry_from(&url, false, &cache).await.unwrap_err();
+        let err = fetch_registry_from(&url, false, &cache, 3600).await.unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("parse registry JSON"), "unexpected: {msg}");
 

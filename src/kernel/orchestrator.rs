@@ -100,12 +100,14 @@ impl Kernel {
             event_bus
         };
 
-        let (router_tx, router_rx) = mpsc::channel(1024);
+        let (router_tx, router_rx) = mpsc::channel(config.router_channel_capacity);
         let ws_router_tx = router_tx.clone();
         let (_server_handle, disconnect_rx) = UdsServer::start(
             Path::new(&config.socket_path),
             router_tx,
             config.max_connections,
+            config.fragment_timeout_secs,
+            config.max_reassembly_streams,
         )
         .await?;
         let (ws_disconnect_tx, ws_disconnect_rx) = mpsc::channel::<u64>(64);
@@ -146,6 +148,9 @@ impl Kernel {
             event_store.clone(),
             mac_secret,
             config.ipc_rate_limit_rps,
+            config.action_timeout_ms,
+            config.max_conn_errors,
+            config.max_tracked_error_conns,
         ));
 
         // disconnect handler: unregister plugin + publish system.plugin_left
@@ -170,7 +175,13 @@ impl Kernel {
         if let Some(store) = event_store {
             let retry_bus = Arc::clone(&event_bus);
             let retry_reg = Arc::clone(&registry);
-            tokio::spawn(run_retry_worker(store, retry_bus, retry_reg));
+            tokio::spawn(run_retry_worker(
+                store,
+                retry_bus,
+                retry_reg,
+                config.event_max_retries,
+                config.event_retention_secs,
+            ));
         }
 
         let supervisor = Arc::new(PluginSupervisor::with_events(
@@ -178,6 +189,8 @@ impl Kernel {
             config.log_buffer_lines,
             Some(Arc::clone(&event_bus)),
             Some(Arc::clone(&registry)),
+            config.restart_backoff_base_ms,
+            config.restart_backoff_max_ms,
         ));
         let sup_loop = Arc::clone(&supervisor);
         tokio::spawn(async move { sup_loop.monitor_loop().await });
@@ -207,6 +220,7 @@ impl Kernel {
             config.tls_cert_path.clone(),
             config.tls_key_path.clone(),
             config.plugins.clone(),
+            config.ws_handshake_timeout_secs,
         );
         tokio::spawn(async move {
             if let Err(e) = api.run().await {
@@ -218,7 +232,8 @@ impl Kernel {
         shutdown.await;
         info!("shutdown signal received");
 
-        Self::graceful_shutdown(&registry, &shutdown_supervisor).await;
+        Self::graceful_shutdown(&registry, &shutdown_supervisor, config.default_grace_seconds)
+            .await;
         Ok(())
     }
 
@@ -254,13 +269,15 @@ impl Kernel {
         }
     }
 
-    async fn graceful_shutdown(registry: &PluginRegistry, supervisor: &PluginSupervisor) {
+    async fn graceful_shutdown(
+        registry: &PluginRegistry,
+        supervisor: &PluginSupervisor,
+        default_grace_seconds: u32,
+    ) {
         let entries = registry.list();
         if entries.is_empty() {
             return;
         }
-
-        const DEFAULT_GRACE_SECONDS: u32 = 5;
 
         // Advertise each plugin's real grace window: its supervised config value
         // when set, else the kernel default — matching what the supervisor will
@@ -268,7 +285,7 @@ impl Kernel {
         for entry in entries {
             let grace = supervisor
                 .grace_seconds_for(&entry.plugin_id)
-                .unwrap_or(DEFAULT_GRACE_SECONDS);
+                .unwrap_or(default_grace_seconds);
             let mut payload = Vec::new();
             let env = Envelope {
                 payload: Some(envelope::Payload::PluginShutdown(PluginShutdown {
@@ -296,7 +313,7 @@ impl Kernel {
             let _ = entry.write_tx.send(out_frame(frame)).await;
         }
 
-        supervisor.graceful_shutdown(DEFAULT_GRACE_SECONDS).await;
+        supervisor.graceful_shutdown(default_grace_seconds).await;
     }
 }
 

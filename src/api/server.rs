@@ -40,6 +40,7 @@ pub fn create_router(
         None,
         None,
         vec![],
+        5,
     )
 }
 
@@ -53,6 +54,7 @@ pub fn create_router_full(
     rate_limit_rps: Option<u32>,
     rate_limit_burst: Option<u32>,
     plugin_defs: Vec<PluginDef>,
+    ws_handshake_timeout_secs: u64,
 ) -> Router {
     let state = Arc::new(AppState {
         manager,
@@ -123,7 +125,7 @@ pub fn create_router_full(
             .route("/ws", get(ws_handler))
             .layer(TimeoutLayer::with_status_code(
                 StatusCode::REQUEST_TIMEOUT,
-                Duration::from_secs(5),
+                Duration::from_secs(ws_handshake_timeout_secs),
             ))
             .with_state(gateway);
         app = app.merge(ws_sub);
@@ -144,6 +146,7 @@ pub struct ApiServer {
     tls_cert_path: Option<PathBuf>,
     tls_key_path: Option<PathBuf>,
     plugin_defs: Vec<PluginDef>,
+    ws_handshake_timeout_secs: u64,
 }
 
 impl ApiServer {
@@ -160,6 +163,7 @@ impl ApiServer {
         tls_cert_path: Option<PathBuf>,
         tls_key_path: Option<PathBuf>,
         plugin_defs: Vec<PluginDef>,
+        ws_handshake_timeout_secs: u64,
     ) -> Self {
         Self {
             port,
@@ -173,6 +177,7 @@ impl ApiServer {
             tls_cert_path,
             tls_key_path,
             plugin_defs,
+            ws_handshake_timeout_secs,
         }
     }
 
@@ -186,6 +191,7 @@ impl ApiServer {
             self.rate_limit_rps,
             self.rate_limit_burst,
             self.plugin_defs.clone(),
+            self.ws_handshake_timeout_secs,
         );
         let addr = SocketAddr::from(([127, 0, 0, 1], self.port));
 

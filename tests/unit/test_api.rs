@@ -388,6 +388,7 @@ async fn rate_limit_applies_only_to_verified_sub_not_forged_tokens() {
         Some(1), // 1 rps
         Some(1), // burst of 1
         vec![],
+        5,
     );
 
     // Forged tokens signed with the wrong secret, rotating `sub` every request,
@@ -426,6 +427,7 @@ async fn rate_limit_enforced_per_verified_sub() {
         Some(1), // 1 rps
         Some(1), // burst of 1
         vec![],
+        5,
     );
 
     let token = create_test_token("admin", vec![], SECRET, 3600);
@@ -552,6 +554,7 @@ async fn start_plugin_spawns_process_declared_in_config() {
         None,
         None,
         vec![sleep_def("startable")],
+        5,
     );
 
     let response = app
@@ -583,6 +586,7 @@ async fn start_unknown_plugin_returns_404() {
         None,
         None,
         vec![sleep_def("declared-elsewhere")],
+        5,
     );
 
     let response = app
@@ -622,6 +626,7 @@ async fn start_already_running_plugin_returns_conflict() {
         None,
         None,
         vec![sleep_def("already-up")],
+        5,
     );
 
     let response = app

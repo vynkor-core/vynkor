@@ -45,12 +45,16 @@ pub struct KernelCompatRange {
     pub max: String,
 }
 
-pub fn plugin_dir() -> PathBuf {
+/// `tmp_dir`: fallback base when both `VEYRON_PLUGIN_DIR` and `$HOME` are unset.
+/// Must be the kernel's private scratch dir (`Config::tmp_dir`), never the
+/// shared, world-writable `/tmp` (AUDIT M-09) — matches the hardening already
+/// applied to `default_pid_path`/`default_socket_path` in `utils::config`.
+pub fn plugin_dir(tmp_dir: &Path) -> PathBuf {
     std::env::var("VEYRON_PLUGIN_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-            PathBuf::from(home).join(".local/lib/veyron/plugins")
+        .unwrap_or_else(|_| match std::env::var("HOME") {
+            Ok(home) => PathBuf::from(home).join(".local/lib/veyron/plugins"),
+            Err(_) => tmp_dir.join("plugins"),
         })
 }
 
@@ -60,8 +64,8 @@ pub fn plugin_dir() -> PathBuf {
 /// ("Invalid cross-device link") when source and destination are on
 /// different filesystems, which `/tmp` (often tmpfs) commonly is relative
 /// to the plugin directory.
-fn tmp_install_dir(slug: &str) -> PathBuf {
-    plugin_dir().join(format!(".install-tmp-{slug}"))
+fn tmp_install_dir(plugin_dir: &Path, slug: &str) -> PathBuf {
+    plugin_dir.join(format!(".install-tmp-{slug}"))
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
@@ -69,7 +73,15 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 /// Execute the 8-step atomic installation pipeline for a plugin.
-pub async fn install(entries: &[RegistryEntry], target: &str) -> Result<(), VeyronError> {
+#[allow(clippy::too_many_arguments)]
+pub async fn install(
+    entries: &[RegistryEntry],
+    target: &str,
+    tmp_dir: &Path,
+    max_archive_bytes: u64,
+    max_extracted_bytes: u64,
+    max_archive_entries: usize,
+) -> Result<(), VeyronError> {
     // Step 1 — Resolve metadata
     let entry = entries
         .iter()
@@ -87,29 +99,31 @@ pub async fn install(entries: &[RegistryEntry], target: &str) -> Result<(), Veyr
     check_kernel_compatibility(entry, &kernel_ver)
         .map_err(|e| VeyronError::Incompatible(format!("{e}. Upgrade Veyron first.")))?;
 
-    let tmp_dir = tmp_install_dir(&entry.slug);
-    let _ = fs::remove_dir_all(&tmp_dir);
-    fs::create_dir_all(&tmp_dir).map_err(VeyronError::Io)?;
+    let plugin_base = plugin_dir(tmp_dir);
+    let stage_dir = tmp_install_dir(&plugin_base, &entry.slug);
+    let _ = fs::remove_dir_all(&stage_dir);
+    fs::create_dir_all(&stage_dir).map_err(VeyronError::Io)?;
 
     // Step 3 — Download to $TMPDIR
-    let bytes = match download_with_progress(&entry.archive_url, &entry.slug).await {
-        Ok(b) => b,
-        Err(e) => {
-            let _ = fs::remove_dir_all(&tmp_dir);
-            return Err(e);
-        }
-    };
+    let bytes =
+        match download_with_progress(&entry.archive_url, &entry.slug, max_archive_bytes).await {
+            Ok(b) => b,
+            Err(e) => {
+                let _ = fs::remove_dir_all(&stage_dir);
+                return Err(e);
+            }
+        };
 
-    let archive_path = tmp_dir.join(format!("{}.zip", entry.slug));
+    let archive_path = stage_dir.join(format!("{}.zip", entry.slug));
     if let Err(e) = fs::write(&archive_path, &bytes) {
-        let _ = fs::remove_dir_all(&tmp_dir);
+        let _ = fs::remove_dir_all(&stage_dir);
         return Err(VeyronError::Io(e));
     }
 
     // Step 4 — SHA-256 integrity check
     let actual_hash = hex_encode(&Sha256::digest(&bytes));
     if actual_hash != entry.sha256 {
-        let _ = fs::remove_dir_all(&tmp_dir);
+        let _ = fs::remove_dir_all(&stage_dir);
         return Err(VeyronError::Internal(format!(
             "Archive integrity check failed. Expected {}, got {}. Aborting — do not proceed.",
             entry.sha256, actual_hash
@@ -117,21 +131,26 @@ pub async fn install(entries: &[RegistryEntry], target: &str) -> Result<(), Veyr
     }
 
     // Step 5 — Extract to temporary folder (zip-slip protection)
-    let extract_dir = tmp_dir.join("extracted");
+    let extract_dir = stage_dir.join("extracted");
     if let Err(e) = fs::create_dir_all(&extract_dir) {
-        let _ = fs::remove_dir_all(&tmp_dir);
+        let _ = fs::remove_dir_all(&stage_dir);
         return Err(VeyronError::Io(e));
     }
 
-    if let Err(e) = extract_zip(&archive_path, &extract_dir) {
-        let _ = fs::remove_dir_all(&tmp_dir);
+    if let Err(e) = extract_zip(
+        &archive_path,
+        &extract_dir,
+        max_extracted_bytes,
+        max_archive_entries,
+    ) {
+        let _ = fs::remove_dir_all(&stage_dir);
         return Err(e);
     }
 
     // Step 6 — Atomic move to plugin directory
-    let base = plugin_dir();
+    let base = plugin_base;
     if let Err(e) = fs::create_dir_all(&base) {
-        let _ = fs::remove_dir_all(&tmp_dir);
+        let _ = fs::remove_dir_all(&stage_dir);
         return Err(VeyronError::Io(e));
     }
 
@@ -144,7 +163,7 @@ pub async fn install(entries: &[RegistryEntry], target: &str) -> Result<(), Veyr
             let _ = fs::remove_dir_all(&bak);
         }
         if let Err(e) = fs::rename(&dest, &bak) {
-            let _ = fs::remove_dir_all(&tmp_dir);
+            let _ = fs::remove_dir_all(&stage_dir);
             return Err(VeyronError::Io(e));
         }
     }
@@ -153,7 +172,7 @@ pub async fn install(entries: &[RegistryEntry], target: &str) -> Result<(), Veyr
         if had_existing {
             let _ = fs::rename(&bak, &dest);
         }
-        let _ = fs::remove_dir_all(&tmp_dir);
+        let _ = fs::remove_dir_all(&stage_dir);
         return Err(VeyronError::Io(e));
     }
 
@@ -166,7 +185,7 @@ pub async fn install(entries: &[RegistryEntry], target: &str) -> Result<(), Veyr
             if had_existing {
                 let _ = fs::rename(&bak, &dest);
             }
-            let _ = fs::remove_dir_all(&tmp_dir);
+            let _ = fs::remove_dir_all(&stage_dir);
             return Err(e);
         }
     };
@@ -174,7 +193,7 @@ pub async fn install(entries: &[RegistryEntry], target: &str) -> Result<(), Veyr
     if had_existing {
         let _ = fs::remove_dir_all(&bak);
     }
-    let _ = fs::remove_dir_all(&tmp_dir);
+    let _ = fs::remove_dir_all(&stage_dir);
 
     // Step 8 — Success output
     let dest_str = dest.display();
@@ -186,18 +205,11 @@ pub async fn install(entries: &[RegistryEntry], target: &str) -> Result<(), Veyr
     Ok(())
 }
 
-/// Max size of a downloaded plugin archive. Bounds in-memory buffering of
-/// the response body before it ever reaches disk (AUDIT M-06).
-const MAX_ARCHIVE_BYTES: u64 = 256 * 1024 * 1024; // 256 MiB
-/// Max total decompressed size an archive may extract to. Bounds a
-/// zip-bomb-style archive that claims a small file but expands huge
-/// (AUDIT M-06).
-const MAX_EXTRACTED_BYTES: u64 = 1024 * 1024 * 1024; // 1 GiB
-/// Max number of entries in an archive. Bounds an archive with millions of
-/// tiny/empty entries used to exhaust inodes or extraction time (AUDIT M-06).
-const MAX_ARCHIVE_ENTRIES: usize = 10_000;
-
-async fn download_with_progress(url: &str, slug: &str) -> Result<Vec<u8>, VeyronError> {
+async fn download_with_progress(
+    url: &str,
+    slug: &str,
+    max_archive_bytes: u64,
+) -> Result<Vec<u8>, VeyronError> {
     let resp = reqwest::get(url)
         .await
         .map_err(|e| VeyronError::NetworkError(format!("download {slug}: {e}")))?;
@@ -210,9 +222,9 @@ async fn download_with_progress(url: &str, slug: &str) -> Result<Vec<u8>, Veyron
     }
 
     if let Some(len) = resp.content_length() {
-        if len > MAX_ARCHIVE_BYTES {
+        if len > max_archive_bytes {
             return Err(VeyronError::Internal(format!(
-                "download {slug}: archive size {len} exceeds max {MAX_ARCHIVE_BYTES} bytes"
+                "download {slug}: archive size {len} exceeds max {max_archive_bytes} bytes"
             )));
         }
     }
@@ -234,10 +246,10 @@ async fn download_with_progress(url: &str, slug: &str) -> Result<Vec<u8>, Veyron
         .await
         .map_err(|e| VeyronError::NetworkError(format!("stream {slug}: {e}")))?
     {
-        if bytes.len() as u64 + chunk.len() as u64 > MAX_ARCHIVE_BYTES {
+        if bytes.len() as u64 + chunk.len() as u64 > max_archive_bytes {
             pb.finish_and_clear();
             return Err(VeyronError::Internal(format!(
-                "download {slug}: archive exceeds max {MAX_ARCHIVE_BYTES} bytes"
+                "download {slug}: archive exceeds max {max_archive_bytes} bytes"
             )));
         }
         pb.inc(chunk.len() as u64);
@@ -248,14 +260,19 @@ async fn download_with_progress(url: &str, slug: &str) -> Result<Vec<u8>, Veyron
     Ok(bytes)
 }
 
-pub fn extract_zip(archive: &Path, dest: &Path) -> Result<(), VeyronError> {
+pub fn extract_zip(
+    archive: &Path,
+    dest: &Path,
+    max_extracted_bytes: u64,
+    max_archive_entries: usize,
+) -> Result<(), VeyronError> {
     let file = fs::File::open(archive).map_err(VeyronError::Io)?;
     let mut zip =
         zip::ZipArchive::new(file).map_err(|e| VeyronError::Internal(format!("open zip: {e}")))?;
 
-    if zip.len() > MAX_ARCHIVE_ENTRIES {
+    if zip.len() > max_archive_entries {
         return Err(VeyronError::Internal(format!(
-            "Malformed archive: {} entries exceeds max {MAX_ARCHIVE_ENTRIES}. Aborting.",
+            "Malformed archive: {} entries exceeds max {max_archive_entries}. Aborting.",
             zip.len()
         )));
     }
@@ -318,13 +335,13 @@ pub fn extract_zip(archive: &Path, dest: &Path) -> Result<(), VeyronError> {
             // Cap on actual bytes written, not the entry's declared/compressed
             // size — a zip bomb lies about (or omits) the true decompressed
             // size, so the limit must be enforced on the copy itself.
-            let budget = MAX_EXTRACTED_BYTES.saturating_sub(total_extracted) + 1;
+            let budget = max_extracted_bytes.saturating_sub(total_extracted) + 1;
             let written = io::copy(&mut entry.by_ref().take(budget), &mut out_file)
                 .map_err(VeyronError::Io)?;
             total_extracted += written;
-            if total_extracted > MAX_EXTRACTED_BYTES {
+            if total_extracted > max_extracted_bytes {
                 return Err(VeyronError::Internal(format!(
-                    "Malformed archive: decompressed size exceeds max {MAX_EXTRACTED_BYTES} bytes. Aborting."
+                    "Malformed archive: decompressed size exceeds max {max_extracted_bytes} bytes. Aborting."
                 )));
             }
         }
@@ -338,8 +355,8 @@ pub fn extract_zip(archive: &Path, dest: &Path) -> Result<(), VeyronError> {
 /// This only deletes files on disk — it does not stop a running instance or
 /// edit `config.yaml`. Callers should stop the plugin first if the kernel is
 /// running it.
-pub fn uninstall(slug: &str) -> Result<(), VeyronError> {
-    let dest = plugin_dir().join(slug);
+pub fn uninstall(slug: &str, tmp_dir: &Path) -> Result<(), VeyronError> {
+    let dest = plugin_dir(tmp_dir).join(slug);
 
     if !dest.exists() {
         return Err(VeyronError::PluginNotFound(format!(

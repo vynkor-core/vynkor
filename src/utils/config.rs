@@ -90,6 +90,63 @@ pub struct Config {
     /// Set to a private registry URL for air-gapped or enterprise deployments.
     #[serde(default)]
     pub registry_url: Option<String>,
+    /// How long the registry cache (`~/.cache/veyron/registry.json`) is considered
+    /// fresh before `plugin list --refresh` re-fetches it. Default: 3600 (1h).
+    #[serde(default = "default_registry_cache_ttl_secs")]
+    pub registry_cache_ttl_secs: u64,
+    /// Base directory for scratch/cache files (marketplace registry cache, plugin
+    /// install staging). Defaults to a per-user private dir — never the shared
+    /// `/tmp` (AUDIT M-09) — via `XDG_RUNTIME_DIR`/`/run/user/<uid>`/`~/.veyron/run`.
+    #[serde(default = "default_tmp_dir")]
+    pub tmp_dir: PathBuf,
+    /// Default action timeout (ms) when a plugin's `ActionRequest.timeout_ms` is 0.
+    #[serde(default = "default_action_timeout_ms")]
+    pub action_timeout_ms: u32,
+    /// Base delay (ms) for exponential plugin restart backoff: `base * 2^restart_count`.
+    #[serde(default = "default_restart_backoff_base_ms")]
+    pub restart_backoff_base_ms: u64,
+    /// Ceiling (ms) for exponential plugin restart backoff.
+    #[serde(default = "default_restart_backoff_max_ms")]
+    pub restart_backoff_max_ms: u64,
+    /// Seconds to wait after SIGTERM before SIGKILL when a plugin doesn't set its
+    /// own `grace_seconds`. Overridable per-plugin via `plugins[].grace_seconds`.
+    #[serde(default = "default_grace_seconds")]
+    pub default_grace_seconds: u32,
+    /// Max delivery attempts for an event before the event bus marks it dead.
+    #[serde(default = "default_event_max_retries")]
+    pub event_max_retries: u32,
+    /// Seconds terminal (delivered/dead) events are kept in `events.db` before
+    /// being pruned.
+    #[serde(default = "default_event_retention_secs")]
+    pub event_retention_secs: u64,
+    /// Capacity of the kernel's inbound IPC message channel (backpressure bound).
+    #[serde(default = "default_router_channel_capacity")]
+    pub router_channel_capacity: usize,
+    /// Seconds an incomplete fragmented message is retained before being
+    /// discarded (fragment-reassembly memory bound).
+    #[serde(default = "default_fragment_timeout_secs")]
+    pub fragment_timeout_secs: u64,
+    /// Max concurrent in-flight fragment-reassembly streams per connection.
+    #[serde(default = "default_max_reassembly_streams")]
+    pub max_reassembly_streams: usize,
+    /// Consecutive protocol errors from one connection before it is throttled.
+    #[serde(default = "default_max_conn_errors")]
+    pub max_conn_errors: u32,
+    /// Cap on the per-connection error-budget map before idle entries are pruned.
+    #[serde(default = "default_max_tracked_error_conns")]
+    pub max_tracked_error_conns: usize,
+    /// Seconds to wait for a WebSocket upgrade handshake before returning 408.
+    #[serde(default = "default_ws_handshake_timeout_secs")]
+    pub ws_handshake_timeout_secs: u64,
+    /// Max size (bytes) of a downloaded plugin archive before install is aborted.
+    #[serde(default = "default_max_archive_bytes")]
+    pub max_archive_bytes: u64,
+    /// Max total decompressed size (bytes) an installed archive may extract to.
+    #[serde(default = "default_max_extracted_bytes")]
+    pub max_extracted_bytes: u64,
+    /// Max number of entries an installed archive may contain.
+    #[serde(default = "default_max_archive_entries")]
+    pub max_archive_entries: usize,
     /// Path this config was loaded from — used by reload_config kernel command.
     #[serde(skip)]
     pub config_file: Option<String>,
@@ -124,6 +181,59 @@ fn default_log_buffer_lines() -> usize {
 fn default_max_connections() -> usize {
     1024
 }
+fn default_registry_cache_ttl_secs() -> u64 {
+    3600
+}
+/// Per-user private scratch dir — mirrors `default_pid_path`/`default_log_path`'s
+/// refusal to fall back into the shared, world-writable `/tmp` (AUDIT M-09).
+fn default_tmp_dir() -> PathBuf {
+    veyron_wire::socket::default_private_dir().unwrap_or_else(std::env::temp_dir)
+}
+fn default_action_timeout_ms() -> u32 {
+    30_000
+}
+fn default_restart_backoff_base_ms() -> u64 {
+    100
+}
+fn default_restart_backoff_max_ms() -> u64 {
+    30_000
+}
+fn default_grace_seconds() -> u32 {
+    5
+}
+fn default_event_max_retries() -> u32 {
+    5
+}
+fn default_event_retention_secs() -> u64 {
+    3600
+}
+fn default_router_channel_capacity() -> usize {
+    1024
+}
+fn default_fragment_timeout_secs() -> u64 {
+    30
+}
+fn default_max_reassembly_streams() -> usize {
+    64
+}
+fn default_max_conn_errors() -> u32 {
+    16
+}
+fn default_max_tracked_error_conns() -> usize {
+    8192
+}
+fn default_ws_handshake_timeout_secs() -> u64 {
+    5
+}
+fn default_max_archive_bytes() -> u64 {
+    256 * 1024 * 1024
+}
+fn default_max_extracted_bytes() -> u64 {
+    1024 * 1024 * 1024
+}
+fn default_max_archive_entries() -> usize {
+    10_000
+}
 
 impl Default for Config {
     fn default() -> Self {
@@ -147,6 +257,23 @@ impl Default for Config {
             tls_cert_path: None,
             tls_key_path: None,
             registry_url: None,
+            registry_cache_ttl_secs: default_registry_cache_ttl_secs(),
+            tmp_dir: default_tmp_dir(),
+            action_timeout_ms: default_action_timeout_ms(),
+            restart_backoff_base_ms: default_restart_backoff_base_ms(),
+            restart_backoff_max_ms: default_restart_backoff_max_ms(),
+            default_grace_seconds: default_grace_seconds(),
+            event_max_retries: default_event_max_retries(),
+            event_retention_secs: default_event_retention_secs(),
+            router_channel_capacity: default_router_channel_capacity(),
+            fragment_timeout_secs: default_fragment_timeout_secs(),
+            max_reassembly_streams: default_max_reassembly_streams(),
+            max_conn_errors: default_max_conn_errors(),
+            max_tracked_error_conns: default_max_tracked_error_conns(),
+            ws_handshake_timeout_secs: default_ws_handshake_timeout_secs(),
+            max_archive_bytes: default_max_archive_bytes(),
+            max_extracted_bytes: default_max_extracted_bytes(),
+            max_archive_entries: default_max_archive_entries(),
             config_file: None,
         }
     }

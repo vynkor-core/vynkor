@@ -15,15 +15,17 @@ use tokio::net::UnixStream;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
-/// How long an incomplete fragment set is retained before it is silently
-/// discarded. Prevents fragment-based memory exhaustion on a long-lived
-/// connection where a sender opens a stream and never finishes it.
-const FRAGMENT_TIMEOUT: Duration = Duration::from_secs(30);
+/// Default for how long an incomplete fragment set is retained before it is
+/// silently discarded (overridable via `Config::fragment_timeout_secs`).
+/// Prevents fragment-based memory exhaustion on a long-lived connection where
+/// a sender opens a stream and never finishes it.
+const DEFAULT_FRAGMENT_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Maximum number of concurrent in-flight reassembly streams per connection.
-/// Bounds the memory a single peer can hold open regardless of how many
-/// distinct `stream_id`s it opens (BUG-003).
-const MAX_REASSEMBLY_STREAMS: usize = 64;
+/// Default max number of concurrent in-flight reassembly streams per
+/// connection (overridable via `Config::max_reassembly_streams`). Bounds the
+/// memory a single peer can hold open regardless of how many distinct
+/// `stream_id`s it opens (BUG-003).
+const DEFAULT_MAX_REASSEMBLY_STREAMS: usize = 64;
 
 struct ReassemblyBuf {
     fragments: HashMap<u16, Vec<u8>>,
@@ -54,10 +56,14 @@ impl ReassemblyBuf {
     }
 }
 
-fn prune_stale_reassembly(map: &mut HashMap<u32, ReassemblyBuf>, conn_id: u64) {
+fn prune_stale_reassembly(
+    map: &mut HashMap<u32, ReassemblyBuf>,
+    conn_id: u64,
+    fragment_timeout: Duration,
+) {
     let now = tokio::time::Instant::now();
     map.retain(|stream_id, buf| {
-        if now.duration_since(buf.first_seen) >= FRAGMENT_TIMEOUT {
+        if now.duration_since(buf.first_seen) >= fragment_timeout {
             warn!(
                 conn_id = conn_id,
                 stream_id = stream_id,
@@ -95,6 +101,8 @@ pub struct ConnectionHandler {
     incoming_tx: mpsc::Sender<IncomingMessage>,
     disconnect_tx: mpsc::Sender<u64>,
     session_key: SessionKeyCell,
+    fragment_timeout: Duration,
+    max_reassembly_streams: usize,
 }
 
 impl ConnectionHandler {
@@ -103,6 +111,25 @@ impl ConnectionHandler {
         stream: UnixStream,
         incoming_tx: mpsc::Sender<IncomingMessage>,
         disconnect_tx: mpsc::Sender<u64>,
+    ) -> (Self, mpsc::Sender<Outbound>) {
+        Self::with_limits(
+            conn_id,
+            stream,
+            incoming_tx,
+            disconnect_tx,
+            DEFAULT_FRAGMENT_TIMEOUT,
+            DEFAULT_MAX_REASSEMBLY_STREAMS,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_limits(
+        conn_id: u64,
+        stream: UnixStream,
+        incoming_tx: mpsc::Sender<IncomingMessage>,
+        disconnect_tx: mpsc::Sender<u64>,
+        fragment_timeout: Duration,
+        max_reassembly_streams: usize,
     ) -> (Self, mpsc::Sender<Outbound>) {
         let (read_half, write_half) = stream.into_split();
         let (write_tx, write_rx) = mpsc::channel::<Outbound>(64);
@@ -116,6 +143,8 @@ impl ConnectionHandler {
             incoming_tx,
             disconnect_tx,
             session_key: Arc::new(Mutex::new(None)),
+            fragment_timeout,
+            max_reassembly_streams,
         };
 
         (handler, write_tx)
@@ -165,7 +194,11 @@ impl ConnectionHandler {
                     // Prune stale reassembly buffers on every frame arrival so
                     // an attacker cannot exhaust memory by opening streams and
                     // never sending the final fragment.
-                    prune_stale_reassembly(&mut reassembly_map, self.conn_id);
+                    prune_stale_reassembly(
+                        &mut reassembly_map,
+                        self.conn_id,
+                        self.fragment_timeout,
+                    );
 
                     if frame.flags & FLAG_FRAGMENTED != 0 {
                         let frag_hdr = match parse_frag_header(&frame.payload) {
@@ -205,7 +238,7 @@ impl ConnectionHandler {
                                     .increment(1);
                                 break;
                             }
-                        } else if reassembly_map.len() >= MAX_REASSEMBLY_STREAMS {
+                        } else if reassembly_map.len() >= self.max_reassembly_streams {
                             warn!(
                                 conn_id = self.conn_id,
                                 "reassembly stream cap exceeded — dropping connection"
@@ -682,7 +715,7 @@ mod tests {
 
         let (_, mut wc) = client.into_split();
         // Open one more incomplete stream than MAX_REASSEMBLY_STREAMS allows.
-        for stream_id in 0..(MAX_REASSEMBLY_STREAMS as u32 + 1) {
+        for stream_id in 0..(DEFAULT_MAX_REASSEMBLY_STREAMS as u32 + 1) {
             write_frame_raw(
                 &mut wc,
                 &frag_frame("kernel", 1, 0, 2, stream_id, b"partial"),

@@ -48,14 +48,19 @@ pub async fn handle(
     registry_url: Option<&str>,
     token: Option<&str>,
     tls: bool,
+    cache_ttl_secs: u64,
+    tmp_dir: &std::path::Path,
+    max_archive_bytes: u64,
+    max_extracted_bytes: u64,
+    max_archive_entries: usize,
 ) -> anyhow::Result<()> {
     let fetch = |refresh: bool| {
         let url = registry_url.unwrap_or("");
         async move {
             if url.is_empty() {
-                fetch_registry(refresh).await
+                fetch_registry(refresh, cache_ttl_secs, tmp_dir).await
             } else {
-                fetch_registry_with_url(url, refresh).await
+                fetch_registry_with_url(url, refresh, cache_ttl_secs, tmp_dir).await
             }
         }
     };
@@ -97,10 +102,18 @@ pub async fn handle(
         }
         PluginCmd::Install { target, refresh } => {
             let entries = fetch(refresh).await?;
-            install(&entries, &target).await?;
+            install(
+                &entries,
+                &target,
+                tmp_dir,
+                max_archive_bytes,
+                max_extracted_bytes,
+                max_archive_entries,
+            )
+            .await?;
         }
         PluginCmd::Remove { target } => {
-            uninstall(&target)?;
+            uninstall(&target, tmp_dir)?;
 
             if let Ok(cfg) = crate::utils::config::load_config("config.yaml") {
                 if cfg.plugins.iter().any(|p| p.id == target) {
