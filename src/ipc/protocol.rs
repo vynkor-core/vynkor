@@ -1,5 +1,7 @@
 use crate::auth::jwt::JwtValidator;
-use crate::auth::permissions::{check_ipc_send, check_ipc_target, check_permission};
+use crate::auth::permissions::{
+    check_ipc_send, check_ipc_target, check_permission, required_permission_for_action,
+};
 use crate::events::bus::EventBus;
 use crate::events::store::EventStore;
 use crate::ipc::connection::{out_frame, Outbound};
@@ -417,6 +419,14 @@ impl MessageRouter {
                             "ambiguous action declaration: multiple providers, refusing to route"
                         );
                         Some(ActionStatus::ActionNotFound)
+                    }
+                    ActionLookup::Found(provider)
+                        if required_permission_for_action(&req.action)
+                            .is_some_and(|perm| {
+                                check_permission(registry, &provider.plugin_id, perm).is_err()
+                            }) =>
+                    {
+                        Some(ActionStatus::ActionPermissionDeny)
                     }
                     ActionLookup::Found(provider) => {
                         let internal_id = format!(

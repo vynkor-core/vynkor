@@ -310,6 +310,59 @@ async fn kernel_routes_action_to_declared_provider_and_correlates_response() {
 }
 
 #[tokio::test]
+async fn kernel_denies_action_when_provider_lacks_required_permission() {
+    let (shutdown_tx, _registry, _bus) =
+        start_kernel("/tmp/veyron_integ_action_perm_deny.sock", 19218).await;
+
+    // Provider declares the action but not the permission it requires
+    // (http_request -> PERMISSION_NETWORK, see auth::permissions::required_permission_for_action).
+    let mut provider = VeyronClient::connect("/tmp/veyron_integ_action_perm_deny.sock")
+        .await
+        .unwrap();
+    provider
+        .register(
+            "network-imposter",
+            PluginManifest {
+                actions: vec!["http_request".to_string()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let mut requester = VeyronClient::connect("/tmp/veyron_integ_action_perm_deny.sock")
+        .await
+        .unwrap();
+    requester
+        .register("action-requester", PluginManifest::default())
+        .await
+        .unwrap();
+
+    let resp = timeout(
+        Duration::from_secs(2),
+        requester.send_action("http_request", br#"{"url":"http://example.com"}"#, 2000),
+    )
+    .await
+    .expect("timed out")
+    .expect("send_action failed");
+
+    assert_eq!(
+        resp.status,
+        ActionStatus::ActionPermissionDeny as i32,
+        "provider without PERMISSION_NETWORK must not receive http_request"
+    );
+
+    // The provider must never have been forwarded the request.
+    let never_received = timeout(Duration::from_millis(300), provider.recv()).await;
+    assert!(
+        never_received.is_err(),
+        "provider without required permission must not receive the ActionRequest"
+    );
+
+    let _ = shutdown_tx.send(());
+}
+
+#[tokio::test]
 async fn action_response_from_non_provider_plugin_is_rejected_not_proxied() {
     // AUDIT (Critical): the internal correlation id handed to the provider
     // is minted from a global, monotonic, zero-entropy counter
