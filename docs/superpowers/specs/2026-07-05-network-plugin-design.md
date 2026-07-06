@@ -106,6 +106,15 @@ declared the required permission.
 plugin a self-contained static-ish binary consistent with the other SDK
 plugins).
 
+## Operator-configurable extra blocklist
+
+Beyond the built-in `ssrf.rs::is_blocked_ip` ranges, an operator can block
+additional IPs/hostnames via the `NETWORK_PLUGIN_EXTRA_BLOCKED_HOSTS` env
+var (comma-separated IPs and/or bare hostnames, set through the plugin's
+`env:` list in `config.yaml`). Parsed once at startup into `ssrf::Blocklist`
+and enforced inside `SsrfSafeResolver` alongside the built-in checks. See
+`veyron-plugins/plugins/network/README.md` and `config.example.yaml`.
+
 ## Operator note
 
 This plugin needs actual network egress. In the kernel's `config.yaml`
