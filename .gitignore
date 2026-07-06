@@ -41,7 +41,7 @@ Thumbs.db
 .claudeignore
 .skills/
 skill/
-
+docs/superpowers/
 # env
 .env
 .env.*
@@ -58,3 +58,6 @@ data/tmp/
 .worktrees/
 .cargo/
 
+# native demo stack scratch (built/installed at demo/run.sh time)
+demo/.run/
+demo/
