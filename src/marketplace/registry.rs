@@ -274,7 +274,9 @@ mod tests {
         let url = format!("{}/registry.json", server.url());
 
         // First call: fetches from network and writes cache
-        let result = fetch_registry_from(&url, false, &cache, 3600).await.unwrap();
+        let result = fetch_registry_from(&url, false, &cache, 3600)
+            .await
+            .unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].slug, "stt-whisper");
         assert!(cache.exists(), "cache file should be written");
@@ -282,7 +284,9 @@ mod tests {
         mock.assert_async().await;
 
         // Second call within TTL: reads from disk (mock not called again)
-        let cached = fetch_registry_from(&url, false, &cache, 3600).await.unwrap();
+        let cached = fetch_registry_from(&url, false, &cache, 3600)
+            .await
+            .unwrap();
         assert_eq!(cached[0].slug, "stt-whisper");
     }
 
@@ -305,7 +309,9 @@ mod tests {
         let cache = tmp.path().join("registry.json");
         let url = format!("{}/registry.json", server.url());
 
-        fetch_registry_from(&url, false, &cache, 3600).await.unwrap();
+        fetch_registry_from(&url, false, &cache, 3600)
+            .await
+            .unwrap();
         // refresh = true forces network even though cache is fresh
         fetch_registry_from(&url, true, &cache, 3600).await.unwrap();
 
@@ -355,7 +361,9 @@ mod tests {
         let cache = tmp.path().join("registry.json");
         let url = format!("{}/registry.json", server.url());
 
-        let err = fetch_registry_from(&url, false, &cache, 3600).await.unwrap_err();
+        let err = fetch_registry_from(&url, false, &cache, 3600)
+            .await
+            .unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains("registry response body was empty"),
@@ -381,7 +389,9 @@ mod tests {
         let cache = tmp.path().join("registry.json");
         let url = format!("{}/registry.json", server.url());
 
-        let err = fetch_registry_from(&url, false, &cache, 3600).await.unwrap_err();
+        let err = fetch_registry_from(&url, false, &cache, 3600)
+            .await
+            .unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("parse registry JSON"), "unexpected: {msg}");
 

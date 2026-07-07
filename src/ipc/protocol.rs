@@ -421,10 +421,9 @@ impl MessageRouter {
                         Some(ActionStatus::ActionNotFound)
                     }
                     ActionLookup::Found(provider)
-                        if required_permission_for_action(&req.action)
-                            .is_some_and(|perm| {
-                                check_permission(registry, &provider.plugin_id, perm).is_err()
-                            }) =>
+                        if required_permission_for_action(&req.action).is_some_and(|perm| {
+                            check_permission(registry, &provider.plugin_id, perm).is_err()
+                        }) =>
                     {
                         Some(ActionStatus::ActionPermissionDeny)
                     }

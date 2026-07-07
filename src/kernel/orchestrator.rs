@@ -232,8 +232,12 @@ impl Kernel {
         shutdown.await;
         info!("shutdown signal received");
 
-        Self::graceful_shutdown(&registry, &shutdown_supervisor, config.default_grace_seconds)
-            .await;
+        Self::graceful_shutdown(
+            &registry,
+            &shutdown_supervisor,
+            config.default_grace_seconds,
+        )
+        .await;
         Ok(())
     }
 

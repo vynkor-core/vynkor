@@ -2,9 +2,9 @@ use crate::utils::errors::VeyronError;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 pub use veyron_wire::framing::{
-    parse_frag_header, serialize_header, target_as_str, Frame, FragmentHeader,
-    COMPRESS_THRESHOLD, FLAG_COMPRESSED, FLAG_FRAGMENTED, FLAG_MAC_PRESENT, FLAG_RAW_BINARY,
-    FRAG_HEADER_SIZE, MAX_PAYLOAD_SIZE,
+    parse_frag_header, serialize_header, target_as_str, FragmentHeader, Frame, COMPRESS_THRESHOLD,
+    FLAG_COMPRESSED, FLAG_FRAGMENTED, FLAG_MAC_PRESENT, FLAG_RAW_BINARY, FRAG_HEADER_SIZE,
+    MAX_PAYLOAD_SIZE,
 };
 
 pub async fn write_frame<W>(
@@ -34,7 +34,9 @@ pub async fn read_frame<R>(stream: &mut R) -> Result<Frame, VeyronError>
 where
     R: AsyncRead + Unpin,
 {
-    veyron_wire::framing::read_frame(stream).await.map_err(Into::into)
+    veyron_wire::framing::read_frame(stream)
+        .await
+        .map_err(Into::into)
 }
 
 pub async fn read_frame_with_timeout<R>(
