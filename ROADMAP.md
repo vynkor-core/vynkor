@@ -58,13 +58,89 @@ Single `ActionRequest`→`ActionResponse` doesn't fit a persistent WebSocket-sty
 
 ---
 
+## Audit Remediation — from `AUDIT.md` (2026-07-07)
+
+Source: full-codebase audit, three parallel passes (kernel/IPC/events/api, auth/plugin-lifecycle/marketplace, cross-SDK/protocol). See `AUDIT.md` for full detail per item.
+
+### Critical
+
+**T-01 — HTTP admin API missing authorization check (start/stop/restart)** ✅ done
+`src/api/middleware.rs:19-43`, `src/api/routes.rs:87-124`. `auth_middleware` checks JWT validity only, never `claims.permissions`. Any valid JWT can stop/start/restart any plugin via HTTP, no `PERMISSION_KERNEL_ADMIN` gate (unlike the equivalent IPC path). Fix: add permission check mirroring `check_permission`, gate on `PERMISSION_KERNEL_ADMIN`.
+Fixed: `require_kernel_admin` middleware layer on start/stop/restart routes, checks JWT `claims.permissions` for `PERMISSION_KERNEL_ADMIN`, mirrors IPC `KernelCommand` gate (`src/ipc/protocol.rs:536`). Tests: `tests/unit/test_api.rs` (`admin_route_rejects_valid_token_lacking_kernel_admin_permission`, `admin_route_allows_token_with_kernel_admin_permission`).
+
+**T-02 — C++ SDK has no real integration test coverage**
+`tests/integration/test_sdk_cpp.rs:1-91`. "C++ SDK" test spawns the Rust `echo_plugin_rs` binary, not C++. Zero end-to-end verification of `sdk/cpp/src/framing.cpp` against a live kernel. Fix: build real C++ echo-plugin binary via CMake in CI, point test at it.
+
+### High
+
+**T-03 — Single-threaded IPC router stalls kernel-wide on one slow plugin**
+`src/ipc/protocol.rs:648-654` (`forward`), `:725-734` (`broadcast`), `src/events/bus.rs:127-153` (`deliver`). All fan-out sends `.await` a 50ms timeout inline on the shared router task; `broadcast` loops all plugins = `O(n)*50ms`. One non-draining plugin stalls routing for everyone. Fix: spawn per-target send tasks or use `try_send` + bounded retry queue instead of blocking the router loop. Needs design thought — own workstream.
+
+**T-04 — `config.yaml` permissions not bound to runtime JWT claims**
+`src/utils/config.rs:30-34`, `src/plugins/loader.rs:225-259`, `src/ipc/protocol.rs:245-278`, `src/auth/permissions.rs:17-60`. Operator's `config.yaml permissions:` list only checked at boot (`validate_plugin_def`); runtime enforcement trusts JWT `claims.permissions` verbatim, no link back. A plugin scoped to `network` in config.yaml can still get `kernel_admin` via its JWT. Fix: mint JWT/capability token from config.yaml list, or re-validate claims against `PluginDef.permissions` at registration.
+
+**T-05 — `POST /plugins/:id/start` bypasses `validate_plugin_def`**
+`src/api/routes.rs:87-103`, `src/plugins/loader.rs:41-148`. HTTP start path skips kernel-compat/permission cross-check that boot-time `load_all` enforces. A plugin rejected at boot can still be started later via HTTP. Fix: call `validate_plugin_def` inside `start_plugin`, 422/403 on failure.
+
+**T-06 — C++/Python SDKs never send `EventAck`, events silently dropped**
+`sdk/cpp/include/veyron/plugin.hpp:38-74`, `sdk/cpp/include/veyron/client.hpp`/`client.cpp` (no `ack_event`), `sdk/python/veyron/plugin.py:67-83`, `sdk/python/veyron/client.py`. Only Rust SDK auto-acks (`sdk/rust/src/plugin.rs:134-143`). Kernel marks un-acked events dead after `max_retries` — every event to a stock C++/Python plugin is retried then dropped. Fix: add `on_event`/auto-ack + `ack_event()` to both SDKs.
+
+**T-07 — Rust SDK swallows `on_message` handler errors**
+`sdk/rust/src/plugin.rs:144-157`. `Err(_) => break` discards error, `run()`/`serve()` returns `Ok(())` even after handler failure — inconsistent with C++/Python which propagate. Fix: propagate error out of `serve()` after `on_shutdown()`.
+
+### Medium
+
+**T-08 — Error-count budget resettable by the offending connection itself**
+`src/ipc/protocol.rs:190-196`. Map prune at `max_tracked_error_conns` keyed on registration status only, not staleness — lets an unregistered abusive connection's counter reset to 1 repeatedly. Fix: prune by idle/LRU or last-error timestamp.
+
+**T-09 — WebSocket gateway has no concurrent connection cap**
+`src/api/websocket.rs:47`, vs. `src/ipc/server.rs:80-87` (UDS has `max_connections`). Fix: add `max_ws_connections` config, enforce pre-upgrade.
+
+**T-10 — `get_plugin_logs` `lines` param unclamped**
+`src/api/routes.rs:126-141`. Bounded only incidentally by ring buffer size. Fix: explicit `min(n, MAX_LOG_LINES)`.
+
+**T-11 — Marketplace has no signature independent of registry.json's own hash**
+`src/marketplace/installer.rs:123-131`, `src/marketplace/registry.rs:10-11`. sha256 check proves nothing about publisher trust if the serving channel is compromised. Fix: maintainer-signed manifest, pinned public key.
+
+**T-12 — JWT secret has no minimum-strength check**
+`src/auth/jwt.rs:19-27`. Any non-empty secret accepted for HS256. Fix: reject/warn under 32 bytes at construction (`src/kernel/orchestrator.rs:116-131`).
+
+**T-13 — No C++ unit tests for frame parsing against malformed input**
+`sdk/cpp/tests/` (no `test_framing.cpp`). Fix: adversarial-input tests for `read_frame_full`/`pack_frame_mac`.
+
+**T-14 — No fuzz coverage for C++/Python framing/decompression**
+`fuzz/fuzz_targets/*` covers Rust `wire` crate only. Fix: libFuzzer harness for `sdk/cpp/src/framing.cpp`.
+
+**T-15 — `FRAME_READ_TIMEOUT` slow-loris protection missing in C++/Python**
+`wire/src/framing.rs:66,179-196` (Rust only) vs. `sdk/cpp/src/framing.cpp:110-120`, `sdk/python/veyron/framing.py:127-150` (plain blocking reads, no timeout). Fix: wrap payload/MAC read in per-frame timeout in both SDKs.
+
+**T-16 — `ActionStatus`/`CommandStatus` proto enums default to OK (zero-value footgun)**
+`proto/veyron_protocol.proto:138-144,165-170`. `ACTION_OK = 0`/`COMMAND_OK = 0` unlike every other status enum's `*_UNKNOWN = 0` convention — missed `set_status()` silently reads as success. Fix: wire-breaking renumber, defer to next protocol version bump; add lint/test in the meantime asserting explicit status at every construction site.
+
+**T-17 — Proto file hand-copied to three locations, no CI drift check**
+`wire/proto/`, `sdk/cpp/proto/`, `sdk/python/proto/`. Fix: CI diff/checksum check, or generate SDK copies from single source.
+
+**T-18 — C++ SDK has no fragmentation support**
+`sdk/cpp/src/framing.cpp`/`client.cpp` vs. Rust (`sdk/rust/src/client.rs:355-420`) and Python (`sdk/python/veyron/client.py:164-197`). Fragmented frames silently mis-parsed by C++. Fix: port fragmentation, or make `read_frame_full` explicitly reject `FLAG_FRAGMENTED`.
+
+### Low
+
+**T-19 — Action permission model checks provider only, not requester**
+`src/auth/permissions.rs:10-15`, `src/ipc/protocol.rs:413-430`. Unprivileged plugin can transitively trigger e.g. network requests via any provider with `PERMISSION_NETWORK`. May be intentional (provider-declares-authorization model) — needs explicit design decision/doc note, not silent assumption.
+
+**T-20 — `strncpy` silently truncates long socket paths in C++ client**
+`sdk/cpp/src/client.cpp:26-28`. Not an overflow, but truncation is silent rather than rejected. Fix: explicit length check, throw if too long.
+
+---
+
 ## Task Summary
 
 | Phase | Items | Severity | Est. effort |
 |-------|-------|----------|--------------|
 | 6 Network plugin protocol support | R6-01..04 | Candidate, unscheduled | ~1 decision + 1 design doc + impl TBD |
+| Audit remediation | T-01..20 | 2 Critical, 5 High, 11 Medium, 2 Low | T-01/T-05 fix together; T-03 needs own design; rest are independent |
 
-**Ship gate:** none set yet — R6-03's open question and R6-04's design doc should resolve before effort estimates firm up.
+**Ship gate:** none set yet — R6-03's open question and R6-04's design doc should resolve before effort estimates firm up. T-01 (HTTP authz bypass) should land ahead of any other roadmap work — live privilege-escalation path on any deployment exposing the REST API.
 
 ## Definition of Done
 

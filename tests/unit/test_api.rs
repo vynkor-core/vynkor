@@ -266,8 +266,13 @@ async fn post_endpoint_requires_auth_when_jwt_secret_set() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
 
-    // Valid token → 200
-    let token = create_test_token("admin", vec![], SECRET, 3600);
+    // Valid token with PERMISSION_KERNEL_ADMIN → 200
+    let token = create_test_token(
+        "admin",
+        vec!["PERMISSION_KERNEL_ADMIN".to_string()],
+        SECRET,
+        3600,
+    );
     let registry2 = make_registry();
     register(&registry2, "guarded", 1);
     let app2 = create_router(make_manager(registry2, make_supervisor()), Some(validator));
@@ -283,6 +288,78 @@ async fn post_endpoint_requires_auth_when_jwt_secret_set() {
         .await
         .unwrap();
     assert_eq!(res2.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn admin_route_rejects_valid_token_lacking_kernel_admin_permission() {
+    // T-01: auth_middleware only checked JWT validity, never claims.permissions.
+    // Any valid JWT — even one scoped to an unrelated permission — could
+    // start/stop/restart any plugin. Must be gated on PERMISSION_KERNEL_ADMIN,
+    // mirroring the IPC KernelCommand check (src/ipc/protocol.rs:536).
+    const SECRET: &[u8] = b"test-secret";
+    let validator = Arc::new(JwtValidator::new(SECRET));
+    let registry = make_registry();
+    register(&registry, "guarded", 1);
+
+    let app = create_router(
+        make_manager(Arc::clone(&registry), make_supervisor()),
+        Some(validator),
+    );
+
+    let token = create_test_token(
+        "low-priv",
+        vec!["PERMISSION_NETWORK".to_string()],
+        SECRET,
+        3600,
+    );
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/plugins/guarded/stop")
+                .header("Authorization", format!("Bearer {}", token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    assert!(
+        registry.get("guarded").is_some(),
+        "plugin must not be stopped by an unprivileged token"
+    );
+}
+
+#[tokio::test]
+async fn admin_route_allows_token_with_kernel_admin_permission() {
+    const SECRET: &[u8] = b"test-secret";
+    let validator = Arc::new(JwtValidator::new(SECRET));
+    let registry = make_registry();
+    register(&registry, "guarded", 1);
+
+    let app = create_router(
+        make_manager(Arc::clone(&registry), make_supervisor()),
+        Some(validator),
+    );
+
+    let token = create_test_token(
+        "admin",
+        vec!["PERMISSION_KERNEL_ADMIN".to_string()],
+        SECRET,
+        3600,
+    );
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/plugins/guarded/stop")
+                .header("Authorization", format!("Bearer {}", token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
 }
 
 #[tokio::test]

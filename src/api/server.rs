@@ -14,7 +14,7 @@ use tokio::sync::mpsc;
 use tower_http::timeout::TimeoutLayer;
 use tracing::info;
 
-use crate::api::middleware::auth_middleware;
+use crate::api::middleware::{auth_middleware, require_kernel_admin};
 use crate::api::rate_limit::{build_rate_limiter, rate_limit_middleware};
 use crate::api::routes::{
     get_plugin, get_plugin_logs, health_check, list_plugins, restart_plugin, start_plugin,
@@ -68,14 +68,21 @@ pub fn create_router_full(
     // All non-health endpoints require auth when jwt_secret is configured.
     // auth_middleware short-circuits to next.run when jwt_validator is None,
     // so allow_no_auth deployments see no change in behaviour.
+    // Lifecycle routes additionally require PERMISSION_KERNEL_ADMIN (T-01):
+    // auth_middleware only proves the caller holds *a* valid JWT, not that
+    // it's authorized to start/stop/restart plugins.
+    let admin = Router::new()
+        .route("/plugins/{id}/start", post(start_plugin))
+        .route("/plugins/{id}/stop", post(stop_plugin))
+        .route("/plugins/{id}/restart", post(restart_plugin))
+        .layer(middleware::from_fn(require_kernel_admin));
+
     let mut protected = Router::new()
         .route("/metrics", get(get_metrics))
         .route("/plugins", get(list_plugins))
         .route("/plugins/{id}", get(get_plugin))
         .route("/plugins/{id}/logs", get(get_plugin_logs))
-        .route("/plugins/{id}/start", post(start_plugin))
-        .route("/plugins/{id}/stop", post(stop_plugin))
-        .route("/plugins/{id}/restart", post(restart_plugin));
+        .merge(admin);
 
     // Per-token rate limiting: only active when JWT auth is configured. Layered
     // *before* auth_middleware is added below, so auth ends up outermost and
