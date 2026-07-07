@@ -986,3 +986,62 @@ async fn registration_leaves_permissions_unclamped_for_plugin_not_in_config() {
         other => panic!("expected PluginRegisterAck, got {:?}", other),
     }
 }
+
+// ── T-08: error-budget prune must not be resettable by an unregistered
+// connection staying unregistered ────────────────────────────────────────
+
+#[tokio::test]
+async fn unregistered_connection_error_budget_survives_map_prune() {
+    let reg = Arc::new(PluginRegistry::new());
+    let bus = Arc::new(EventBus::new());
+
+    // max_tracked_error_conns = 1 forces the size-triggered prune on every
+    // single error from this one never-registered connection. Before the
+    // fix, prune kept only registered conn_ids (`registry.is_registered`),
+    // so an unregistered attacker's own entry was evicted and reset to zero
+    // on every message, and it could never cross max_conn_errors.
+    let (router_tx, rx) = mpsc::channel::<IncomingMessage>(64);
+    tokio::spawn(MessageRouter::run_with_context(
+        rx,
+        Arc::clone(&reg),
+        Arc::clone(&bus),
+        None,
+        std::time::Instant::now(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        30_000,
+        /* max_conn_errors */ 3,
+        /* max_tracked_error_conns */ 1,
+    ));
+
+    let (tx, mut rx_out) = mpsc::channel::<Outbound>(64);
+
+    for _ in 0..3 {
+        let frame = make_frame("kernel", vec![0xff, 0xff, 0xff, 0xff]);
+        router_tx
+            .send(incoming(1, frame, tx.clone()))
+            .await
+            .unwrap();
+        let f = recv_frame(&mut rx_out).await;
+        let env = decode_envelope(&f);
+        assert!(matches!(env.payload, Some(envelope::Payload::Error(_))));
+    }
+
+    // 4th malformed frame crosses the budget -> dropped, no response.
+    // Keep `tx` alive past the send so the channel doesn't close and make
+    // `recv()` return `None` immediately instead of genuinely timing out.
+    let frame = make_frame("kernel", vec![0xff, 0xff, 0xff, 0xff]);
+    router_tx
+        .send(incoming(1, frame, tx.clone()))
+        .await
+        .unwrap();
+    let throttled = timeout(Duration::from_millis(200), rx_out.recv()).await;
+    drop(tx);
+    assert!(
+        throttled.is_err(),
+        "unregistered connection must still be throttled after crossing the error budget"
+    );
+}

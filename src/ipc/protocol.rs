@@ -88,7 +88,14 @@ impl MessageRouter {
         // response) gets throttled: further messages are dropped without a reply,
         // capping the amplification a single misbehaving plugin can cause (VULN-007).
         // A successful message resets the budget, so transient errors don't accrue.
-        let mut error_counts: HashMap<u64, u32> = HashMap::new();
+        //
+        // Keyed by conn_id -> (count, last_error_at). Pruned by staleness, not
+        // registration status (T-08): an unregistered connection is never
+        // "registered" so a registration-status prune would keep evicting its
+        // own entry back to zero every time the map hit capacity, letting it
+        // reset its own budget indefinitely by staying unregistered.
+        let mut error_counts: HashMap<u64, (u32, Instant)> = HashMap::new();
+        const ERROR_BUDGET_IDLE_TTL: Duration = Duration::from_secs(300);
 
         // Per-connection IPC send rate limiter keyed by conn_id.
         let ipc_limiter: Option<Arc<DefaultKeyedRateLimiter<u64>>> =
@@ -165,7 +172,7 @@ impl MessageRouter {
                 }
             };
 
-            if error_counts.get(&conn_id).copied().unwrap_or(0) >= max_conn_errors {
+            if error_counts.get(&conn_id).map(|(c, _)| *c).unwrap_or(0) >= max_conn_errors {
                 counter!("ipc_throttled_messages_total").increment(1);
                 continue;
             }
@@ -198,12 +205,15 @@ impl MessageRouter {
             };
 
             if errored {
+                let now = Instant::now();
                 if error_counts.len() >= max_tracked_error_conns {
-                    error_counts.retain(|cid, _| registry.is_registered(*cid));
+                    error_counts
+                        .retain(|_, (_, last)| now.duration_since(*last) < ERROR_BUDGET_IDLE_TTL);
                 }
-                let count = error_counts.entry(conn_id).or_insert(0);
-                *count += 1;
-                if *count == max_conn_errors {
+                let entry = error_counts.entry(conn_id).or_insert((0, now));
+                entry.0 += 1;
+                entry.1 = now;
+                if entry.0 == max_conn_errors {
                     warn!(
                         conn_id,
                         threshold = max_conn_errors,

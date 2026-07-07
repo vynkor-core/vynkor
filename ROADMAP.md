@@ -95,8 +95,9 @@ Fixed: `serve()` now captures the `on_message` handler's `Err`, still runs `on_s
 
 ### Medium
 
-**T-08 — Error-count budget resettable by the offending connection itself**
+**T-08 — Error-count budget resettable by the offending connection itself** ✅ done
 `src/ipc/protocol.rs:190-196`. Map prune at `max_tracked_error_conns` keyed on registration status only, not staleness — lets an unregistered abusive connection's counter reset to 1 repeatedly. Fix: prune by idle/LRU or last-error timestamp.
+Fixed: `error_counts` now keyed `conn_id -> (count, last_error_at)`; the size-triggered prune (`src/ipc/protocol.rs`) evicts entries idle past `ERROR_BUDGET_IDLE_TTL` (300s) instead of filtering on `registry.is_registered`, so an unregistered connection can no longer keep evicting its own entry back to zero by staying unregistered. Test: `tests/unit/test_router.rs` (`unregistered_connection_error_budget_survives_map_prune`).
 
 **T-09 — WebSocket gateway has no concurrent connection cap**
 `src/api/websocket.rs:47`, vs. `src/ipc/server.rs:80-87` (UDS has `max_connections`). Fix: add `max_ws_connections` config, enforce pre-upgrade.
@@ -145,7 +146,7 @@ Fixed: `serve()` now captures the `on_message` handler's `Err`, still runs `on_s
 | 6 Network plugin protocol support | R6-01..04 | Candidate, unscheduled | ~1 decision + 1 design doc + impl TBD |
 | Audit remediation | T-01..20 | 2 Critical, 5 High, 11 Medium, 2 Low | T-01/T-05 fix together; T-03 needs own design; rest are independent |
 
-**Ship gate:** none set yet — R6-03's open question and R6-04's design doc should resolve before effort estimates firm up. T-01/T-05 (HTTP authz/validation bypass) ✅ landed — was the live privilege-escalation path on any deployment exposing the REST API. T-02 (C++ SDK integration coverage) and T-04 (config.yaml/JWT permission binding) ✅ landed.
+**Ship gate:** none set yet — R6-03's open question and R6-04's design doc should resolve before effort estimates firm up. T-01/T-05 (HTTP authz/validation bypass) ✅ landed — was the live privilege-escalation path on any deployment exposing the REST API. T-02 (C++ SDK integration coverage), T-04 (config.yaml/JWT permission binding), T-06 (C++/Python `EventAck`), T-07 (Rust SDK error propagation), and T-08 (error-budget prune staleness) ✅ landed.
 
 ## Definition of Done
 
