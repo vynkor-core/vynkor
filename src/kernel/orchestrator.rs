@@ -231,6 +231,7 @@ impl Kernel {
             config.tls_key_path.clone(),
             config.plugins.clone(),
             config.ws_handshake_timeout_secs,
+            config.max_ws_connections,
         );
         tokio::spawn(async move {
             if let Err(e) = api.run().await {

@@ -138,6 +138,11 @@ pub struct Config {
     /// Seconds to wait for a WebSocket upgrade handshake before returning 408.
     #[serde(default = "default_ws_handshake_timeout_secs")]
     pub ws_handshake_timeout_secs: u64,
+    /// Maximum concurrent WebSocket gateway connections. Excess upgrade requests
+    /// are rejected with 503 before the handshake completes (T-09; mirrors
+    /// `max_connections` for the UDS listener).
+    #[serde(default = "default_max_ws_connections")]
+    pub max_ws_connections: usize,
     /// Max size (bytes) of a downloaded plugin archive before install is aborted.
     #[serde(default = "default_max_archive_bytes")]
     pub max_archive_bytes: u64,
@@ -225,6 +230,9 @@ fn default_max_tracked_error_conns() -> usize {
 fn default_ws_handshake_timeout_secs() -> u64 {
     5
 }
+fn default_max_ws_connections() -> usize {
+    1024
+}
 fn default_max_archive_bytes() -> u64 {
     256 * 1024 * 1024
 }
@@ -271,6 +279,7 @@ impl Default for Config {
             max_conn_errors: default_max_conn_errors(),
             max_tracked_error_conns: default_max_tracked_error_conns(),
             ws_handshake_timeout_secs: default_ws_handshake_timeout_secs(),
+            max_ws_connections: default_max_ws_connections(),
             max_archive_bytes: default_max_archive_bytes(),
             max_extracted_bytes: default_max_extracted_bytes(),
             max_archive_entries: default_max_archive_entries(),

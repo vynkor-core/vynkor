@@ -76,6 +76,10 @@ allow_no_auth: true
 # Seconds to wait for a WebSocket upgrade handshake before returning 408.
 # ws_handshake_timeout_secs: 5
 
+# Maximum concurrent WebSocket gateway connections. Excess upgrade requests
+# are rejected with 503 before the handshake completes (T-09).
+# max_ws_connections: 1024
+
 # Plugin install/marketplace archive limits (zip-bomb protection, AUDIT M-06).
 # max_archive_bytes: 268435456      # 256 MiB
 # max_extracted_bytes: 1073741824   # 1 GiB

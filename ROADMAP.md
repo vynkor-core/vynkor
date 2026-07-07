@@ -99,8 +99,9 @@ Fixed: `serve()` now captures the `on_message` handler's `Err`, still runs `on_s
 `src/ipc/protocol.rs:190-196`. Map prune at `max_tracked_error_conns` keyed on registration status only, not staleness — lets an unregistered abusive connection's counter reset to 1 repeatedly. Fix: prune by idle/LRU or last-error timestamp.
 Fixed: `error_counts` now keyed `conn_id -> (count, last_error_at)`; the size-triggered prune (`src/ipc/protocol.rs`) evicts entries idle past `ERROR_BUDGET_IDLE_TTL` (300s) instead of filtering on `registry.is_registered`, so an unregistered connection can no longer keep evicting its own entry back to zero by staying unregistered. Test: `tests/unit/test_router.rs` (`unregistered_connection_error_budget_survives_map_prune`).
 
-**T-09 — WebSocket gateway has no concurrent connection cap**
+**T-09 — WebSocket gateway has no concurrent connection cap** ✅ done
 `src/api/websocket.rs:47`, vs. `src/ipc/server.rs:80-87` (UDS has `max_connections`). Fix: add `max_ws_connections` config, enforce pre-upgrade.
+Fixed: new `Config::max_ws_connections` (default 1024, `src/utils/config.rs`), threaded through `ApiServer`/`create_router_full` into `WsGateway` (`src/api/websocket.rs`). `ws_handler` reserves a slot via `open_conns.fetch_add` before calling `.on_upgrade`, backing out and returning 503 if it crossed the cap — same fetch-then-correct pattern as the IPC rate limiter, avoiding a check-then-increment race. Slot is released when `handle_socket` returns. Test: `tests/integration/test_websocket.rs` (`ws_upgrade_rejected_once_connection_cap_reached`).
 
 **T-10 — `get_plugin_logs` `lines` param unclamped**
 `src/api/routes.rs:126-141`. Bounded only incidentally by ring buffer size. Fix: explicit `min(n, MAX_LOG_LINES)`.
@@ -146,7 +147,7 @@ Fixed: `error_counts` now keyed `conn_id -> (count, last_error_at)`; the size-tr
 | 6 Network plugin protocol support | R6-01..04 | Candidate, unscheduled | ~1 decision + 1 design doc + impl TBD |
 | Audit remediation | T-01..20 | 2 Critical, 5 High, 11 Medium, 2 Low | T-01/T-05 fix together; T-03 needs own design; rest are independent |
 
-**Ship gate:** none set yet — R6-03's open question and R6-04's design doc should resolve before effort estimates firm up. T-01/T-05 (HTTP authz/validation bypass) ✅ landed — was the live privilege-escalation path on any deployment exposing the REST API. T-02 (C++ SDK integration coverage), T-04 (config.yaml/JWT permission binding), T-06 (C++/Python `EventAck`), T-07 (Rust SDK error propagation), and T-08 (error-budget prune staleness) ✅ landed.
+**Ship gate:** none set yet — R6-03's open question and R6-04's design doc should resolve before effort estimates firm up. T-01/T-05 (HTTP authz/validation bypass) ✅ landed — was the live privilege-escalation path on any deployment exposing the REST API. T-02 (C++ SDK integration coverage), T-04 (config.yaml/JWT permission binding), T-06 (C++/Python `EventAck`), T-07 (Rust SDK error propagation), T-08 (error-budget prune staleness), and T-09 (WS connection cap) ✅ landed.
 
 ## Definition of Done
 

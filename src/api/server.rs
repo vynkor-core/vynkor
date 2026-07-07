@@ -41,6 +41,7 @@ pub fn create_router(
         None,
         vec![],
         5,
+        1024,
     )
 }
 
@@ -55,6 +56,7 @@ pub fn create_router_full(
     rate_limit_burst: Option<u32>,
     plugin_defs: Vec<PluginDef>,
     ws_handshake_timeout_secs: u64,
+    max_ws_connections: usize,
 ) -> Router {
     let state = Arc::new(AppState {
         manager,
@@ -127,6 +129,8 @@ pub fn create_router_full(
             disconnect_tx,
             conn_counter: Arc::new(AtomicU64::new(0)),
             jwt_validator,
+            open_conns: Arc::new(AtomicU64::new(0)),
+            max_connections: max_ws_connections,
         });
         let ws_sub = Router::new()
             .route("/ws", get(ws_handler))
@@ -154,6 +158,7 @@ pub struct ApiServer {
     tls_key_path: Option<PathBuf>,
     plugin_defs: Vec<PluginDef>,
     ws_handshake_timeout_secs: u64,
+    max_ws_connections: usize,
 }
 
 impl ApiServer {
@@ -171,6 +176,7 @@ impl ApiServer {
         tls_key_path: Option<PathBuf>,
         plugin_defs: Vec<PluginDef>,
         ws_handshake_timeout_secs: u64,
+        max_ws_connections: usize,
     ) -> Self {
         Self {
             port,
@@ -185,6 +191,7 @@ impl ApiServer {
             tls_key_path,
             plugin_defs,
             ws_handshake_timeout_secs,
+            max_ws_connections,
         }
     }
 
@@ -199,6 +206,7 @@ impl ApiServer {
             self.rate_limit_burst,
             self.plugin_defs.clone(),
             self.ws_handshake_timeout_secs,
+            self.max_ws_connections,
         );
         let addr = SocketAddr::from(([127, 0, 0, 1], self.port));
 

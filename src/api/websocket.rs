@@ -31,6 +31,10 @@ pub struct WsGateway {
     pub disconnect_tx: mpsc::Sender<u64>,
     pub conn_counter: Arc<AtomicU64>,
     pub jwt_validator: Option<Arc<JwtValidator>>,
+    /// Current open WS connection count, gated against `max_connections` before
+    /// the upgrade completes (T-09; mirrors the UDS listener's `max_connections`).
+    pub open_conns: Arc<AtomicU64>,
+    pub max_connections: usize,
 }
 
 /// Extract JWT from `Sec-WebSocket-Protocol: veyron, <jwt>`.
@@ -58,12 +62,29 @@ pub async fn ws_handler(
         }
     }
 
+    // Reserve a connection slot before upgrading (T-09). fetch_add first, then
+    // back out if it pushed past the cap — avoids a check-then-increment race
+    // between concurrent upgrade requests.
+    if state.open_conns.fetch_add(1, Ordering::Relaxed) as usize >= state.max_connections {
+        state.open_conns.fetch_sub(1, Ordering::Relaxed);
+        warn!(
+            "WS connection limit ({}) reached — rejecting upgrade",
+            state.max_connections
+        );
+        counter!("ws_connections_rejected_total").increment(1);
+        return (StatusCode::SERVICE_UNAVAILABLE, "too many connections").into_response();
+    }
+
     let conn_id = state.conn_counter.fetch_add(1, Ordering::Relaxed) + WS_CONN_ID_BASE;
     let router_tx = state.router_tx.clone();
     let disconnect_tx = state.disconnect_tx.clone();
+    let open_conns = Arc::clone(&state.open_conns);
 
     ws.protocols(["veyron"])
-        .on_upgrade(move |socket| handle_socket(socket, conn_id, router_tx, disconnect_tx))
+        .on_upgrade(move |socket| async move {
+            handle_socket(socket, conn_id, router_tx, disconnect_tx).await;
+            open_conns.fetch_sub(1, Ordering::Relaxed);
+        })
 }
 
 async fn handle_socket(

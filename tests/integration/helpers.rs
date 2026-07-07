@@ -26,8 +26,15 @@ pub async fn start_kernel(
     socket: &str,
     port: u16,
 ) -> (oneshot::Sender<()>, Arc<PluginRegistry>, Arc<EventBus>) {
+    start_kernel_with_config(test_config(socket, port)).await
+}
+
+/// Like `start_kernel` but takes a caller-built `Config`, for tests that need
+/// to override a field `test_config` doesn't parameterize (e.g. `max_ws_connections`).
+pub async fn start_kernel_with_config(
+    cfg: Config,
+) -> (oneshot::Sender<()>, Arc<PluginRegistry>, Arc<EventBus>) {
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-    let cfg = test_config(socket, port);
 
     let registry = Arc::new(PluginRegistry::new());
     let event_bus = Arc::new(EventBus::new());

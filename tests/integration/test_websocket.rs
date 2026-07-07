@@ -403,3 +403,35 @@ async fn ws_closed_after_max_parse_errors() {
     assert!(closed, "WS connection must close after 16 parse errors");
     let _ = _shutdown.send(());
 }
+
+#[tokio::test]
+async fn ws_upgrade_rejected_once_connection_cap_reached() {
+    use super::helpers::{start_kernel_with_config, test_config};
+    use veyron::utils::config::Config;
+
+    let cfg = Config {
+        max_ws_connections: 1,
+        ..test_config("/tmp/veyron_ws_cap_test.sock", 19323)
+    };
+    let (_shutdown, _reg, _bus) = start_kernel_with_config(cfg).await;
+
+    // First connection takes the only slot and must succeed.
+    let _first = ws_connect_retry(19323).await;
+
+    // Second connection must be rejected pre-handshake (T-09) rather than
+    // silently allowed — before the fix nothing capped concurrent WS
+    // connections (unlike the UDS listener's `max_connections`).
+    let url = "ws://127.0.0.1:19323/ws";
+    let result = timeout(
+        Duration::from_secs(2),
+        tokio_tungstenite::connect_async(url),
+    )
+    .await
+    .expect("connect attempt must not hang");
+    assert!(
+        result.is_err(),
+        "second WS upgrade must be rejected once the connection cap is reached"
+    );
+
+    let _ = _shutdown.send(());
+}
