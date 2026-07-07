@@ -68,8 +68,9 @@ Source: full-codebase audit, three parallel passes (kernel/IPC/events/api, auth/
 `src/api/middleware.rs:19-43`, `src/api/routes.rs:87-124`. `auth_middleware` checks JWT validity only, never `claims.permissions`. Any valid JWT can stop/start/restart any plugin via HTTP, no `PERMISSION_KERNEL_ADMIN` gate (unlike the equivalent IPC path). Fix: add permission check mirroring `check_permission`, gate on `PERMISSION_KERNEL_ADMIN`.
 Fixed: `require_kernel_admin` middleware layer on start/stop/restart routes, checks JWT `claims.permissions` for `PERMISSION_KERNEL_ADMIN`, mirrors IPC `KernelCommand` gate (`src/ipc/protocol.rs:536`). Tests: `tests/unit/test_api.rs` (`admin_route_rejects_valid_token_lacking_kernel_admin_permission`, `admin_route_allows_token_with_kernel_admin_permission`).
 
-**T-02 — C++ SDK has no real integration test coverage**
+**T-02 — C++ SDK has no real integration test coverage** ✅ done
 `tests/integration/test_sdk_cpp.rs:1-91`. "C++ SDK" test spawns the Rust `echo_plugin_rs` binary, not C++. Zero end-to-end verification of `sdk/cpp/src/framing.cpp` against a live kernel. Fix: build real C++ echo-plugin binary via CMake in CI, point test at it.
+Fixed: CI (`.github/workflows/ci.yml`) now installs C++ SDK build deps and builds `sdk/cpp/examples/echo_plugin.cpp` (real C++, links `sdk/cpp/src/{client,framing,mac,env}.cpp`) via CMake before `cargo test`. `test_sdk_cpp.rs` spawns that binary and drives a real kernel-brokered action round trip. Uncovered and fixed two real gaps blocking this: `sdk/cpp/src/env.cpp`'s `default_socket_path()` never read `VEYRON_SOCKET_PATH` despite docs claiming it did; C++ SDK's `register_plugin`/`Plugin` had no way to declare a `PluginManifest` at all (no permissions/actions/ipc_targets ever sent), so `find_action_provider` and IPC-send permission checks were unreachable from C++ plugins — added a `Plugin::manifest()` override hook and a manifest-accepting `register_plugin` overload.
 
 ### High
 

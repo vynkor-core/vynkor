@@ -24,6 +24,17 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
+      - name: Install C++ SDK build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            protobuf-compiler libprotobuf-dev libabsl-dev libssl-dev libzstd-dev libgtest-dev
+
+      - name: Build C++ SDK echo_plugin (T-02: real C++ binary for cpp integration test)
+        run: |
+          cmake -B sdk/cpp/build -S sdk/cpp -DCMAKE_BUILD_TYPE=Release
+          cmake --build sdk/cpp/build --target echo_plugin -j"$(nproc)"
+
       - name: Build
         run: cargo build --all --all-features
 
