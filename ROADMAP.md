@@ -85,8 +85,9 @@ Fixed: `Kernel::run_with_components` (`src/kernel/orchestrator.rs`) builds a `pl
 `src/api/routes.rs:87-103`, `src/plugins/loader.rs:41-148`. HTTP start path skips kernel-compat/permission cross-check that boot-time `load_all` enforces. A plugin rejected at boot can still be started later via HTTP. Fix: call `validate_plugin_def` inside `start_plugin`, 422/403 on failure.
 Fixed: `start_plugin` now calls `validate_plugin_def(def)` before spawning — `VeyronError::PermissionDenied` → 403, any other validation failure (kernel incompatibility, malformed manifest) → 422, matching boot-time `load_all` enforcement. Test: `tests/unit/test_api.rs` (`start_plugin_rejects_manifest_requesting_ungranted_permission`).
 
-**T-06 — C++/Python SDKs never send `EventAck`, events silently dropped**
+**T-06 — C++/Python SDKs never send `EventAck`, events silently dropped** ✅ done
 `sdk/cpp/include/veyron/plugin.hpp:38-74`, `sdk/cpp/include/veyron/client.hpp`/`client.cpp` (no `ack_event`), `sdk/python/veyron/plugin.py:67-83`, `sdk/python/veyron/client.py`. Only Rust SDK auto-acks (`sdk/rust/src/plugin.rs:134-143`). Kernel marks un-acked events dead after `max_retries` — every event to a stock C++/Python plugin is retried then dropped. Fix: add `on_event`/auto-ack + `ack_event()` to both SDKs.
+Fixed: added `VeyronClient::ack_event()`/`ack_event()` and `Plugin::on_event()` to both SDKs; the run loop now dispatches `Event` envelopes to `on_event` (instead of falling through to `on_message`) and sends `EventAck` on success — a throwing/raising handler skips the ack so the kernel retries, mirroring the Rust SDK. Tests: `sdk/cpp/tests/test_plugin_ping.cpp` (`PluginRunLoop.DispatchesEventToOnEventAndSendsAck`), `tests/python/test_plugin_ping.py` (`test_events_dispatched_to_on_event_and_acked_not_on_message`).
 
 **T-07 — Rust SDK swallows `on_message` handler errors** ✅ done
 `sdk/rust/src/plugin.rs:144-157`. `Err(_) => break` discards error, `run()`/`serve()` returns `Ok(())` even after handler failure — inconsistent with C++/Python which propagate. Fix: propagate error out of `serve()` after `on_shutdown()`.

@@ -41,6 +41,9 @@ class _FakeClient:
     async def send(self, target, envelope):
         self.sent.append((target, envelope))
 
+    async def ack_event(self, event_id):
+        self.sent.append(("kernel", Envelope(event_ack={"event_id": event_id})))
+
     async def close(self):
         self.closed = True
 
@@ -52,12 +55,19 @@ class _RecordingPlugin(Plugin):
         # Bypass Plugin.__init__'s env/socket wiring entirely.
         self._client = _FakeClient(inbound)
         self.seen = []
+        self.events_seen = []
 
     async def on_message(self, envelope):
         self.seen.append(envelope)
 
+    async def on_event(self, event):
+        self.events_seen.append(event)
+
     def sent_pongs(self):
         return [(t, e) for (t, e) in self._client.sent if e.HasField("pong")]
+
+    def sent_event_acks(self):
+        return [(t, e) for (t, e) in self._client.sent if e.HasField("event_ack")]
 
 
 def _ping_env(timestamp):
@@ -89,12 +99,26 @@ def test_ping_is_not_dispatched_to_on_message():
     assert plugin.seen == []
 
 
-def test_non_ping_messages_still_reach_on_message():
+def test_non_ping_non_event_messages_still_reach_on_message():
+    subscribe_env = Envelope()
+    subscribe_env.subscribe.event_types.append("*")
+    plugin = _RecordingPlugin([_ping_env(1), subscribe_env, _shutdown_env()])
+    asyncio.run(plugin.run())
+
+    assert len(plugin.seen) == 1
+    assert plugin.seen[0].HasField("subscribe")
+    assert len(plugin.sent_pongs()) == 1
+
+
+def test_events_dispatched_to_on_event_and_acked_not_on_message():
     event_env = Envelope()
     event_env.event.event_id = "evt-1"
     plugin = _RecordingPlugin([_ping_env(1), event_env, _shutdown_env()])
     asyncio.run(plugin.run())
 
-    assert len(plugin.seen) == 1
-    assert plugin.seen[0].event.event_id == "evt-1"
-    assert len(plugin.sent_pongs()) == 1
+    assert plugin.seen == []
+    assert len(plugin.events_seen) == 1
+    assert plugin.events_seen[0].event_id == "evt-1"
+    acks = plugin.sent_event_acks()
+    assert len(acks) == 1
+    assert acks[0][1].event_ack.event_id == "evt-1"
