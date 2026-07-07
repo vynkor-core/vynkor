@@ -80,8 +80,9 @@ Fixed: CI (`.github/workflows/ci.yml`) now installs C++ SDK build deps and build
 **T-04 — `config.yaml` permissions not bound to runtime JWT claims**
 `src/utils/config.rs:30-34`, `src/plugins/loader.rs:225-259`, `src/ipc/protocol.rs:245-278`, `src/auth/permissions.rs:17-60`. Operator's `config.yaml permissions:` list only checked at boot (`validate_plugin_def`); runtime enforcement trusts JWT `claims.permissions` verbatim, no link back. A plugin scoped to `network` in config.yaml can still get `kernel_admin` via its JWT. Fix: mint JWT/capability token from config.yaml list, or re-validate claims against `PluginDef.permissions` at registration.
 
-**T-05 — `POST /plugins/:id/start` bypasses `validate_plugin_def`**
+**T-05 — `POST /plugins/:id/start` bypasses `validate_plugin_def`** ✅ done
 `src/api/routes.rs:87-103`, `src/plugins/loader.rs:41-148`. HTTP start path skips kernel-compat/permission cross-check that boot-time `load_all` enforces. A plugin rejected at boot can still be started later via HTTP. Fix: call `validate_plugin_def` inside `start_plugin`, 422/403 on failure.
+Fixed: `start_plugin` now calls `validate_plugin_def(def)` before spawning — `VeyronError::PermissionDenied` → 403, any other validation failure (kernel incompatibility, malformed manifest) → 422, matching boot-time `load_all` enforcement. Test: `tests/unit/test_api.rs` (`start_plugin_rejects_manifest_requesting_ungranted_permission`).
 
 **T-06 — C++/Python SDKs never send `EventAck`, events silently dropped**
 `sdk/cpp/include/veyron/plugin.hpp:38-74`, `sdk/cpp/include/veyron/client.hpp`/`client.cpp` (no `ack_event`), `sdk/python/veyron/plugin.py:67-83`, `sdk/python/veyron/client.py`. Only Rust SDK auto-acks (`sdk/rust/src/plugin.rs:134-143`). Kernel marks un-acked events dead after `max_retries` — every event to a stock C++/Python plugin is retried then dropped. Fix: add `on_event`/auto-ack + `ack_event()` to both SDKs.
@@ -141,7 +142,7 @@ Fixed: CI (`.github/workflows/ci.yml`) now installs C++ SDK build deps and build
 | 6 Network plugin protocol support | R6-01..04 | Candidate, unscheduled | ~1 decision + 1 design doc + impl TBD |
 | Audit remediation | T-01..20 | 2 Critical, 5 High, 11 Medium, 2 Low | T-01/T-05 fix together; T-03 needs own design; rest are independent |
 
-**Ship gate:** none set yet — R6-03's open question and R6-04's design doc should resolve before effort estimates firm up. T-01 (HTTP authz bypass) should land ahead of any other roadmap work — live privilege-escalation path on any deployment exposing the REST API.
+**Ship gate:** none set yet — R6-03's open question and R6-04's design doc should resolve before effort estimates firm up. T-01/T-05 (HTTP authz/validation bypass) ✅ landed — was the live privilege-escalation path on any deployment exposing the REST API.
 
 ## Definition of Done
 

@@ -8,9 +8,10 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::auth::jwt::JwtValidator;
-use crate::plugins::loader::PluginLoader;
+use crate::plugins::loader::{validate_plugin_def, PluginLoader};
 use crate::plugins::manager::PluginManager;
 use crate::utils::config::PluginDef;
+use crate::utils::errors::VeyronError;
 
 pub struct AppState {
     pub manager: Arc<PluginManager>,
@@ -95,6 +96,11 @@ pub async fn start_plugin(
         Some(d) => d,
         None => return StatusCode::NOT_FOUND,
     };
+    match validate_plugin_def(def) {
+        Ok(_) => {}
+        Err(VeyronError::PermissionDenied(_)) => return StatusCode::FORBIDDEN,
+        Err(_) => return StatusCode::UNPROCESSABLE_ENTITY,
+    }
     let config = PluginLoader::config_from_def(def);
     match state.manager.start(config).await {
         Ok(_) => StatusCode::OK,

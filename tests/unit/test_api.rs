@@ -680,6 +680,54 @@ async fn start_unknown_plugin_returns_404() {
 }
 
 #[tokio::test]
+async fn start_plugin_rejects_manifest_requesting_ungranted_permission() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("plugin.json"),
+        r#"{
+            "plugin_id": "restricted",
+            "version": "1.0.0",
+            "permissions": ["audio_stream"],
+            "binary": "restricted",
+            "kernel_compatibility_range": {"min": "0.1.0", "max": "*"}
+        }"#,
+    )
+    .unwrap();
+    let mut def = sleep_def("restricted");
+    def.binary = tmp.path().join("restricted").display().to_string();
+    // Operator's config.yaml grants no permissions — manifest requests audio_stream.
+    def.permissions = vec![];
+    let def = PluginDef {
+        permissions: vec!["network".to_string()],
+        ..def
+    };
+
+    let app = create_router_full(
+        make_manager(make_registry(), make_supervisor()),
+        None,
+        None,
+        None,
+        Instant::now(),
+        None,
+        None,
+        vec![def],
+        5,
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/plugins/restricted/start")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
 async fn start_already_running_plugin_returns_conflict() {
     let registry = make_registry();
     let manager = make_manager(registry, make_supervisor());
