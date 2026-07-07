@@ -88,8 +88,9 @@ Fixed: `start_plugin` now calls `validate_plugin_def(def)` before spawning — `
 **T-06 — C++/Python SDKs never send `EventAck`, events silently dropped**
 `sdk/cpp/include/veyron/plugin.hpp:38-74`, `sdk/cpp/include/veyron/client.hpp`/`client.cpp` (no `ack_event`), `sdk/python/veyron/plugin.py:67-83`, `sdk/python/veyron/client.py`. Only Rust SDK auto-acks (`sdk/rust/src/plugin.rs:134-143`). Kernel marks un-acked events dead after `max_retries` — every event to a stock C++/Python plugin is retried then dropped. Fix: add `on_event`/auto-ack + `ack_event()` to both SDKs.
 
-**T-07 — Rust SDK swallows `on_message` handler errors**
+**T-07 — Rust SDK swallows `on_message` handler errors** ✅ done
 `sdk/rust/src/plugin.rs:144-157`. `Err(_) => break` discards error, `run()`/`serve()` returns `Ok(())` even after handler failure — inconsistent with C++/Python which propagate. Fix: propagate error out of `serve()` after `on_shutdown()`.
+Fixed: `serve()` now captures the `on_message` handler's `Err`, still runs `on_shutdown()`, then returns the captured error (`Ok(())` only when the loop exited cleanly). Test: `sdk/rust/tests/protocol.rs` (`plugin_serve_propagates_on_message_handler_error`).
 
 ### Medium
 
