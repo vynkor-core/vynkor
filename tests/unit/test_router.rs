@@ -628,6 +628,7 @@ async fn poisoned_session_key_cell_still_installs_mac_key() {
         None,
         Some(Arc::clone(&mac_secret)),
         None,
+        None,
         30_000,
         16,
         8192,
@@ -848,5 +849,140 @@ async fn router_rejects_duplicate_plugin_id_registration() {
             "expected PluginRegisterAck(accepted=false), got {:?}",
             other
         ),
+    }
+}
+
+// ── T-04: config.yaml permission allowlist clamps JWT claims ───────────────
+
+const T04_SECRET: &[u8] = b"t04-test-secret-key-for-unit-tests";
+
+fn spawn_router_with_jwt_and_config_perms(
+    registry: Arc<PluginRegistry>,
+    event_bus: Arc<EventBus>,
+    config_permissions: std::collections::HashMap<String, Vec<String>>,
+) -> mpsc::Sender<IncomingMessage> {
+    use veyron::auth::jwt::JwtValidator;
+
+    let (tx, rx) = mpsc::channel::<IncomingMessage>(64);
+    tokio::spawn(MessageRouter::run_with_context(
+        rx,
+        registry,
+        event_bus,
+        Some(Arc::new(JwtValidator::new(T04_SECRET))),
+        std::time::Instant::now(),
+        None,
+        None,
+        None,
+        Some(Arc::new(config_permissions)),
+        None,
+        30_000,
+        16,
+        8192,
+    ));
+    tx
+}
+
+#[tokio::test]
+async fn registration_clamps_jwt_permissions_to_config_allowlist() {
+    let reg = Arc::new(PluginRegistry::new());
+    let bus = Arc::new(EventBus::new());
+    let mut config_permissions = std::collections::HashMap::new();
+    config_permissions.insert(
+        "net-plugin".to_string(),
+        vec!["PERMISSION_NETWORK".to_string()],
+    );
+    let router_tx =
+        spawn_router_with_jwt_and_config_perms(Arc::clone(&reg), bus, config_permissions);
+
+    let (write_tx, mut write_rx) = make_write_pair();
+    // Token claims kernel_admin too, but config.yaml only grants network.
+    let token = crate::jwt_helper::create_test_token(
+        "net-plugin",
+        vec![
+            "PERMISSION_NETWORK".to_string(),
+            "PERMISSION_KERNEL_ADMIN".to_string(),
+        ],
+        T04_SECRET,
+        3600,
+    );
+    let env = Envelope {
+        payload: Some(envelope::Payload::PluginRegister(PluginRegister {
+            plugin_id: "net-plugin".to_string(),
+            jwt_token: token,
+            manifest: Some(dummy_manifest()),
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+
+    router_tx
+        .send(incoming(1, kernel_frame(env), write_tx))
+        .await
+        .unwrap();
+
+    let frame = recv_frame(&mut write_rx).await;
+    let ack_env = decode_envelope(&frame);
+    match ack_env.payload {
+        Some(envelope::Payload::PluginRegisterAck(PluginRegisterAck {
+            accepted,
+            granted_permissions,
+            ..
+        })) => {
+            assert!(accepted);
+            assert_eq!(granted_permissions, vec!["PERMISSION_NETWORK".to_string()]);
+        }
+        other => panic!("expected PluginRegisterAck, got {:?}", other),
+    }
+}
+
+#[tokio::test]
+async fn registration_leaves_permissions_unclamped_for_plugin_not_in_config() {
+    let reg = Arc::new(PluginRegistry::new());
+    let bus = Arc::new(EventBus::new());
+    // No entry for "other-plugin" — same convention as validate_plugin_def's
+    // empty-list case: no restriction.
+    let router_tx = spawn_router_with_jwt_and_config_perms(
+        Arc::clone(&reg),
+        bus,
+        std::collections::HashMap::new(),
+    );
+
+    let (write_tx, mut write_rx) = make_write_pair();
+    let token = crate::jwt_helper::create_test_token(
+        "other-plugin",
+        vec!["PERMISSION_KERNEL_ADMIN".to_string()],
+        T04_SECRET,
+        3600,
+    );
+    let env = Envelope {
+        payload: Some(envelope::Payload::PluginRegister(PluginRegister {
+            plugin_id: "other-plugin".to_string(),
+            jwt_token: token,
+            manifest: Some(dummy_manifest()),
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+
+    router_tx
+        .send(incoming(1, kernel_frame(env), write_tx))
+        .await
+        .unwrap();
+
+    let frame = recv_frame(&mut write_rx).await;
+    let ack_env = decode_envelope(&frame);
+    match ack_env.payload {
+        Some(envelope::Payload::PluginRegisterAck(PluginRegisterAck {
+            accepted,
+            granted_permissions,
+            ..
+        })) => {
+            assert!(accepted);
+            assert_eq!(
+                granted_permissions,
+                vec!["PERMISSION_KERNEL_ADMIN".to_string()]
+            );
+        }
+        other => panic!("expected PluginRegisterAck, got {:?}", other),
     }
 }

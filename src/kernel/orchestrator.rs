@@ -138,6 +138,15 @@ impl Kernel {
             .jwt_secret
             .as_ref()
             .map(|s| Arc::new(s.as_bytes().to_vec()));
+        // T-04: operator-declared permission allowlist per plugin id, used to
+        // clamp JWT-claimed permissions at registration (see protocol.rs).
+        let config_permissions = Arc::new(
+            config
+                .plugins
+                .iter()
+                .map(|d| (d.id.clone(), d.permissions.clone()))
+                .collect::<std::collections::HashMap<_, _>>(),
+        );
         tokio::spawn(MessageRouter::run_with_context(
             router_rx,
             Arc::clone(&registry),
@@ -147,6 +156,7 @@ impl Kernel {
             config_path,
             event_store.clone(),
             mac_secret,
+            Some(config_permissions),
             config.ipc_rate_limit_rps,
             config.action_timeout_ms,
             config.max_conn_errors,

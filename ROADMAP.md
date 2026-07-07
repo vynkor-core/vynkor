@@ -77,8 +77,9 @@ Fixed: CI (`.github/workflows/ci.yml`) now installs C++ SDK build deps and build
 **T-03 — Single-threaded IPC router stalls kernel-wide on one slow plugin**
 `src/ipc/protocol.rs:648-654` (`forward`), `:725-734` (`broadcast`), `src/events/bus.rs:127-153` (`deliver`). All fan-out sends `.await` a 50ms timeout inline on the shared router task; `broadcast` loops all plugins = `O(n)*50ms`. One non-draining plugin stalls routing for everyone. Fix: spawn per-target send tasks or use `try_send` + bounded retry queue instead of blocking the router loop. Needs design thought — own workstream.
 
-**T-04 — `config.yaml` permissions not bound to runtime JWT claims**
+**T-04 — `config.yaml` permissions not bound to runtime JWT claims** ✅ done
 `src/utils/config.rs:30-34`, `src/plugins/loader.rs:225-259`, `src/ipc/protocol.rs:245-278`, `src/auth/permissions.rs:17-60`. Operator's `config.yaml permissions:` list only checked at boot (`validate_plugin_def`); runtime enforcement trusts JWT `claims.permissions` verbatim, no link back. A plugin scoped to `network` in config.yaml can still get `kernel_admin` via its JWT. Fix: mint JWT/capability token from config.yaml list, or re-validate claims against `PluginDef.permissions` at registration.
+Fixed: `Kernel::run_with_components` (`src/kernel/orchestrator.rs`) builds a `plugin_id → config.yaml permissions` map and threads it into `MessageRouter::run_with_context` as `config_permissions`. At `PluginRegister` handling (`src/ipc/protocol.rs`), after JWT claims are applied to the manifest, permissions are clamped to the operator's allowlist for that plugin id — same "empty/absent list = unrestricted" convention as `validate_plugin_def`. Plugin ids not declared in config.yaml are left unclamped (back-compat for dynamically-registered/test plugins). Tests: `tests/unit/test_router.rs` (`registration_clamps_jwt_permissions_to_config_allowlist`, `registration_leaves_permissions_unclamped_for_plugin_not_in_config`).
 
 **T-05 — `POST /plugins/:id/start` bypasses `validate_plugin_def`** ✅ done
 `src/api/routes.rs:87-103`, `src/plugins/loader.rs:41-148`. HTTP start path skips kernel-compat/permission cross-check that boot-time `load_all` enforces. A plugin rejected at boot can still be started later via HTTP. Fix: call `validate_plugin_def` inside `start_plugin`, 422/403 on failure.
@@ -142,7 +143,7 @@ Fixed: `start_plugin` now calls `validate_plugin_def(def)` before spawning — `
 | 6 Network plugin protocol support | R6-01..04 | Candidate, unscheduled | ~1 decision + 1 design doc + impl TBD |
 | Audit remediation | T-01..20 | 2 Critical, 5 High, 11 Medium, 2 Low | T-01/T-05 fix together; T-03 needs own design; rest are independent |
 
-**Ship gate:** none set yet — R6-03's open question and R6-04's design doc should resolve before effort estimates firm up. T-01/T-05 (HTTP authz/validation bypass) ✅ landed — was the live privilege-escalation path on any deployment exposing the REST API.
+**Ship gate:** none set yet — R6-03's open question and R6-04's design doc should resolve before effort estimates firm up. T-01/T-05 (HTTP authz/validation bypass) ✅ landed — was the live privilege-escalation path on any deployment exposing the REST API. T-02 (C++ SDK integration coverage) and T-04 (config.yaml/JWT permission binding) ✅ landed.
 
 ## Definition of Done
 

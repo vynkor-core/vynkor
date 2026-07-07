@@ -53,6 +53,7 @@ impl MessageRouter {
             None,
             None,
             None,
+            None,
             defaults.action_timeout_ms,
             defaults.max_conn_errors,
             defaults.max_tracked_error_conns,
@@ -70,6 +71,13 @@ impl MessageRouter {
         config_path: Option<String>,
         event_store: Option<Arc<EventStore>>,
         mac_secret: Option<Arc<Vec<u8>>>,
+        // T-04: operator-declared `config.yaml` `permissions:` allowlist per
+        // plugin id. Registration clamps JWT/manifest-claimed permissions to
+        // this list so a token can't grant more than the operator configured.
+        // `None`/missing-entry plugins (not declared in config.yaml) are left
+        // unclamped — matches `validate_plugin_def`'s existing boot-time rule
+        // that an absent/empty list means "no restriction".
+        config_permissions: Option<Arc<HashMap<String, Vec<String>>>>,
         ipc_rate_limit_rps: Option<u32>,
         action_timeout_ms: u32,
         max_conn_errors: u32,
@@ -174,6 +182,7 @@ impl MessageRouter {
                         config_path.as_deref(),
                         event_store.as_deref(),
                         &mac_secret,
+                        config_permissions.as_deref(),
                         action_timeout_ms,
                     )
                     .await
@@ -219,6 +228,7 @@ impl MessageRouter {
         config_path: Option<&str>,
         event_store: Option<&EventStore>,
         mac_secret: &Option<Arc<Vec<u8>>>,
+        config_permissions: Option<&HashMap<String, Vec<String>>>,
         action_timeout_ms: u32,
     ) -> bool {
         let envelope = match Envelope::decode(msg.frame.payload.as_ref()) {
@@ -266,6 +276,24 @@ impl MessageRouter {
                             Self::send_register_reject(&msg.write_tx, &format!("auth failed: {e}"))
                                 .await;
                             return true;
+                        }
+                    }
+                }
+
+                // T-04: clamp to the operator's config.yaml allowlist for this
+                // plugin id, so a JWT can't grant more than config.yaml allows.
+                // No entry for this id (not config.yaml-declared) or an empty
+                // list (operator placed no restriction) leaves it unclamped —
+                // same convention as `validate_plugin_def`.
+                if let Some(allowed) = config_permissions.and_then(|m| m.get(&plugin_id)) {
+                    if !allowed.is_empty() {
+                        let before = manifest.permissions.len();
+                        manifest.permissions.retain(|p| allowed.contains(p));
+                        if manifest.permissions.len() < before {
+                            warn!(
+                                plugin_id = %plugin_id,
+                                "claimed permissions exceed config.yaml allowlist — clamped"
+                            );
                         }
                     }
                 }
