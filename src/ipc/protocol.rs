@@ -770,15 +770,12 @@ impl MessageRouter {
                 payload: msg.frame.payload.clone(),
                 mac: None,
             };
-            match timeout(WRITE_SEND_TIMEOUT, entry.write_tx.send(out_frame(frame))).await {
-                Ok(_) => {}
-                Err(_) => {
-                    warn!(
-                        plugin_id = %entry.plugin_id,
-                        "broadcast timeout: slow plugin skipped"
-                    );
-                    counter!("broadcast_timeouts_total").increment(1);
-                }
+            if entry.write_tx.try_send(out_frame(frame)).is_err() {
+                warn!(
+                    plugin_id = %entry.plugin_id,
+                    "broadcast: target channel full, frame dropped"
+                );
+                counter!("broadcast_timeouts_total").increment(1);
             }
         }
         false

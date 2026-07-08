@@ -1093,3 +1093,65 @@ async fn unregistered_connection_error_budget_survives_map_prune() {
         "unregistered connection must still be throttled after crossing the error budget"
     );
 }
+
+#[tokio::test]
+async fn broadcast_to_many_stuck_targets_does_not_multiply_delay() {
+    let reg = Arc::new(PluginRegistry::new());
+    let bus = Arc::new(EventBus::new());
+
+    // Five stuck targets: each capacity-1, pre-filled, never drained.
+    // Keep receivers alive throughout the test.
+    let mut _stuck_rxs = Vec::new();
+    for i in 0..5u64 {
+        let (stuck_tx, stuck_rx) = mpsc::channel::<Outbound>(1);
+        stuck_tx
+            .send(out_frame(make_frame("x", b"prefill".to_vec())))
+            .await
+            .unwrap();
+        reg.register(format!("stuck{i}"), 100 + i, dummy_manifest(), stuck_tx)
+            .unwrap();
+        _stuck_rxs.push(stuck_rx);
+    }
+
+    let (a_tx, _a_rx) = make_write_pair();
+
+    // One non-stuck target to receive the broadcast and signal completion.
+    let (fast_tx, mut fast_rx) = make_write_pair();
+    reg.register("fast".to_string(), 50, dummy_manifest(), fast_tx)
+        .unwrap();
+
+    reg.register(
+        "sender".to_string(),
+        1,
+        PluginManifest {
+            permissions: vec!["PERMISSION_IPC_SEND".to_string()],
+            ipc_targets: (0..5u64).map(|i| format!("stuck{i}")).chain(std::iter::once("fast".to_string())).collect(),
+            ..Default::default()
+        },
+        a_tx.clone(),
+    )
+    .unwrap();
+
+    let router_tx = spawn_router(Arc::clone(&reg), bus);
+
+    let start = std::time::Instant::now();
+    router_tx
+        .send(incoming(1, make_frame("*", b"broadcast payload".to_vec()), a_tx))
+        .await
+        .unwrap();
+
+    // Wait for the broadcast to arrive at the non-stuck target.
+    // This ensures the broadcast loop has completed processing all targets.
+    let _ = timeout(Duration::from_secs(1), fast_rx.recv())
+        .await
+        .expect("timed out waiting for broadcast")
+        .expect("channel closed");
+
+    let elapsed = start.elapsed();
+
+    assert!(
+        elapsed < Duration::from_millis(50),
+        "broadcast to 5 stuck subscribers must not cost 5 * 50ms, took {:?}",
+        elapsed
+    );
+}
