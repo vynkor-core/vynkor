@@ -77,3 +77,15 @@ def test_uncompressed_roundtrip_unaffected():
     payload = b"small payload"
     frame = pack_frame("kernel", payload)
     assert read_frame(io.BytesIO(frame)) == payload
+
+
+def test_read_frame_rejects_garbage_compressed_payload():
+    """T-14 (Python fuzz half): a FLAG_COMPRESSED frame whose payload isn't
+    valid zstd must raise ValueError like every other malformed-frame path,
+    not let zstandard.ZstdError escape uninstructed."""
+    garbage = b"\xff" * 64
+    target_bytes = b"kernel".ljust(32, b"\x00")[:32]
+    crc = crc32(garbage) & 0xFFFFFFFF
+    header = struct.pack(HEADER_FMT, MAGIC, FLAG_COMPRESSED, len(garbage), target_bytes, crc)
+    with pytest.raises(ValueError):
+        read_frame(io.BytesIO(header + garbage))
