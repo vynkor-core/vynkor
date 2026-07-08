@@ -693,14 +693,11 @@ impl MessageRouter {
                     payload: msg.frame.payload.clone(),
                     mac: None,
                 };
-                // Bounded send: a slow target must not block the router. Dropping
-                // one frame for a non-draining plugin is not the sender's fault, so
-                // this is not counted against the sender's error budget.
-                if timeout(WRITE_SEND_TIMEOUT, entry.write_tx.send(out_frame(frame)))
-                    .await
-                    .is_err()
-                {
-                    warn!(target = %plugin_id, "forward timeout: slow target, frame dropped");
+                // Non-blocking send: a slow/full target must not block the router.
+                // Dropping one frame for a non-draining plugin is not the sender's
+                // fault, so this is not counted against the sender's error budget.
+                if entry.write_tx.try_send(out_frame(frame)).is_err() {
+                    warn!(target = %plugin_id, "forward: target channel full, frame dropped");
                     counter!("ipc_forward_timeouts_total").increment(1);
                 }
                 false

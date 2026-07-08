@@ -229,6 +229,54 @@ async fn slow_target_does_not_stall_router() {
 }
 
 #[tokio::test]
+async fn forward_to_full_channel_returns_without_waiting() {
+    let reg = Arc::new(PluginRegistry::new());
+    let bus = Arc::new(EventBus::new());
+
+    // stuck target: capacity-1 channel, pre-filled and never drained.
+    let (stuck_tx, _stuck_rx) = mpsc::channel::<Outbound>(1);
+    stuck_tx
+        .send(out_frame(make_frame("x", b"prefill".to_vec())))
+        .await
+        .unwrap();
+    reg.register("stuck".to_string(), 2, dummy_manifest(), stuck_tx)
+        .unwrap();
+
+    let (a_tx, _a_rx) = make_write_pair();
+    reg.register(
+        "sender".to_string(),
+        1,
+        ipc_manifest_with_targets(vec!["stuck"]),
+        a_tx.clone(),
+    )
+    .unwrap();
+
+    let router_tx = spawn_router(Arc::clone(&reg), bus);
+
+    let start = std::time::Instant::now();
+    router_tx
+        .send(incoming(1, plug_frame("stuck", b"to-stuck".to_vec()), a_tx.clone()))
+        .await
+        .unwrap();
+
+    // Sending a second message to the SAME router channel and waiting for the
+    // router to accept it (mpsc send completing) proves the router's internal
+    // loop iteration for "stuck" has finished — if forward() blocked 50ms
+    // internally, this whole round trip takes >= 50ms.
+    router_tx
+        .send(incoming(1, plug_frame("stuck", b"to-stuck-2".to_vec()), a_tx))
+        .await
+        .unwrap();
+
+    assert!(
+        start.elapsed() < Duration::from_millis(20),
+        "two forwards to a full channel must not block the router on the 50ms \
+         send timeout, took {:?}",
+        start.elapsed()
+    );
+}
+
+#[tokio::test]
 async fn router_denies_forward_without_ipc_permission() {
     let reg = Arc::new(PluginRegistry::new());
     let bus = Arc::new(EventBus::new());
