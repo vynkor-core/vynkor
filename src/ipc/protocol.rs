@@ -11,7 +11,8 @@ use crate::kernel::commands::{CommandHandler, CommandOutcome};
 use crate::plugins::registry::{ActionLookup, PendingAction, PluginRegistry};
 use crate::proto::veyron::{
     envelope, ActionRequest, ActionResponse, ActionStatus, Envelope, ErrorCode, ErrorMessage,
-    Event, KernelCommandAck, PermissionType, PluginRegisterAck, Pong,
+    Event, EventPublishAck, EventPublishStatus, KernelCommandAck, PermissionType,
+    PluginRegisterAck, Pong,
 };
 use governor::{DefaultKeyedRateLimiter, Quota, RateLimiter};
 use metrics::{counter, histogram};
@@ -427,6 +428,40 @@ impl MessageRouter {
                 if let Some(entry) = registry.get_by_conn_id(msg.conn_id) {
                     event_bus.unsubscribe(&entry.plugin_id, unsub.event_types);
                 }
+                false
+            }
+
+            Some(envelope::Payload::EventPublish(_req)) => {
+                let sender_id = registry
+                    .get_by_conn_id(msg.conn_id)
+                    .map(|e| e.plugin_id.clone())
+                    .unwrap_or_default();
+
+                let (status, event_id) = if check_permission(
+                    registry,
+                    &sender_id,
+                    PermissionType::PermissionEventPublish,
+                )
+                .is_err()
+                {
+                    (
+                        EventPublishStatus::EventPublishPermissionDeny,
+                        String::new(),
+                    )
+                } else {
+                    // Task 3 fills in the publish path here.
+                    (EventPublishStatus::EventPublishUnknown, String::new())
+                };
+
+                let ack = Envelope {
+                    payload: Some(envelope::Payload::EventPublishAck(EventPublishAck {
+                        event_id,
+                        status: status as i32,
+                        error: String::new(),
+                    })),
+                    ..Default::default()
+                };
+                Self::send_envelope(&msg.write_tx, ack).await;
                 false
             }
 
