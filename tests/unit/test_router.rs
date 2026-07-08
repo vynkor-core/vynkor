@@ -1115,17 +1115,19 @@ async fn broadcast_to_many_stuck_targets_does_not_multiply_delay() {
 
     let (a_tx, _a_rx) = make_write_pair();
 
-    // One non-stuck target to receive the broadcast and signal completion.
-    let (fast_tx, mut fast_rx) = make_write_pair();
-    reg.register("fast".to_string(), 50, dummy_manifest(), fast_tx)
+    // Register a separate "pong" target that is NOT part of the broadcast.
+    // It will receive a unicast forward() call after the broadcast completes.
+    let (pong_tx, mut pong_rx) = make_write_pair();
+    reg.register("pong".to_string(), 50, dummy_manifest(), pong_tx)
         .unwrap();
 
+    // Sender with IPC permission and ipc_targets including all stuck targets and pong.
     reg.register(
         "sender".to_string(),
         1,
         PluginManifest {
             permissions: vec!["PERMISSION_IPC_SEND".to_string()],
-            ipc_targets: (0..5u64).map(|i| format!("stuck{i}")).chain(std::iter::once("fast".to_string())).collect(),
+            ipc_targets: (0..5u64).map(|i| format!("stuck{i}")).chain(std::iter::once("pong".to_string())).collect(),
             ..Default::default()
         },
         a_tx.clone(),
@@ -1135,16 +1137,30 @@ async fn broadcast_to_many_stuck_targets_does_not_multiply_delay() {
     let router_tx = spawn_router(Arc::clone(&reg), bus);
 
     let start = std::time::Instant::now();
+
+    // Message 1: Broadcast to all targets (including 5 stuck ones).
+    // This will attempt to send to all registered targets, but stuck ones will fail.
     router_tx
-        .send(incoming(1, make_frame("*", b"broadcast payload".to_vec()), a_tx))
+        .send(incoming(1, make_frame("*", b"broadcast payload".to_vec()), a_tx.clone()))
         .await
         .unwrap();
 
-    // Wait for the broadcast to arrive at the non-stuck target.
-    // This ensures the broadcast loop has completed processing all targets.
-    let _ = timeout(Duration::from_secs(1), fast_rx.recv())
+    // Message 2: Unicast forward to "pong" from the same sender.
+    // Because MessageRouter processes messages one at a time from a single
+    // mpsc::Receiver, this message 2 will only be dequeued and processed
+    // after message 1's broadcast() call has fully returned (including all
+    // 5 stuck send attempts). Thus, when pong receives its frame, the entire
+    // broadcast loop is guaranteed complete, independent of DashMap iteration order.
+    router_tx
+        .send(incoming(1, make_frame("pong", b"pong payload".to_vec()), a_tx))
         .await
-        .expect("timed out waiting for broadcast")
+        .unwrap();
+
+    // Wait for pong's receiver to get the forwarded frame.
+    // This proves the broadcast loop has fully completed.
+    let _ = timeout(Duration::from_secs(1), pong_rx.recv())
+        .await
+        .expect("timed out waiting for pong forward")
         .expect("channel closed");
 
     let elapsed = start.elapsed();
