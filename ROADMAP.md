@@ -143,8 +143,9 @@ Fixed: ported `FLAG_FRAGMENTED` send/receive to the C++ SDK, mirroring the rust/
 
 ### Low
 
-**T-19 — Action permission model checks provider only, not requester**
+**T-19 — Action permission model checks provider only, not requester** ✅ done
 `src/auth/permissions.rs:10-15`, `src/ipc/protocol.rs:413-430`. Unprivileged plugin can transitively trigger e.g. network requests via any provider with `PERMISSION_NETWORK`. May be intentional (provider-declares-authorization model) — needs explicit design decision/doc note, not silent assumption.
+Decision: not intentional — closed as a permission-laundering gap. The provider-declares-authorization model from R5-07 still holds for actions with no entry in `required_permission_for_action` (undeclared/unrestricted actions), but for actions that *do* have a required permission, the provider's grant authorizes it to *perform* the action, not for arbitrary callers to *invoke* it. Fixed: the `ActionLookup::Found` permission-deny guard (`src/ipc/protocol.rs`) now checks `required_permission_for_action` against both `provider.plugin_id` and the requester's `sender_id`, denying with `ActionPermissionDeny` if either lacks it. Doc comments in `src/auth/permissions.rs` and inline at the routing site record the decision so it isn't a silent assumption again. Test: `tests/integration/test_kernel_commands.rs` (`kernel_denies_action_when_requester_lacks_required_permission`).
 
 **T-20 — `strncpy` silently truncates long socket paths in C++ client** ✅ done
 `sdk/cpp/src/client.cpp:26-28`. Not an overflow, but truncation is silent rather than rejected. Fix: explicit length check, throw if too long.
@@ -159,7 +160,7 @@ Fixed: `VeyronClient::connect()` now checks `socket_path_.size() >= sizeof(sun_p
 | 6 Network plugin protocol support | R6-01..04 | Candidate, unscheduled | ~1 decision + 1 design doc + impl TBD |
 | Audit remediation | T-01..20 | 2 Critical, 5 High, 11 Medium, 2 Low | T-01/T-05 fix together; T-03 needs own design; rest are independent; T-01,T-02,T-04..T-15,T-17,T-18,T-20 ✅ done |
 
-**Ship gate:** none set yet — R6-03's open question and R6-04's design doc should resolve before effort estimates firm up. T-01/T-05 (HTTP authz/validation bypass) ✅ landed — was the live privilege-escalation path on any deployment exposing the REST API. T-02 (C++ SDK integration coverage), T-04 (config.yaml/JWT permission binding), T-06 (C++/Python `EventAck`), T-07 (Rust SDK error propagation), T-08 (error-budget prune staleness), T-09 (WS connection cap), T-10 (`get_plugin_logs` lines clamp), T-11 (marketplace maintainer signature), T-12 (JWT secret min-strength check), T-13 (C++ malformed-frame unit tests), T-14 (C++ + Python fuzz harnesses), T-15 (C++/Python slow-loris timeout), T-17 (proto drift CI check), T-18 (C++ fragmentation support), and T-20 (strncpy path-length check) ✅ landed. Remaining open: T-16 (deferred to next protocol version bump), T-19 (needs design decision).
+**Ship gate:** none set yet — R6-03's open question and R6-04's design doc should resolve before effort estimates firm up. T-01/T-05 (HTTP authz/validation bypass) ✅ landed — was the live privilege-escalation path on any deployment exposing the REST API. T-02 (C++ SDK integration coverage), T-04 (config.yaml/JWT permission binding), T-06 (C++/Python `EventAck`), T-07 (Rust SDK error propagation), T-08 (error-budget prune staleness), T-09 (WS connection cap), T-10 (`get_plugin_logs` lines clamp), T-11 (marketplace maintainer signature), T-12 (JWT secret min-strength check), T-13 (C++ malformed-frame unit tests), T-14 (C++ + Python fuzz harnesses), T-15 (C++/Python slow-loris timeout), T-17 (proto drift CI check), T-18 (C++ fragmentation support), T-19 (requester-side action permission check), and T-20 (strncpy path-length check) ✅ landed. Remaining open: T-16 (deferred to next protocol version bump).
 
 ## Definition of Done
 

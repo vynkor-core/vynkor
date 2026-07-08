@@ -445,9 +445,22 @@ impl MessageRouter {
                     .unwrap_or_default();
 
                 // R5-07 (option b): route to a plugin that declared this action in
-                // its manifest — "declared it" is the entire authorization model,
-                // no extra permission check. Ambiguous declarations (>1 provider)
-                // are refused rather than arbitrarily resolved.
+                // its manifest — "declared it" is the entire authorization model
+                // for actions with no entry in `required_permission_for_action`.
+                // Ambiguous declarations (>1 provider) are refused rather than
+                // arbitrarily resolved.
+                //
+                // T-19: for actions that *do* have a required permission, that
+                // permission is checked on the requester as well as the provider.
+                // Checking the provider alone lets any plugin launder a
+                // privileged action through a permitted provider (e.g. an
+                // unprivileged plugin calling `http_request` on the `network`
+                // provider gets a real network request performed on its
+                // behalf) — the provider's grant is authorization for the
+                // provider to *perform* the action, not for arbitrary callers
+                // to *invoke* it. Actions with no required permission are
+                // unaffected: the provider-declares-authorization model still
+                // applies to them as-is.
                 let not_found_status = match registry.find_action_provider(&req.action) {
                     ActionLookup::NotFound => Some(ActionStatus::ActionNotFound),
                     ActionLookup::Ambiguous(providers) => {
@@ -461,6 +474,7 @@ impl MessageRouter {
                     ActionLookup::Found(provider)
                         if required_permission_for_action(&req.action).is_some_and(|perm| {
                             check_permission(registry, &provider.plugin_id, perm).is_err()
+                                || check_permission(registry, &sender_id, perm).is_err()
                         }) =>
                     {
                         Some(ActionStatus::ActionPermissionDeny)

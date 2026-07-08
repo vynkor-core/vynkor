@@ -2,11 +2,13 @@ use crate::plugins::registry::PluginRegistry;
 use crate::proto::veyron::PermissionType;
 use crate::utils::errors::VeyronError;
 
-/// Maps a kernel-routed action name to the permission its provider must have
-/// declared. Actions not listed here are unrestricted (R5-07: declared the
-/// action is authorization enough). New sensitive actions must be added here
-/// — this is the deny-by-omission escape hatch closed, not opened, by adding
-/// an entry.
+/// Maps a kernel-routed action name to the permission both its provider and
+/// its requester must have declared (T-19: checking the provider alone lets
+/// an unprivileged plugin launder the action through a permitted provider).
+/// Actions not listed here are unrestricted (R5-07: declared the action is
+/// authorization enough, no requester check). New sensitive actions must be
+/// added here — this is the deny-by-omission escape hatch closed, not
+/// opened, by adding an entry.
 pub fn required_permission_for_action(action: &str) -> Option<PermissionType> {
     match action {
         "http_request" => Some(PermissionType::PermissionNetwork),

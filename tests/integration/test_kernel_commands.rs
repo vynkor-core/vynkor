@@ -363,6 +363,61 @@ async fn kernel_denies_action_when_provider_lacks_required_permission() {
 }
 
 #[tokio::test]
+async fn kernel_denies_action_when_requester_lacks_required_permission() {
+    // T-19: even when the provider legitimately holds PERMISSION_NETWORK, an
+    // unprivileged requester must not be able to launder a network request
+    // through it by calling the declared action directly.
+    let (shutdown_tx, _registry, _bus) =
+        start_kernel("/tmp/veyron_integ_action_perm_deny_requester.sock", 19219).await;
+
+    let mut provider = VeyronClient::connect("/tmp/veyron_integ_action_perm_deny_requester.sock")
+        .await
+        .unwrap();
+    provider
+        .register(
+            "network-provider",
+            PluginManifest {
+                actions: vec!["http_request".to_string()],
+                permissions: vec!["PERMISSION_NETWORK".to_string()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let mut requester = VeyronClient::connect("/tmp/veyron_integ_action_perm_deny_requester.sock")
+        .await
+        .unwrap();
+    requester
+        .register("unprivileged-requester", PluginManifest::default())
+        .await
+        .unwrap();
+
+    let resp = timeout(
+        Duration::from_secs(2),
+        requester.send_action("http_request", br#"{"url":"http://example.com"}"#, 2000),
+    )
+    .await
+    .expect("timed out")
+    .expect("send_action failed");
+
+    assert_eq!(
+        resp.status,
+        ActionStatus::ActionPermissionDeny as i32,
+        "requester without PERMISSION_NETWORK must not be able to invoke http_request \
+         even via a provider that legitimately holds the permission"
+    );
+
+    let never_received = timeout(Duration::from_millis(300), provider.recv()).await;
+    assert!(
+        never_received.is_err(),
+        "provider must never receive the ActionRequest when the requester lacks the permission"
+    );
+
+    let _ = shutdown_tx.send(());
+}
+
+#[tokio::test]
 async fn action_response_from_non_provider_plugin_is_rejected_not_proxied() {
     // AUDIT (Critical): the internal correlation id handed to the provider
     // is minted from a global, monotonic, zero-entropy counter
