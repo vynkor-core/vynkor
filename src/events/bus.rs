@@ -9,6 +9,7 @@ use prost::Message;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
 /// Event delivery is fire-and-forget: if a subscriber does not drain its write
@@ -128,20 +129,16 @@ impl EventBus {
             match registry.get(&plugin_id) {
                 Some(entry) => {
                     let frame = build_frame(payload.clone(), &plugin_id);
-                    // Bounded send: a slow subscriber must not stall the publisher.
-                    match tokio::time::timeout(
-                        EVENT_SEND_TIMEOUT,
-                        entry.write_tx.send(out_frame(frame)),
-                    )
-                    .await
-                    {
-                        Ok(Ok(())) => {}
-                        Ok(Err(_)) => {
+                    // Non-blocking send: a slow/full subscriber must not stall the
+                    // publisher or any other subscriber in this fan-out loop.
+                    match entry.write_tx.try_send(out_frame(frame)) {
+                        Ok(()) => {}
+                        Err(mpsc::error::TrySendError::Closed(_)) => {
                             // receiver dropped — plugin is disconnecting
                             counter!("events_dropped_total", "reason" => "channel_closed")
                                 .increment(1);
                         }
-                        Err(_) => {
+                        Err(mpsc::error::TrySendError::Full(_)) => {
                             warn!(
                                 plugin_id = %plugin_id,
                                 event_type = %event_type,

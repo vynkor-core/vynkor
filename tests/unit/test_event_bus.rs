@@ -189,3 +189,30 @@ async fn multiple_subscribers_all_receive_event() {
     assert!(rx1.recv().await.is_some(), "p1 must get event");
     assert!(rx2.recv().await.is_some(), "p2 must get event");
 }
+
+#[tokio::test]
+async fn publish_to_many_stuck_subscribers_does_not_multiply_delay() {
+    let bus = EventBus::new();
+    let registry = make_registry();
+
+    for i in 0..5u64 {
+        let (stuck_tx, _stuck_rx) =
+            mpsc::channel::<veyron::ipc::connection::Outbound>(1);
+        stuck_tx
+            .send(veyron::ipc::connection::out_frame(empty_frame()))
+            .await
+            .unwrap();
+        registry
+            .register(format!("stuck{i}"), i, PluginManifest::default(), stuck_tx)
+            .unwrap();
+        bus.subscribe(&format!("stuck{i}"), vec!["e".to_string()]);
+    }
+
+    let start = std::time::Instant::now();
+    bus.publish(make_event("e"), &registry).await;
+    assert!(
+        start.elapsed() < Duration::from_millis(50),
+        "publish to 5 stuck subscribers must not cost 5 * 50ms, took {:?}",
+        start.elapsed()
+    );
+}
