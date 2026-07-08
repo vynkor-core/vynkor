@@ -129,6 +129,11 @@ pub async fn restart_plugin(
     }
 }
 
+/// Upper bound on `?lines=` regardless of the plugin's ring-buffer capacity —
+/// keeps the query param from being read as an implicit trust of the caller
+/// rather than an explicit contract (T-10).
+const MAX_LOG_LINES: usize = 10_000;
+
 #[derive(Deserialize)]
 pub struct LogsQuery {
     pub lines: Option<usize>,
@@ -142,6 +147,6 @@ pub async fn get_plugin_logs(
     if state.manager.get(&id).is_none() && !state.manager.is_supervised(&id) {
         return Err(StatusCode::NOT_FOUND);
     }
-    let n = q.lines.unwrap_or(100);
+    let n = q.lines.unwrap_or(100).min(MAX_LOG_LINES);
     Ok(Json(state.manager.logs(&id, n).await))
 }

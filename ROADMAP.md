@@ -103,8 +103,9 @@ Fixed: `error_counts` now keyed `conn_id -> (count, last_error_at)`; the size-tr
 `src/api/websocket.rs:47`, vs. `src/ipc/server.rs:80-87` (UDS has `max_connections`). Fix: add `max_ws_connections` config, enforce pre-upgrade.
 Fixed: new `Config::max_ws_connections` (default 1024, `src/utils/config.rs`), threaded through `ApiServer`/`create_router_full` into `WsGateway` (`src/api/websocket.rs`). `ws_handler` reserves a slot via `open_conns.fetch_add` before calling `.on_upgrade`, backing out and returning 503 if it crossed the cap — same fetch-then-correct pattern as the IPC rate limiter, avoiding a check-then-increment race. Slot is released when `handle_socket` returns. Test: `tests/integration/test_websocket.rs` (`ws_upgrade_rejected_once_connection_cap_reached`).
 
-**T-10 — `get_plugin_logs` `lines` param unclamped**
+**T-10 — `get_plugin_logs` `lines` param unclamped** ✅ done
 `src/api/routes.rs:126-141`. Bounded only incidentally by ring buffer size. Fix: explicit `min(n, MAX_LOG_LINES)`.
+Fixed: `src/api/routes.rs` clamps `?lines=` to a new `MAX_LOG_LINES` (10,000) constant via `.min()`, independent of the supervisor's own ring-buffer capacity. Test: `tests/unit/test_api.rs` (`logs_endpoint_clamps_huge_lines_param_instead_of_erroring`).
 
 **T-11 — Marketplace has no signature independent of registry.json's own hash**
 `src/marketplace/installer.rs:123-131`, `src/marketplace/registry.rs:10-11`. sha256 check proves nothing about publisher trust if the serving channel is compromised. Fix: maintainer-signed manifest, pinned public key.
@@ -145,9 +146,9 @@ Fixed: new `Config::max_ws_connections` (default 1024, `src/utils/config.rs`), t
 | Phase | Items | Severity | Est. effort |
 |-------|-------|----------|--------------|
 | 6 Network plugin protocol support | R6-01..04 | Candidate, unscheduled | ~1 decision + 1 design doc + impl TBD |
-| Audit remediation | T-01..20 | 2 Critical, 5 High, 11 Medium, 2 Low | T-01/T-05 fix together; T-03 needs own design; rest are independent |
+| Audit remediation | T-01..20 | 2 Critical, 5 High, 11 Medium, 2 Low | T-01/T-05 fix together; T-03 needs own design; rest are independent; T-01,T-02,T-04..T-10 ✅ done |
 
-**Ship gate:** none set yet — R6-03's open question and R6-04's design doc should resolve before effort estimates firm up. T-01/T-05 (HTTP authz/validation bypass) ✅ landed — was the live privilege-escalation path on any deployment exposing the REST API. T-02 (C++ SDK integration coverage), T-04 (config.yaml/JWT permission binding), T-06 (C++/Python `EventAck`), T-07 (Rust SDK error propagation), T-08 (error-budget prune staleness), and T-09 (WS connection cap) ✅ landed.
+**Ship gate:** none set yet — R6-03's open question and R6-04's design doc should resolve before effort estimates firm up. T-01/T-05 (HTTP authz/validation bypass) ✅ landed — was the live privilege-escalation path on any deployment exposing the REST API. T-02 (C++ SDK integration coverage), T-04 (config.yaml/JWT permission binding), T-06 (C++/Python `EventAck`), T-07 (Rust SDK error propagation), T-08 (error-budget prune staleness), T-09 (WS connection cap), and T-10 (`get_plugin_logs` lines clamp) ✅ landed.
 
 ## Definition of Done
 

@@ -388,6 +388,28 @@ async fn logs_endpoint_requires_auth_when_jwt_secret_set() {
 }
 
 #[tokio::test]
+async fn logs_endpoint_clamps_huge_lines_param_instead_of_erroring() {
+    let registry = make_registry();
+    register(&registry, "guarded", 1);
+    let app = create_router(make_manager(registry, make_supervisor()), None);
+
+    // T-10: `lines` was bounded only incidentally by the ring buffer's own
+    // capacity. A caller-supplied `usize::MAX` must still be accepted (clamped
+    // server-side), not rejected or used to drive an oversized allocation.
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/plugins/guarded/logs?lines={}", usize::MAX))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_string(res.into_body()).await, "[]");
+}
+
+#[tokio::test]
 async fn read_only_endpoints_open_without_token() {
     const SECRET: &[u8] = b"test-secret";
     let validator = Arc::new(JwtValidator::new(SECRET));
