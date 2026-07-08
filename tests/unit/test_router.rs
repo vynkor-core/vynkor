@@ -255,7 +255,11 @@ async fn forward_to_full_channel_returns_without_waiting() {
 
     let start = std::time::Instant::now();
     router_tx
-        .send(incoming(1, plug_frame("stuck", b"to-stuck".to_vec()), a_tx.clone()))
+        .send(incoming(
+            1,
+            plug_frame("stuck", b"to-stuck".to_vec()),
+            a_tx.clone(),
+        ))
         .await
         .unwrap();
 
@@ -264,7 +268,11 @@ async fn forward_to_full_channel_returns_without_waiting() {
     // loop iteration for "stuck" has finished — if forward() blocked 50ms
     // internally, this whole round trip takes >= 50ms.
     router_tx
-        .send(incoming(1, plug_frame("stuck", b"to-stuck-2".to_vec()), a_tx))
+        .send(incoming(
+            1,
+            plug_frame("stuck", b"to-stuck-2".to_vec()),
+            a_tx,
+        ))
         .await
         .unwrap();
 
@@ -1155,7 +1163,11 @@ async fn broadcast_to_many_stuck_targets_does_not_multiply_delay() {
     // Message 1: Broadcast from sender (conn_id=1) to stuck0..stuck4.
     // "pong" is NOT in the broadcast recipients — it only receives the stuck targets.
     router_tx
-        .send(incoming(1, make_frame("*", b"broadcast payload".to_vec()), a_tx))
+        .send(incoming(
+            1,
+            make_frame("*", b"broadcast payload".to_vec()),
+            a_tx,
+        ))
         .await
         .unwrap();
 
@@ -1167,7 +1179,11 @@ async fn broadcast_to_many_stuck_targets_does_not_multiply_delay() {
     // complete, independent of DashMap iteration order. "pong" reaches its receiver
     // only via this explicit unicast (message 2), never as a broadcast recipient.
     router_tx
-        .send(incoming(2, make_frame("pong", b"pong payload".to_vec()), sender2_tx))
+        .send(incoming(
+            2,
+            make_frame("pong", b"pong payload".to_vec()),
+            sender2_tx,
+        ))
         .await
         .unwrap();
 

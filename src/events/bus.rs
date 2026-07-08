@@ -12,11 +12,6 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
-/// Event delivery is fire-and-forget: if a subscriber does not drain its write
-/// channel within this window, the event is dropped rather than blocking the
-/// publisher (and every other subscriber on the same publish).
-const EVENT_SEND_TIMEOUT: Duration = Duration::from_millis(50);
-
 pub struct EventBus {
     // event_type → set of plugin_ids
     subscriptions: DashMap<String, HashSet<String>>,

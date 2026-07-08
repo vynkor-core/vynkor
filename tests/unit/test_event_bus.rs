@@ -196,8 +196,7 @@ async fn publish_to_many_stuck_subscribers_does_not_multiply_delay() {
     let registry = make_registry();
 
     for i in 0..5u64 {
-        let (stuck_tx, _stuck_rx) =
-            mpsc::channel::<veyron::ipc::connection::Outbound>(1);
+        let (stuck_tx, _stuck_rx) = mpsc::channel::<veyron::ipc::connection::Outbound>(1);
         stuck_tx
             .send(veyron::ipc::connection::out_frame(empty_frame()))
             .await

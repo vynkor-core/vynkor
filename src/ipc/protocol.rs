@@ -22,16 +22,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
-use tokio::time::timeout;
 use tracing::{info, warn};
 
 static MSG_SEQ: AtomicU64 = AtomicU64::new(0);
 static ACTION_CORRELATION_SEQ: AtomicU64 = AtomicU64::new(0);
-
-/// Max time the router will wait to hand a frame to a plugin's write channel
-/// (capacity-bounded). A plugin that does not drain its channel must not stall
-/// the single-threaded router for everyone else — its frame is dropped instead.
-const WRITE_SEND_TIMEOUT: Duration = Duration::from_millis(50);
 
 pub struct MessageRouter;
 
