@@ -132,8 +132,9 @@ Also restored (unrelated pre-existing regression, blocking test verification): s
 **T-16 — `ActionStatus`/`CommandStatus` proto enums default to OK (zero-value footgun)**
 `proto/veyron_protocol.proto:138-144,165-170`. `ACTION_OK = 0`/`COMMAND_OK = 0` unlike every other status enum's `*_UNKNOWN = 0` convention — missed `set_status()` silently reads as success. Fix: wire-breaking renumber, defer to next protocol version bump; add lint/test in the meantime asserting explicit status at every construction site.
 
-**T-17 — Proto file hand-copied to three locations, no CI drift check**
+**T-17 — Proto file hand-copied to three locations, no CI drift check** ✅ done
 `wire/proto/`, `sdk/cpp/proto/`, `sdk/python/proto/`. Fix: CI diff/checksum check, or generate SDK copies from single source.
+Fixed: new `.github/workflows/ci.yml` step ("Proto drift check (T-17)") runs first, before toolchain setup — `diff -u` of `wire/proto/veyron_protocol.proto` against both SDK copies, fails the job on any divergence. No behavior change to the three files themselves, all identical at time of fix.
 
 **T-18 — C++ SDK has no fragmentation support**
 `sdk/cpp/src/framing.cpp`/`client.cpp` vs. Rust (`sdk/rust/src/client.rs:355-420`) and Python (`sdk/python/veyron/client.py:164-197`). Fragmented frames silently mis-parsed by C++. Fix: port fragmentation, or make `read_frame_full` explicitly reject `FLAG_FRAGMENTED`.
@@ -153,9 +154,9 @@ Also restored (unrelated pre-existing regression, blocking test verification): s
 | Phase | Items | Severity | Est. effort |
 |-------|-------|----------|--------------|
 | 6 Network plugin protocol support | R6-01..04 | Candidate, unscheduled | ~1 decision + 1 design doc + impl TBD |
-| Audit remediation | T-01..20 | 2 Critical, 5 High, 11 Medium, 2 Low | T-01/T-05 fix together; T-03 needs own design; rest are independent; T-01,T-02,T-04..T-13 ✅ done |
+| Audit remediation | T-01..20 | 2 Critical, 5 High, 11 Medium, 2 Low | T-01/T-05 fix together; T-03 needs own design; rest are independent; T-01,T-02,T-04..T-15,T-17 ✅ done |
 
-**Ship gate:** none set yet — R6-03's open question and R6-04's design doc should resolve before effort estimates firm up. T-01/T-05 (HTTP authz/validation bypass) ✅ landed — was the live privilege-escalation path on any deployment exposing the REST API. T-02 (C++ SDK integration coverage), T-04 (config.yaml/JWT permission binding), T-06 (C++/Python `EventAck`), T-07 (Rust SDK error propagation), T-08 (error-budget prune staleness), T-09 (WS connection cap), T-10 (`get_plugin_logs` lines clamp), T-11 (marketplace maintainer signature), T-12 (JWT secret min-strength check), and T-13 (C++ malformed-frame unit tests) ✅ landed.
+**Ship gate:** none set yet — R6-03's open question and R6-04's design doc should resolve before effort estimates firm up. T-01/T-05 (HTTP authz/validation bypass) ✅ landed — was the live privilege-escalation path on any deployment exposing the REST API. T-02 (C++ SDK integration coverage), T-04 (config.yaml/JWT permission binding), T-06 (C++/Python `EventAck`), T-07 (Rust SDK error propagation), T-08 (error-budget prune staleness), T-09 (WS connection cap), T-10 (`get_plugin_logs` lines clamp), T-11 (marketplace maintainer signature), T-12 (JWT secret min-strength check), T-13 (C++ malformed-frame unit tests), T-14 (C++ fuzz harness, C++ half), T-15 (C++/Python slow-loris timeout), and T-17 (proto drift CI check) ✅ landed. Remaining open: T-14 Python-half (atheris), T-16 (deferred to next protocol version bump), T-18, T-19 (needs design decision), T-20.
 
 ## Definition of Done
 

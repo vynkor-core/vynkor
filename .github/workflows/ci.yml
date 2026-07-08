@@ -16,6 +16,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Proto drift check (T-17)
+        run: |
+          diff -u wire/proto/veyron_protocol.proto sdk/cpp/proto/veyron_protocol.proto
+          diff -u wire/proto/veyron_protocol.proto sdk/python/proto/veyron_protocol.proto
+
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
