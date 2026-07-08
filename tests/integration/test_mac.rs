@@ -7,7 +7,7 @@ use veyron_sdk::VeyronClient;
 
 #[tokio::test]
 async fn secured_kernel_completes_mac_handshake_and_pings() {
-    let secret = "integration-mac-secret";
+    let secret = "integration-mac-secret-32-bytes-min";
     let (_shutdown, _reg, _bus) =
         start_kernel_secured("/tmp/veyron_mac_handshake.sock", 19500, secret).await;
 
@@ -51,7 +51,7 @@ async fn secured_kernel_completes_mac_handshake_and_pings() {
 
 #[tokio::test]
 async fn secured_kernel_rejects_unmaced_client() {
-    let secret = "integration-mac-secret-2";
+    let secret = "integration-mac-secret-2-32-bytes-min";
     let (_shutdown, _reg, _bus) =
         start_kernel_secured("/tmp/veyron_mac_reject.sock", 19501, secret).await;
 

@@ -169,7 +169,7 @@ async fn plugins_registered_counter_appears_after_registration() {
 
 #[tokio::test]
 async fn mac_error_counter_appears_after_untagged_frame_on_secured_kernel() {
-    let secret = "metrics-mac-secret";
+    let secret = "metrics-mac-secret-32-bytes-minimum";
     let (shutdown, _reg, _bus) =
         start_kernel_secured("/tmp/veyron_metrics_mac.sock", 19604, secret).await;
 

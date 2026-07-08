@@ -25,6 +25,11 @@ use crate::utils::config::Config;
 
 pub struct Kernel;
 
+/// T-12: minimum `jwt_secret` length (bytes) accepted at kernel startup.
+/// HS256 secrets shorter than this are brute-forceable; reject rather than
+/// silently accept a weak secret.
+const MIN_JWT_SECRET_BYTES: usize = 32;
+
 /// Reload config from `config_file` (if set) and apply its log level.
 /// No-op (`Ok(())`) when `config_file` is `None` — matches the boot-time
 /// behavior where an in-memory-only `Config` has nothing to reload from.
@@ -113,6 +118,15 @@ impl Kernel {
         let (ws_disconnect_tx, ws_disconnect_rx) = mpsc::channel::<u64>(64);
         info!("UDS server listening on {}", config.socket_path);
 
+        if let Some(secret) = config.jwt_secret.as_deref() {
+            if secret.len() < MIN_JWT_SECRET_BYTES {
+                anyhow::bail!(
+                    "jwt_secret is {} bytes, must be at least {MIN_JWT_SECRET_BYTES} bytes \
+                     (HS256 secrets shorter than this are brute-forceable)",
+                    secret.len()
+                );
+            }
+        }
         let jwt_validator = config.jwt_secret.as_deref().map(|s| {
             info!("JWT auth enabled");
             Arc::new(JwtValidator::new(s.as_bytes()))

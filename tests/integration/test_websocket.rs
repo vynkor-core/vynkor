@@ -226,7 +226,7 @@ async fn ws_rejects_compressed_and_fragmented_inbound_frames() {
 
 #[tokio::test]
 async fn ws_mac_tagged_frames_accepted_on_secured_kernel() {
-    let secret = "ws-mac-test-secret";
+    let secret = "ws-mac-test-secret-32-bytes-minimum";
     let (_shutdown, _reg, _bus) =
         start_kernel_secured("/tmp/veyron_ws_mac_ok.sock", 19310, secret).await;
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -315,7 +315,7 @@ async fn ws_mac_tagged_frames_accepted_on_secured_kernel() {
 
 #[tokio::test]
 async fn ws_untagged_frames_rejected_on_secured_kernel() {
-    let secret = "ws-mac-reject-secret";
+    let secret = "ws-mac-reject-secret-32-bytes-minimum";
     let (_shutdown, _reg, _bus) =
         start_kernel_secured("/tmp/veyron_ws_mac_reject.sock", 19311, secret).await;
     tokio::time::sleep(Duration::from_millis(50)).await;

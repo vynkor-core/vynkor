@@ -60,6 +60,37 @@ async fn kernel_refuses_to_start_without_auth() {
 }
 
 #[tokio::test]
+async fn kernel_refuses_weak_jwt_secret() {
+    let mut cfg = test_config("/tmp/veyron_kernel_weak_secret.sock", 19198);
+    cfg.allow_no_auth = false;
+    cfg.jwt_secret = Some("too-short".to_string());
+
+    let result = Kernel::run_with_shutdown(cfg, async {}).await;
+    assert!(
+        result.is_err(),
+        "kernel must refuse a jwt_secret under the minimum byte length"
+    );
+}
+
+#[tokio::test]
+async fn kernel_accepts_jwt_secret_at_minimum_length() {
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let mut cfg = test_config("/tmp/veyron_kernel_min_secret.sock", 19197);
+    cfg.allow_no_auth = false;
+    cfg.jwt_secret = Some("x".repeat(32));
+
+    tokio::spawn(async move {
+        Kernel::run_with_shutdown(cfg, async {
+            let _ = shutdown_rx.await;
+        })
+        .await
+    });
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let _ = shutdown_tx.send(());
+}
+
+#[tokio::test]
 async fn kernel_starts_and_accepts_plugin_registration() {
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
     let cfg = test_config("/tmp/veyron_kernel_a11_reg.sock", 19100);
