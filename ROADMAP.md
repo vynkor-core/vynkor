@@ -119,8 +119,9 @@ Fixed: `Kernel::run_with_components` (`src/kernel/orchestrator.rs`) now checks `
 `sdk/cpp/tests/` (no `test_framing.cpp`). Fix: adversarial-input tests for `read_frame_full`/`pack_frame_mac`.
 Fixed: new `sdk/cpp/tests/test_framing.cpp` (registered in `sdk/cpp/CMakeLists.txt`) — bad magic, oversized length field (rejected before payload read), CRC mismatch, truncated header/payload/MAC tag, garbage `FLAG_COMPRESSED` payload, missing MAC on a secured connection, and empty-payload happy path. 9 tests, all pass alongside the existing 27.
 
-**T-14 — No fuzz coverage for C++/Python framing/decompression**
+**T-14 — No fuzz coverage for C++/Python framing/decompression** ✅ done (C++ half)
 `fuzz/fuzz_targets/*` covers Rust `wire` crate only. Fix: libFuzzer harness for `sdk/cpp/src/framing.cpp`.
+Fixed (C++): new `sdk/cpp/fuzz/fuzz_framing.cpp`, built via `-DVEYRON_BUILD_FUZZERS=ON` (Clang required for libFuzzer; off by default, doesn't affect normal GCC/Clang builds). Stages fuzz input through a memfd rather than a pipe — a pipe's ~64KiB buffer would deadlock the harness on oversized input before `read_frame_full`'s own length-field check gets a chance to reject it. Exercises both the no-key and MAC-verifying read paths (covers `FLAG_COMPRESSED`/`FLAG_MAC_PRESENT` handling). Smoke-tested 339k execs/20s, no crashes. Python framing (`sdk/python/veyron/framing.py`) fuzz coverage still open — no equivalent harness yet (e.g. via `atheris`).
 
 **T-15 — `FRAME_READ_TIMEOUT` slow-loris protection missing in C++/Python**
 `wire/src/framing.rs:66,179-196` (Rust only) vs. `sdk/cpp/src/framing.cpp:110-120`, `sdk/python/veyron/framing.py:127-150` (plain blocking reads, no timeout). Fix: wrap payload/MAC read in per-frame timeout in both SDKs.
