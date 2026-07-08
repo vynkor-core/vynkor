@@ -8,7 +8,9 @@ use semver::Version;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-use crate::marketplace::registry::{check_kernel_compatibility, RegistryEntry};
+use crate::marketplace::registry::{
+    check_kernel_compatibility, verify_entry_signature, RegistryEntry,
+};
 use crate::utils::errors::VeyronError;
 
 const KNOWN_PERMISSIONS: &[&str] = &[
@@ -81,6 +83,7 @@ pub async fn install(
     max_archive_bytes: u64,
     max_extracted_bytes: u64,
     max_archive_entries: usize,
+    marketplace_public_key: Option<&str>,
 ) -> Result<(), VeyronError> {
     // Step 1 — Resolve metadata
     let entry = entries
@@ -128,6 +131,14 @@ pub async fn install(
             "Archive integrity check failed. Expected {}, got {}. Aborting — do not proceed.",
             entry.sha256, actual_hash
         )));
+    }
+
+    // Step 4b — Maintainer signature check (T-11). Independent of the sha256
+    // above: a compromised registry-serving channel controls both the
+    // archive and its hash, but not the offline maintainer signing key.
+    if let Err(e) = verify_entry_signature(entry, marketplace_public_key) {
+        let _ = fs::remove_dir_all(&stage_dir);
+        return Err(e);
     }
 
     // Step 5 — Extract to temporary folder (zip-slip protection)
@@ -393,6 +404,7 @@ pub fn validate_manifest(
         sha256: String::new(),
         min_kernel_version: manifest.kernel_compatibility_range.min.clone(),
         max_kernel_version: manifest.kernel_compatibility_range.max.clone(),
+        signature: String::new(),
     };
     check_kernel_compatibility(&compat_entry, kernel_ver)?;
 

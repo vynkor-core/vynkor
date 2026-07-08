@@ -90,6 +90,12 @@ pub struct Config {
     /// Set to a private registry URL for air-gapped or enterprise deployments.
     #[serde(default)]
     pub registry_url: Option<String>,
+    /// Ed25519 public key (hex, 32 bytes) used to verify `registry.json`
+    /// entry signatures (T-11). Defaults to the built-in pinned maintainer
+    /// key; set only when pairing with a private `registry_url` signed by a
+    /// different key.
+    #[serde(default)]
+    pub marketplace_public_key: Option<String>,
     /// How long the registry cache (`~/.cache/veyron/registry.json`) is considered
     /// fresh before `plugin list --refresh` re-fetches it. Default: 3600 (1h).
     #[serde(default = "default_registry_cache_ttl_secs")]
@@ -265,6 +271,7 @@ impl Default for Config {
             tls_cert_path: None,
             tls_key_path: None,
             registry_url: None,
+            marketplace_public_key: None,
             registry_cache_ttl_secs: default_registry_cache_ttl_secs(),
             tmp_dir: default_tmp_dir(),
             action_timeout_ms: default_action_timeout_ms(),

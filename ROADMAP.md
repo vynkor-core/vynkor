@@ -107,8 +107,9 @@ Fixed: new `Config::max_ws_connections` (default 1024, `src/utils/config.rs`), t
 `src/api/routes.rs:126-141`. Bounded only incidentally by ring buffer size. Fix: explicit `min(n, MAX_LOG_LINES)`.
 Fixed: `src/api/routes.rs` clamps `?lines=` to a new `MAX_LOG_LINES` (10,000) constant via `.min()`, independent of the supervisor's own ring-buffer capacity. Test: `tests/unit/test_api.rs` (`logs_endpoint_clamps_huge_lines_param_instead_of_erroring`).
 
-**T-11 — Marketplace has no signature independent of registry.json's own hash**
+**T-11 — Marketplace has no signature independent of registry.json's own hash** ✅ done
 `src/marketplace/installer.rs:123-131`, `src/marketplace/registry.rs:10-11`. sha256 check proves nothing about publisher trust if the serving channel is compromised. Fix: maintainer-signed manifest, pinned public key.
+Fixed: new `RegistryEntry.signature` field (Ed25519, hex, 64 bytes) over `"{slug}:{version}:{sha256}"`; `verify_entry_signature` (`src/marketplace/registry.rs`) checks it against a compile-time-pinned `MAINTAINER_PUBLIC_KEY_HEX`, called from `install()` (`src/marketplace/installer.rs`) as a new Step 4b right after the sha256 check — independent trust root, since the signing key never touches the registry-serving infrastructure the sha256 already trusts. New `Config::marketplace_public_key` (`config.yaml`) lets private registries override the pinned key. Docs: `docs/PLUGIN_REGISTRY_SCHEMA.md` `signature` field. Tests: `src/marketplace/registry.rs` (`signature_verifies_with_matching_key_and_message`, `signature_rejected_when_sha256_tampered`, `signature_rejected_when_empty`, `signature_rejected_with_wrong_public_key`).
 
 **T-12 — JWT secret has no minimum-strength check**
 `src/auth/jwt.rs:19-27`. Any non-empty secret accepted for HS256. Fix: reject/warn under 32 bytes at construction (`src/kernel/orchestrator.rs:116-131`).
@@ -146,9 +147,9 @@ Fixed: `src/api/routes.rs` clamps `?lines=` to a new `MAX_LOG_LINES` (10,000) co
 | Phase | Items | Severity | Est. effort |
 |-------|-------|----------|--------------|
 | 6 Network plugin protocol support | R6-01..04 | Candidate, unscheduled | ~1 decision + 1 design doc + impl TBD |
-| Audit remediation | T-01..20 | 2 Critical, 5 High, 11 Medium, 2 Low | T-01/T-05 fix together; T-03 needs own design; rest are independent; T-01,T-02,T-04..T-10 ✅ done |
+| Audit remediation | T-01..20 | 2 Critical, 5 High, 11 Medium, 2 Low | T-01/T-05 fix together; T-03 needs own design; rest are independent; T-01,T-02,T-04..T-11 ✅ done |
 
-**Ship gate:** none set yet — R6-03's open question and R6-04's design doc should resolve before effort estimates firm up. T-01/T-05 (HTTP authz/validation bypass) ✅ landed — was the live privilege-escalation path on any deployment exposing the REST API. T-02 (C++ SDK integration coverage), T-04 (config.yaml/JWT permission binding), T-06 (C++/Python `EventAck`), T-07 (Rust SDK error propagation), T-08 (error-budget prune staleness), T-09 (WS connection cap), and T-10 (`get_plugin_logs` lines clamp) ✅ landed.
+**Ship gate:** none set yet — R6-03's open question and R6-04's design doc should resolve before effort estimates firm up. T-01/T-05 (HTTP authz/validation bypass) ✅ landed — was the live privilege-escalation path on any deployment exposing the REST API. T-02 (C++ SDK integration coverage), T-04 (config.yaml/JWT permission binding), T-06 (C++/Python `EventAck`), T-07 (Rust SDK error propagation), T-08 (error-budget prune staleness), T-09 (WS connection cap), T-10 (`get_plugin_logs` lines clamp), and T-11 (marketplace maintainer signature) ✅ landed.
 
 ## Definition of Done
 

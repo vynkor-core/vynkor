@@ -43,6 +43,7 @@ hmac = "0.12"
 sha2 = "0.10"
 hkdf = "0.12"
 rand = "0.8"
+ed25519-dalek = "2"
 
 nix = { version = "0.31", features = ["signal", "process", "fs", "sched", "resource", "user"] }
 

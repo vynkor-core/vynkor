@@ -39,6 +39,10 @@ allow_no_auth: true
 
 # Override the plugin registry URL (private/air-gapped registries).
 # registry_url: https://registry.example.internal/registry.json
+# Ed25519 public key (hex, 32 bytes) used to verify registry.json entry
+# signatures. Only set this alongside a private registry_url signed by a
+# different key — defaults to the built-in pinned maintainer key.
+# marketplace_public_key: <64-char lowercase hex>
 # How long the registry cache is considered fresh before `plugin list --refresh`
 # re-fetches it (default: 3600 = 1h).
 # registry_cache_ttl_secs: 3600

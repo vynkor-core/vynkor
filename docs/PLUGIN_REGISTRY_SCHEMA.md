@@ -37,7 +37,8 @@ Top-level structure: a JSON array of plugin entries.
   "source_url":  "https://github.com/veyron-core/veyron-plugins/releases/download/stt-whisper-1.2.0/stt-whisper-1.2.0-src.zip",
   "sha256": "<64-char lowercase hex>",
   "min_kernel_version": "0.3.0",
-  "max_kernel_version": "1.0.0"
+  "max_kernel_version": "1.0.0",
+  "signature": "<128-char lowercase hex Ed25519 signature>"
 }
 ```
 
@@ -56,6 +57,7 @@ Top-level structure: a JSON array of plugin entries.
 | `sha256` | string | SHA-256 of the archive bytes at `archive_url`, as 64-char lowercase hex. Verified before extraction. |
 | `min_kernel_version` | string | Semver lower bound (inclusive). `vyn install` rejects if running kernel is older. |
 | `max_kernel_version` | string | Semver upper bound (inclusive). `vyn install` rejects if running kernel is newer. Use `"*"` for no upper bound. |
+| `signature` | string | Ed25519 signature (128-char lowercase hex, 64 bytes) over `"{slug}:{version}:{sha256}"`, produced by the offline maintainer signing key. Verified against a pinned public key (or `marketplace_public_key` in `config.yaml` for private registries) *independent of* the `sha256` check — a compromised registry-serving channel can lie about both the archive and its hash together, but cannot forge this signature (T-11). |
 
 ### Invariants
 

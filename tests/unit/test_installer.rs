@@ -21,6 +21,7 @@ fn make_entry(slug: &str, min: &str, max: &str) -> RegistryEntry {
         sha256: String::new(),
         min_kernel_version: min.into(),
         max_kernel_version: max.into(),
+        signature: String::new(),
     }
 }
 

@@ -53,6 +53,7 @@ pub async fn handle(
     max_archive_bytes: u64,
     max_extracted_bytes: u64,
     max_archive_entries: usize,
+    marketplace_public_key: Option<&str>,
 ) -> anyhow::Result<()> {
     let fetch = |refresh: bool| {
         let url = registry_url.unwrap_or("");
@@ -109,6 +110,7 @@ pub async fn handle(
                 max_archive_bytes,
                 max_extracted_bytes,
                 max_archive_entries,
+                marketplace_public_key,
             )
             .await?;
         }

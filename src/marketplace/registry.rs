@@ -2,6 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
+use ed25519_dalek::{Signature, VerifyingKey};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 
@@ -9,6 +10,19 @@ use crate::utils::errors::VeyronError;
 
 const REGISTRY_URL: &str =
     "https://raw.githubusercontent.com/veyron-core/veyron-plugins/main/registry.json";
+
+/// Ed25519 public key (hex, 32 bytes) pinned at compile time. `sha256` alone
+/// (T-11) proves nothing about publisher trust if the channel serving
+/// `registry.json` is compromised — the attacker controls the hash and the
+/// archive together. The signature closes that gap: it is produced by an
+/// offline maintainer key never present on the serving infrastructure, so an
+/// attacker who only compromises the registry host/CDN cannot forge it.
+///
+/// Rotate by re-signing every registry entry with the new key and shipping
+/// the new constant in a kernel release; the corresponding private key must
+/// never be committed to this repo.
+const MAINTAINER_PUBLIC_KEY_HEX: &str =
+    "d7574bd235c7d2039575f87d33eb92f33b07457ab8eff89614464a10265f8c65";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegistryEntry {
@@ -23,6 +37,75 @@ pub struct RegistryEntry {
     pub sha256: String,
     pub min_kernel_version: String,
     pub max_kernel_version: String,
+    /// Ed25519 signature (hex, 64 bytes) over `"{slug}:{version}:{sha256}"`,
+    /// produced by the maintainer key whose public half is pinned in
+    /// [`MAINTAINER_PUBLIC_KEY_HEX`] (or an operator-configured override for
+    /// private registries). Defaults empty for old cached/serialized entries
+    /// — `verify_entry_signature` rejects an empty or malformed signature
+    /// rather than treating it as "unsigned = trusted".
+    #[serde(default)]
+    pub signature: String,
+}
+
+fn hex_decode(s: &str) -> Result<Vec<u8>, VeyronError> {
+    if !s.len().is_multiple_of(2) {
+        return Err(VeyronError::Internal("invalid hex: odd length".into()));
+    }
+    (0..s.len())
+        .step_by(2)
+        .map(|i| {
+            u8::from_str_radix(&s[i..i + 2], 16)
+                .map_err(|e| VeyronError::Internal(format!("invalid hex: {e}")))
+        })
+        .collect()
+}
+
+/// The message a maintainer signature is computed over. Binding `slug` and
+/// `version` (not just `sha256`) prevents an attacker who controls the
+/// serving channel from splicing a valid signature from one entry onto a
+/// different entry that happens to share the same archive hash.
+fn signed_message(entry: &RegistryEntry) -> String {
+    format!("{}:{}:{}", entry.slug, entry.version, entry.sha256)
+}
+
+/// Verify `entry.signature` against `public_key_hex` (pass `None` to use the
+/// pinned [`MAINTAINER_PUBLIC_KEY_HEX`]). See T-11.
+pub fn verify_entry_signature(
+    entry: &RegistryEntry,
+    public_key_hex: Option<&str>,
+) -> Result<(), VeyronError> {
+    let key_hex = public_key_hex.unwrap_or(MAINTAINER_PUBLIC_KEY_HEX);
+
+    let key_bytes = hex_decode(key_hex)?;
+    let key_bytes: [u8; 32] = key_bytes
+        .try_into()
+        .map_err(|_| VeyronError::Internal("marketplace public key must be 32 bytes".into()))?;
+    let verifying_key = VerifyingKey::from_bytes(&key_bytes)
+        .map_err(|e| VeyronError::Internal(format!("invalid marketplace public key: {e}")))?;
+
+    let sig_bytes = hex_decode(&entry.signature).map_err(|_| {
+        VeyronError::Internal(format!(
+            "Plugin '{}' has a malformed signature. Aborting — do not proceed.",
+            entry.slug
+        ))
+    })?;
+    let sig_bytes: [u8; 64] = sig_bytes.try_into().map_err(|_| {
+        VeyronError::Internal(format!(
+            "Plugin '{}' signature must be 64 bytes. Aborting — do not proceed.",
+            entry.slug
+        ))
+    })?;
+    let signature = Signature::from_bytes(&sig_bytes);
+
+    verifying_key
+        .verify_strict(signed_message(entry).as_bytes(), &signature)
+        .map_err(|_| {
+            VeyronError::Internal(format!(
+                "Plugin '{}' failed signature verification — the maintainer signature does not \
+                 match slug/version/sha256. Aborting — do not proceed.",
+                entry.slug
+            ))
+        })
 }
 
 fn cache_path(tmp_dir: &std::path::Path) -> PathBuf {
@@ -211,6 +294,7 @@ mod tests {
             sha256: String::new(),
             min_kernel_version: min.into(),
             max_kernel_version: max.into(),
+            signature: String::new(),
         }
     }
 
@@ -371,6 +455,48 @@ mod tests {
         );
 
         mock.assert_async().await;
+    }
+
+    // Fixed Ed25519 test vector: signs `"stt-whisper:1.0.0:deadbeef"`.
+    // Independent of MAINTAINER_PUBLIC_KEY_HEX — never reuse a real signing
+    // key in tests.
+    const TEST_PUB_HEX: &str = "6c4850b5614a1b4d91591408aff0cf9c40e9f00f845a7371506689851d82a864";
+    const TEST_SIG_HEX: &str = "9b9700219f9ed1a2b5ade515a3c130b20e096c42d5f5e39d1a06b1975065e59dabf25827147842f51794a635c29849f6cca2f28933a96bd750db56a298b09e0f";
+
+    #[test]
+    fn signature_verifies_with_matching_key_and_message() {
+        let mut entry = make_entry("0.1.0", "*");
+        entry.sha256 = "deadbeef".into();
+        entry.signature = TEST_SIG_HEX.into();
+        assert!(verify_entry_signature(&entry, Some(TEST_PUB_HEX)).is_ok());
+    }
+
+    #[test]
+    fn signature_rejected_when_sha256_tampered() {
+        // Same signature, but sha256 no longer matches what was signed —
+        // simulates a compromised registry host swapping the archive/hash
+        // while leaving an old valid-looking signature in place.
+        let mut entry = make_entry("0.1.0", "*");
+        entry.sha256 = "cafebabe".into();
+        entry.signature = TEST_SIG_HEX.into();
+        assert!(verify_entry_signature(&entry, Some(TEST_PUB_HEX)).is_err());
+    }
+
+    #[test]
+    fn signature_rejected_when_empty() {
+        let mut entry = make_entry("0.1.0", "*");
+        entry.sha256 = "deadbeef".into();
+        assert!(entry.signature.is_empty());
+        assert!(verify_entry_signature(&entry, Some(TEST_PUB_HEX)).is_err());
+    }
+
+    #[test]
+    fn signature_rejected_with_wrong_public_key() {
+        let mut entry = make_entry("0.1.0", "*");
+        entry.sha256 = "deadbeef".into();
+        entry.signature = TEST_SIG_HEX.into();
+        // Pinned maintainer key, not the test key that actually signed this.
+        assert!(verify_entry_signature(&entry, None).is_err());
     }
 
     #[tokio::test]
