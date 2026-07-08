@@ -144,8 +144,9 @@ Fixed: new `.github/workflows/ci.yml` step ("Proto drift check (T-17)") runs fir
 **T-19 — Action permission model checks provider only, not requester**
 `src/auth/permissions.rs:10-15`, `src/ipc/protocol.rs:413-430`. Unprivileged plugin can transitively trigger e.g. network requests via any provider with `PERMISSION_NETWORK`. May be intentional (provider-declares-authorization model) — needs explicit design decision/doc note, not silent assumption.
 
-**T-20 — `strncpy` silently truncates long socket paths in C++ client**
+**T-20 — `strncpy` silently truncates long socket paths in C++ client** ✅ done
 `sdk/cpp/src/client.cpp:26-28`. Not an overflow, but truncation is silent rather than rejected. Fix: explicit length check, throw if too long.
+Fixed: `VeyronClient::connect()` now checks `socket_path_.size() >= sizeof(sun_path)` before the `strncpy`, throws `std::runtime_error` (and closes the just-opened fd) instead of silently truncating. Tests: `sdk/cpp/tests/test_client.cpp` (`RejectsOverlongSocketPath`, `AcceptsPathAtMaxLength`).
 
 ---
 
@@ -154,9 +155,9 @@ Fixed: new `.github/workflows/ci.yml` step ("Proto drift check (T-17)") runs fir
 | Phase | Items | Severity | Est. effort |
 |-------|-------|----------|--------------|
 | 6 Network plugin protocol support | R6-01..04 | Candidate, unscheduled | ~1 decision + 1 design doc + impl TBD |
-| Audit remediation | T-01..20 | 2 Critical, 5 High, 11 Medium, 2 Low | T-01/T-05 fix together; T-03 needs own design; rest are independent; T-01,T-02,T-04..T-15,T-17 ✅ done |
+| Audit remediation | T-01..20 | 2 Critical, 5 High, 11 Medium, 2 Low | T-01/T-05 fix together; T-03 needs own design; rest are independent; T-01,T-02,T-04..T-15,T-17,T-20 ✅ done |
 
-**Ship gate:** none set yet — R6-03's open question and R6-04's design doc should resolve before effort estimates firm up. T-01/T-05 (HTTP authz/validation bypass) ✅ landed — was the live privilege-escalation path on any deployment exposing the REST API. T-02 (C++ SDK integration coverage), T-04 (config.yaml/JWT permission binding), T-06 (C++/Python `EventAck`), T-07 (Rust SDK error propagation), T-08 (error-budget prune staleness), T-09 (WS connection cap), T-10 (`get_plugin_logs` lines clamp), T-11 (marketplace maintainer signature), T-12 (JWT secret min-strength check), T-13 (C++ malformed-frame unit tests), T-14 (C++ fuzz harness, C++ half), T-15 (C++/Python slow-loris timeout), and T-17 (proto drift CI check) ✅ landed. Remaining open: T-14 Python-half (atheris), T-16 (deferred to next protocol version bump), T-18, T-19 (needs design decision), T-20.
+**Ship gate:** none set yet — R6-03's open question and R6-04's design doc should resolve before effort estimates firm up. T-01/T-05 (HTTP authz/validation bypass) ✅ landed — was the live privilege-escalation path on any deployment exposing the REST API. T-02 (C++ SDK integration coverage), T-04 (config.yaml/JWT permission binding), T-06 (C++/Python `EventAck`), T-07 (Rust SDK error propagation), T-08 (error-budget prune staleness), T-09 (WS connection cap), T-10 (`get_plugin_logs` lines clamp), T-11 (marketplace maintainer signature), T-12 (JWT secret min-strength check), T-13 (C++ malformed-frame unit tests), T-14 (C++ fuzz harness, C++ half), T-15 (C++/Python slow-loris timeout), T-17 (proto drift CI check), and T-20 (strncpy path-length check) ✅ landed. Remaining open: T-14 Python-half (atheris), T-16 (deferred to next protocol version bump), T-18, T-19 (needs design decision).
 
 ## Definition of Done
 
