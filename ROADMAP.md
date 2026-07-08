@@ -115,8 +115,9 @@ Fixed: new `RegistryEntry.signature` field (Ed25519, hex, 64 bytes) over `"{slug
 `src/auth/jwt.rs:19-27`. Any non-empty secret accepted for HS256. Fix: reject/warn under 32 bytes at construction (`src/kernel/orchestrator.rs:116-131`).
 Fixed: `Kernel::run_with_components` (`src/kernel/orchestrator.rs`) now checks `config.jwt_secret` length against `MIN_JWT_SECRET_BYTES` (32) before constructing the `JwtValidator`, `anyhow::bail!`s with the byte count on a too-short secret — same startup-refusal pattern as the existing `allow_no_auth` check. `JwtValidator::new` itself is unchanged (kept accepting any secret, since unit tests construct it directly with short fixed test secrets). Integration tests that spin up a secured kernel (`test_mac.rs`, `test_websocket.rs`, `test_metrics_counters.rs`) had their literal secrets lengthened to clear the new minimum. Tests: `tests/unit/test_kernel.rs` (`kernel_refuses_weak_jwt_secret`, `kernel_accepts_jwt_secret_at_minimum_length`).
 
-**T-13 — No C++ unit tests for frame parsing against malformed input**
+**T-13 — No C++ unit tests for frame parsing against malformed input** ✅ done
 `sdk/cpp/tests/` (no `test_framing.cpp`). Fix: adversarial-input tests for `read_frame_full`/`pack_frame_mac`.
+Fixed: new `sdk/cpp/tests/test_framing.cpp` (registered in `sdk/cpp/CMakeLists.txt`) — bad magic, oversized length field (rejected before payload read), CRC mismatch, truncated header/payload/MAC tag, garbage `FLAG_COMPRESSED` payload, missing MAC on a secured connection, and empty-payload happy path. 9 tests, all pass alongside the existing 27.
 
 **T-14 — No fuzz coverage for C++/Python framing/decompression**
 `fuzz/fuzz_targets/*` covers Rust `wire` crate only. Fix: libFuzzer harness for `sdk/cpp/src/framing.cpp`.
@@ -148,9 +149,9 @@ Fixed: `Kernel::run_with_components` (`src/kernel/orchestrator.rs`) now checks `
 | Phase | Items | Severity | Est. effort |
 |-------|-------|----------|--------------|
 | 6 Network plugin protocol support | R6-01..04 | Candidate, unscheduled | ~1 decision + 1 design doc + impl TBD |
-| Audit remediation | T-01..20 | 2 Critical, 5 High, 11 Medium, 2 Low | T-01/T-05 fix together; T-03 needs own design; rest are independent; T-01,T-02,T-04..T-12 ✅ done |
+| Audit remediation | T-01..20 | 2 Critical, 5 High, 11 Medium, 2 Low | T-01/T-05 fix together; T-03 needs own design; rest are independent; T-01,T-02,T-04..T-13 ✅ done |
 
-**Ship gate:** none set yet — R6-03's open question and R6-04's design doc should resolve before effort estimates firm up. T-01/T-05 (HTTP authz/validation bypass) ✅ landed — was the live privilege-escalation path on any deployment exposing the REST API. T-02 (C++ SDK integration coverage), T-04 (config.yaml/JWT permission binding), T-06 (C++/Python `EventAck`), T-07 (Rust SDK error propagation), T-08 (error-budget prune staleness), T-09 (WS connection cap), T-10 (`get_plugin_logs` lines clamp), T-11 (marketplace maintainer signature), and T-12 (JWT secret min-strength check) ✅ landed.
+**Ship gate:** none set yet — R6-03's open question and R6-04's design doc should resolve before effort estimates firm up. T-01/T-05 (HTTP authz/validation bypass) ✅ landed — was the live privilege-escalation path on any deployment exposing the REST API. T-02 (C++ SDK integration coverage), T-04 (config.yaml/JWT permission binding), T-06 (C++/Python `EventAck`), T-07 (Rust SDK error propagation), T-08 (error-budget prune staleness), T-09 (WS connection cap), T-10 (`get_plugin_logs` lines clamp), T-11 (marketplace maintainer signature), T-12 (JWT secret min-strength check), and T-13 (C++ malformed-frame unit tests) ✅ landed.
 
 ## Definition of Done
 
