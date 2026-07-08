@@ -1,6 +1,34 @@
 # Plugin → Event-Bus Publish Path Design
 
-Date: 2026-07-06
+Date: 2026-07-06 (revised 2026-07-08)
+
+> **Supersedes the original 2026-07-06 version of this file.** That version
+> reused the `Event` message for both directions, denied `system.*` via a
+> hardcoded string-prefix check in kernel code, and used `EVENT_PUBLISH_OK =
+> 0`. This revision fixes three issues found on review, none of which were
+> ever implemented (`git log` shows only the spec commit, `e137bdb`, no
+> follow-up code):
+> 1. `EVENT_PUBLISH_OK = 0` is the exact zero-value footgun called out as
+>    T-16 in `ROADMAP.md` (`ACTION_OK = 0` / `COMMAND_OK = 0`) — a missed
+>    `set_status()` would silently read as success. Fixed by giving every new
+>    status enum a `*_UNKNOWN = 0` per the convention every other enum in the
+>    proto except the two T-16 flags already follows.
+> 2. A hardcoded `event_type.starts_with("system.")` check embeds a business
+>    naming convention directly in `src/ipc/protocol.rs` — the manifesto
+>    states kernel is a "dumb byte router... zero business logic." Fixed by
+>    structural auto-namespacing (below): the kernel mechanically prepends
+>    the publisher's own `plugin_id`, so a plugin cannot produce a
+>    `system.*` event type at all — not because the kernel recognizes and
+>    denies that string, but because the kernel never lets a plugin's output
+>    land outside its own namespace. No domain knowledge, no denylist.
+> 3. Reusing `Event` (today strictly kernel→plugin, `retry_count` is
+>    kernel-owned per its own doc comment) for the plugin→kernel direction
+>    too overloads one message with two different trust boundaries. A
+>    dedicated `EventPublish` message keeps the existing `Event` message's
+>    contract (kernel-authored, redelivery-tracked) intact and makes the new
+>    inbound surface explicit in the `oneof`, the same way `ActionRequest`/
+>    `ActionResponse` are separate messages rather than one `Action` reused
+>    both ways.
 
 ## Goal
 
@@ -13,46 +41,43 @@ Currently `EventBus::publish` is only called from kernel-internal code
 
 This is ROADMAP.md R6-01. Immediate driver: the `network` plugin
 (`docs/superpowers/specs/2026-07-05-network-plugin-design.md`) wants to emit
-`network.request_completed` (status, host, latency_ms, retry_count) as a real
+a `request_completed` event (status, host, latency_ms, retry_count) as a real
 event instead of stdout-only logging, so other plugins can subscribe to it.
 
 ## Scope
 
 - v1: kernel wire protocol + Rust SDK (`sdk/rust`) helper method.
-- Out of scope for v1: Python/C++ SDK helpers — noted as a follow-up, added
-  once a Python or C++ plugin actually needs to publish. Nothing in this
-  design blocks adding them later; the wire format is language-agnostic.
+- Out of scope for v1: Python/C++ SDK helpers — follow-up once a Python or
+  C++ plugin actually needs to publish. Wire format is language-agnostic, so
+  nothing here blocks adding them later.
 
-## Wire protocol changes (`wire/proto/veyron_protocol.proto`)
+## Wire protocol changes (`wire/proto/veyron_protocol.proto`,
+mirrored into `sdk/cpp/proto/` and `sdk/python/proto/` per T-17's drift check)
 
-No new `Event` message — the existing `Event` message (already used
-kernel→plugin) is now legal in the plugin→kernel direction too, the same way
-`Subscribe`/`Unsubscribe` are plugin→kernel-only today. The kernel's inbound
-envelope handler in `src/ipc/protocol.rs` gains a
-`Some(envelope::Payload::Event(event))` arm (there currently is none, since
-nothing sends `Event` inbound) alongside the existing `Subscribe`/
-`Unsubscribe` arms.
-
-New permission:
+New messages, permission, and `Envelope` oneof fields:
 
 ```protobuf
-enum PermissionType {
-  ...
-  PERMISSION_EVENT_PUBLISH = 13; // publish events to the kernel event bus
+message EventPublish {
+  string event_type   = 1;  // plugin's own sub-namespace, e.g. "request_completed"
+  bytes  payload_json  = 2;
 }
-```
 
-New ack message and status, and a new `Envelope` oneof field:
-
-```protobuf
 message EventPublishAck {
-  string             event_id = 1;
+  string             event_id = 1;  // kernel-assigned, "plugin.<sender_id>.<event_type>"-scoped
   EventPublishStatus status   = 2;
+  string             error    = 3;
 }
 
 enum EventPublishStatus {
-  EVENT_PUBLISH_OK     = 0;
-  EVENT_PUBLISH_DENIED = 1; // missing PERMISSION_EVENT_PUBLISH, or system.* namespace
+  EVENT_PUBLISH_UNKNOWN         = 0;  // never explicitly set; a missed set_status() shows up as this, not OK
+  EVENT_PUBLISH_OK              = 1;
+  EVENT_PUBLISH_ERROR           = 2;
+  EVENT_PUBLISH_PERMISSION_DENY = 3;
+}
+
+enum PermissionType {
+  ...
+  PERMISSION_EVENT_PUBLISH = 13; // publish events to the kernel event bus
 }
 ```
 
@@ -60,41 +85,64 @@ enum EventPublishStatus {
 message Envelope {
   oneof payload {
     ...
-    EventPublishAck event_publish_ack = 44;
+    EventPublish      event_publish      = 44;
+    EventPublishAck   event_publish_ack  = 45;
   }
 }
 ```
 
-`Event.retry_count` remains kernel-owned (doc comment: "kernel fills this in
-on redelivery") — the kernel zeroes it on any inbound publish before handing
-the event to `EventBus::publish`, regardless of what the plugin sent.
+No changes to the existing `Event`/`EventAck`/`Subscribe`/`Unsubscribe`
+messages — `Event.retry_count` stays exclusively kernel-owned, exactly as
+its current doc comment says.
 
 ## Kernel handling (`src/ipc/protocol.rs`)
 
 New arm, positioned next to the existing `Subscribe`/`Unsubscribe` handling:
 
 ```rust
-Some(envelope::Payload::Event(mut event)) => {
+Some(envelope::Payload::EventPublish(req)) => {
     let sender_id = registry
         .get_by_conn_id(msg.conn_id)
         .map(|e| e.plugin_id.clone())
         .unwrap_or_default();
 
-    let status = if event.event_type.starts_with("system.") {
-        // Kernel-owned namespace — never spoofable, permission or not.
-        EventPublishStatus::EventPublishDenied
-    } else if check_permission(registry, &sender_id, PermissionType::PermissionEventPublish).is_err() {
-        EventPublishStatus::EventPublishDenied
+    let (status, event_id) = if check_permission(
+        registry,
+        &sender_id,
+        PermissionType::PermissionEventPublish,
+    )
+    .is_err()
+    {
+        (EventPublishStatus::EventPublishPermissionDeny, String::new())
     } else {
-        event.retry_count = 0; // kernel-owned field, ignore whatever the plugin sent
-        event_bus.publish(event.clone(), registry).await;
-        EventPublishStatus::EventPublishOk
+        // Structural namespacing: the kernel does not inspect or recognize
+        // any business prefix (no "system." denylist). A plugin's published
+        // event always lands under its own plugin_id — it is mechanically
+        // impossible to land outside that namespace, so kernel-owned event
+        // types (e.g. "system.plugin_joined", published only via the
+        // separate internal EventBus::publish call sites) can never collide
+        // with or be spoofed by anything reachable from this handler.
+        let event_id = format!("evt-{}-{}", sender_id, req_uuid());
+        let event_type = format!("plugin.{sender_id}.{}", req.event_type);
+        event_bus
+            .publish(
+                Event {
+                    event_id: event_id.clone(),
+                    event_type,
+                    payload_json: req.payload_json,
+                    retry_count: 0,
+                },
+                registry,
+            )
+            .await;
+        (EventPublishStatus::EventPublishOk, event_id)
     };
 
     let ack = Envelope {
         payload: Some(envelope::Payload::EventPublishAck(EventPublishAck {
-            event_id: event.event_id,
+            event_id,
             status: status as i32,
+            error: String::new(),
         })),
         ..Default::default()
     };
@@ -103,14 +151,10 @@ Some(envelope::Payload::Event(mut event)) => {
 }
 ```
 
-The `system.*` check runs *before* the permission check and is not
-bypassable by any grant — this matches the manifesto's "kernel = source of
-truth for its own lifecycle events" stance and mirrors how `ACTION_PERMISSION_DENY`
-already gates `ActionRequest` routing (`src/auth/permissions.rs`,
-`required_permission_for_action`) without adding a second declaration
-surface (no new `PluginManifest` field — a plugin either has
-`PERMISSION_EVENT_PUBLISH` or it doesn't; it may publish any non-`system.*`
-type once granted, same shape as `PERMISSION_NETWORK` gating `http_request`).
+`EVENT_PUBLISH_ERROR` is reserved for future internal failure modes (e.g. if
+`EventBus::publish` ever becomes fallible) — v1 has no path that produces it,
+same as how `ACTION_ERROR` exists in `ActionStatus` without every action
+handler using it.
 
 ## Manifest
 
@@ -123,7 +167,10 @@ PluginManifest {
 
 No new manifest field. A plugin requests the permission the same way it
 requests `PERMISSION_NETWORK` etc. today; `PluginRegisterAck.granted_permissions`
-already reports back what was actually granted.
+already reports back what was actually granted. No per-event-type manifest
+declaration is needed — structural namespacing already bounds what a plugin
+can publish to its own `plugin.<id>.*` space, so there is nothing further to
+declare or authorize per event type.
 
 ## Rust SDK (`sdk/rust/src/client.rs`)
 
@@ -138,13 +185,10 @@ pub async fn publish_event(
     payload_json: &[u8],
     timeout_ms: u32,
 ) -> Result<EventPublishAck, VeyronError> {
-    let event_id = next_request_id("evt");
     let env = Envelope {
-        payload: Some(envelope::Payload::Event(Event {
-            event_id: event_id.clone(),
+        payload: Some(envelope::Payload::EventPublish(EventPublish {
             event_type: event_type.to_string(),
             payload_json: payload_json.to_vec(),
-            retry_count: 0,
         })),
         ..Default::default()
     };
@@ -163,9 +207,7 @@ pub async fn publish_event(
         }
         let response = self.recv_timeout(remaining).await?;
         match response.payload {
-            Some(envelope::Payload::EventPublishAck(ack)) if ack.event_id == event_id => {
-                return Ok(ack);
-            }
+            Some(envelope::Payload::EventPublishAck(ack)) => return Ok(ack),
             Some(envelope::Payload::Error(err)) => {
                 return Err(VeyronError::Internal(format!(
                     "kernel error: {} ({})",
@@ -178,14 +220,22 @@ pub async fn publish_event(
 }
 ```
 
+Unlike `send_action`, there's no client-generated `event_id` to correlate
+against — the kernel assigns it. A connection publishing concurrently before
+this SDK method returns would need request pipelining to disambiguate acks;
+out of scope for v1 (same limitation `send_action` already has today).
+
 ## Error handling
 
-- `EVENT_PUBLISH_DENIED` covers both denial reasons (missing permission,
-  `system.*` namespace) — the ack doesn't need to distinguish them further
-  for v1; a plugin author sees denial and checks its manifest/event name.
-  (Matches `ACTION_PERMISSION_DENY`'s level of detail.)
-- Malformed `event_type` (empty string) is also denied — treated the same
-  as `system.*`-prefixed (falls under "not a valid publishable type").
+- `EVENT_PUBLISH_PERMISSION_DENY` — plugin lacks `PERMISSION_EVENT_PUBLISH`.
+  This is the only denial path in v1; there is no namespace-rejection status
+  because there is no namespace check — structural prepending makes
+  rejection unnecessary rather than adding a second denial reason to
+  distinguish from the first.
+- Empty `event_type` from the plugin is allowed through as-is (becomes
+  `plugin.<id>.`) — not worth a dedicated validation error for v1; a
+  malformed but harmless event type only confuses the publishing plugin's
+  own subscribers, not the kernel.
 
 ## Testing
 
@@ -193,20 +243,25 @@ Integration tests in `tests/integration/test_kernel_commands.rs`, mirroring
 `kernel_denies_action_when_provider_lacks_required_permission`:
 
 1. Plugin without `PERMISSION_EVENT_PUBLISH` publishes any event →
-   `EVENT_PUBLISH_DENIED`, no subscriber receives it.
-2. Plugin *with* `PERMISSION_EVENT_PUBLISH` publishes `system.fake_event` →
-   still `EVENT_PUBLISH_DENIED` (namespace block wins over grant).
-3. Plugin with the permission publishes `network.request_completed` →
-   `EVENT_PUBLISH_OK`, and a separate subscriber plugin (subscribed via
-   `Subscribe{event_types: ["network.request_completed"]}`) receives the
-   `Event` with matching `payload_json` and `retry_count == 0`.
+   `EVENT_PUBLISH_PERMISSION_DENY`, no subscriber receives it.
+2. Plugin with the permission publishes `event_type: "request_completed"`
+   from plugin id `network` → `EVENT_PUBLISH_OK`, and a separate subscriber
+   plugin subscribed to `Subscribe{event_types: ["plugin.network.request_completed"]}`
+   receives the `Event` with matching `payload_json` and `retry_count == 0`.
+3. Two different plugins (`network`, `weather`) both publish
+   `event_type: "request_completed"` → land on distinct wire event types
+   (`plugin.network.request_completed` vs `plugin.weather.request_completed`),
+   each only reaching subscribers of its own namespaced type (or `"*"`).
+4. A plugin cannot produce a `system.*`-prefixed wire event type through
+   `EventPublish` under any permission grant — assert this by construction
+   (the handler always prepends `plugin.<sender_id>.`, so there's no input
+   that reaches `system.*`) rather than as a runtime denial test.
 
 ## Non-goals / follow-ups
 
 - Python/C++ SDK `publish_event()` helpers — follow-up once needed.
-- Per-event-type authorization finer than the blanket permission (e.g. a
-  declared `published_events` allowlist per plugin, mirroring the `actions`
-  manifest field) — explicitly rejected for v1 as unnecessary surface; can
-  be added later without a breaking wire change if a real need shows up.
+- Per-event-type authorization finer than the blanket permission — not
+  applicable in this design; structural namespacing already scopes a plugin
+  to its own `plugin.<id>.*` space without a separate declaration surface.
 - Rate limiting / quota on publish volume — separate from R6-03 (per-caller
   action quotas), not addressed here.
