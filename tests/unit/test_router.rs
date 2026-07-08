@@ -1113,24 +1113,38 @@ async fn broadcast_to_many_stuck_targets_does_not_multiply_delay() {
         _stuck_rxs.push(stuck_rx);
     }
 
+    // Sender (conn_id=1): broadcasts to stuck0..stuck4 only. Does NOT include "pong"
+    // in ipc_targets, so "pong" is never a broadcast recipient.
     let (a_tx, _a_rx) = make_write_pair();
-
-    // Register a separate "pong" target that is NOT part of the broadcast.
-    // It will receive a unicast forward() call after the broadcast completes.
-    let (pong_tx, mut pong_rx) = make_write_pair();
-    reg.register("pong".to_string(), 50, dummy_manifest(), pong_tx)
-        .unwrap();
-
-    // Sender with IPC permission and ipc_targets including all stuck targets and pong.
     reg.register(
         "sender".to_string(),
         1,
         PluginManifest {
             permissions: vec!["PERMISSION_IPC_SEND".to_string()],
-            ipc_targets: (0..5u64).map(|i| format!("stuck{i}")).chain(std::iter::once("pong".to_string())).collect(),
+            ipc_targets: (0..5u64).map(|i| format!("stuck{i}")).collect(),
             ..Default::default()
         },
         a_tx.clone(),
+    )
+    .unwrap();
+
+    // Register a separate "pong" target that is NOT in sender's broadcast allowlist.
+    let (pong_tx, mut pong_rx) = make_write_pair();
+    reg.register("pong".to_string(), 50, dummy_manifest(), pong_tx)
+        .unwrap();
+
+    // Sender2 (conn_id=2): a second plugin with IPC permission, ipc_targets=[pong].
+    // It sends the unicast forward to pong after the broadcast completes.
+    let (sender2_tx, _sender2_rx) = make_write_pair();
+    reg.register(
+        "sender2".to_string(),
+        2,
+        PluginManifest {
+            permissions: vec!["PERMISSION_IPC_SEND".to_string()],
+            ipc_targets: vec!["pong".to_string()],
+            ..Default::default()
+        },
+        sender2_tx.clone(),
     )
     .unwrap();
 
@@ -1138,21 +1152,22 @@ async fn broadcast_to_many_stuck_targets_does_not_multiply_delay() {
 
     let start = std::time::Instant::now();
 
-    // Message 1: Broadcast to all targets (including 5 stuck ones).
-    // This will attempt to send to all registered targets, but stuck ones will fail.
+    // Message 1: Broadcast from sender (conn_id=1) to stuck0..stuck4.
+    // "pong" is NOT in the broadcast recipients — it only receives the stuck targets.
     router_tx
-        .send(incoming(1, make_frame("*", b"broadcast payload".to_vec()), a_tx.clone()))
+        .send(incoming(1, make_frame("*", b"broadcast payload".to_vec()), a_tx))
         .await
         .unwrap();
 
-    // Message 2: Unicast forward to "pong" from the same sender.
+    // Message 2: Unicast forward from sender2 (conn_id=2) to "pong".
     // Because MessageRouter processes messages one at a time from a single
-    // mpsc::Receiver, this message 2 will only be dequeued and processed
-    // after message 1's broadcast() call has fully returned (including all
-    // 5 stuck send attempts). Thus, when pong receives its frame, the entire
-    // broadcast loop is guaranteed complete, independent of DashMap iteration order.
+    // mpsc::Receiver, message 2 is only dequeued and processed after message 1's
+    // broadcast() call has fully returned (including all 5 stuck send attempts).
+    // Thus, when pong receives its frame, the entire broadcast loop is guaranteed
+    // complete, independent of DashMap iteration order. "pong" reaches its receiver
+    // only via this explicit unicast (message 2), never as a broadcast recipient.
     router_tx
-        .send(incoming(1, make_frame("pong", b"pong payload".to_vec()), a_tx))
+        .send(incoming(2, make_frame("pong", b"pong payload".to_vec()), sender2_tx))
         .await
         .unwrap();
 
