@@ -235,10 +235,7 @@ async fn two_plugins_publishing_same_event_type_land_on_distinct_namespaces() {
     let mut weather = VeyronClient::connect("/tmp/veyron_integ_evpub_ns.sock")
         .await
         .unwrap();
-    weather
-        .register("weather", publish_manifest)
-        .await
-        .unwrap();
+    weather.register("weather", publish_manifest).await.unwrap();
 
     let mut subscriber = VeyronClient::connect("/tmp/veyron_integ_evpub_ns.sock")
         .await
@@ -290,6 +287,67 @@ async fn two_plugins_publishing_same_event_type_land_on_distinct_namespaces() {
         "subscriber must not receive plugin.weather.request_completed \
          when only subscribed to plugin.network.request_completed"
     );
+
+    let _ = shutdown_tx.send(());
+}
+
+#[tokio::test]
+async fn sdk_publish_event_returns_ack_and_delivers_to_subscriber() {
+    let (shutdown_tx, _registry, _bus) =
+        start_kernel("/tmp/veyron_integ_evpub_sdk.sock", 19703).await;
+
+    let mut publisher = VeyronClient::connect("/tmp/veyron_integ_evpub_sdk.sock")
+        .await
+        .unwrap();
+    publisher
+        .register(
+            "network",
+            PluginManifest {
+                permissions: vec!["PERMISSION_EVENT_PUBLISH".to_string()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let mut subscriber = VeyronClient::connect("/tmp/veyron_integ_evpub_sdk.sock")
+        .await
+        .unwrap();
+    subscriber
+        .register("evpub-sdk-subscriber", PluginManifest::default())
+        .await
+        .unwrap();
+    subscriber
+        .subscribe(vec!["plugin.network.request_completed".to_string()])
+        .await
+        .unwrap();
+
+    tokio::time::sleep(Duration::from_millis(30)).await;
+
+    let ack = timeout(
+        Duration::from_secs(2),
+        publisher.publish_event("request_completed", br#"{"status":200}"#, 2000),
+    )
+    .await
+    .expect("timed out")
+    .expect("publish_event failed");
+
+    assert_eq!(
+        ack.status,
+        veyron::proto::veyron::EventPublishStatus::EventPublishOk as i32
+    );
+    assert!(!ack.event_id.is_empty());
+
+    let delivered = timeout(Duration::from_secs(2), subscriber.recv())
+        .await
+        .expect("event recv timed out")
+        .expect("event recv failed");
+    match delivered.payload {
+        Some(envelope::Payload::Event(e)) => {
+            assert_eq!(e.event_type, "plugin.network.request_completed");
+        }
+        other => panic!("expected Event, got: {:?}", other),
+    }
 
     let _ = shutdown_tx.send(());
 }
