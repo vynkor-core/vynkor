@@ -32,11 +32,13 @@
 
 Source: `veyron-plugins/plugins/network/KERNEL_PROTOCOL_TODO.md` (gitignored local notes in that repo). All four items require changes here (proto and/or kernel), not in `veyron-plugins`.
 
-### R6-01 — Plugin → event-bus publish path
+### R6-01 — Plugin → event-bus publish path ✅ done
 
 `EventBus::publish` (`src/events/bus.rs`) is only called from kernel-internal code (`src/ipc/protocol.rs`, `src/kernel/orchestrator.rs`, `src/plugins/supervisor.rs`). No wire message lets a plugin push an event in. Needed for `network` to emit `network.request_completed` (status, host, latency_ms, retry_count) instead of stdout-only logging.
 
 **Needed:** new `EventPublish` envelope variant (or `Event` with a plugin→kernel direction), handled in `src/ipc/connection.rs`/`src/ipc/protocol.rs` next to `Subscribe`/`Unsubscribe`. Gate behind a new permission (e.g. `PERMISSION_EVENT_PUBLISH`) so a plugin can't spoof `system.*` events.
+
+Fixed: new `EventPublish`/`EventPublishAck` wire messages and `EventPublishStatus` enum (`EVENT_PUBLISH_UNKNOWN=0, EVENT_PUBLISH_OK=1, EVENT_PUBLISH_ERROR=2, EVENT_PUBLISH_PERMISSION_DENY=3`) with new `PERMISSION_EVENT_PUBLISH` permission (value 13) added to `proto/veyron_protocol.proto` and mirrored to `sdk/cpp/proto/` and `sdk/python/proto/`. New `EventPublish` match arm in `src/ipc/protocol.rs` (after `Unsubscribe`) checks permission via `check_permission`, then structures the plugin-supplied `event_type` as `plugin.<sender_id>.<event_type>` with zero hardcoded business logic per the manifesto. New `EVENT_PUBLISH_SEQ: AtomicU64` kernel-assigned event id counter alongside `MSG_SEQ`/`ACTION_CORRELATION_SEQ`. Rust SDK gains `VeyronClient::publish_event()` (`sdk/rust/src/client.rs`) mirroring `send_action`'s pattern. Design doc: `docs/superpowers/specs/2026-07-06-plugin-event-publish-design.md` (revised 2026-07-08). Tests: `publish_without_permission_is_denied`, `publish_with_permission_namespaces_and_delivers_to_subscriber`, `two_plugins_publishing_same_event_type_land_on_distinct_namespaces`, `sdk_publish_event_returns_ack_and_delivers_to_subscriber` (all in `tests/integration/test_events.rs`). Scope: v1 is kernel + Rust SDK only; Python/C++ SDK helpers deferred as follow-up.
 
 ### R6-02 — Streaming action support (chunked request/response)
 

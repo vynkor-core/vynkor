@@ -11,7 +11,8 @@ use crate::kernel::commands::{CommandHandler, CommandOutcome};
 use crate::plugins::registry::{ActionLookup, PendingAction, PluginRegistry};
 use crate::proto::veyron::{
     envelope, ActionRequest, ActionResponse, ActionStatus, Envelope, ErrorCode, ErrorMessage,
-    Event, KernelCommandAck, PermissionType, PluginRegisterAck, Pong,
+    Event, EventPublishAck, EventPublishStatus, KernelCommandAck, PermissionType,
+    PluginRegisterAck, Pong,
 };
 use governor::{DefaultKeyedRateLimiter, Quota, RateLimiter};
 use metrics::{counter, histogram};
@@ -26,6 +27,7 @@ use tracing::{info, warn};
 
 static MSG_SEQ: AtomicU64 = AtomicU64::new(0);
 static ACTION_CORRELATION_SEQ: AtomicU64 = AtomicU64::new(0);
+static EVENT_PUBLISH_SEQ: AtomicU64 = AtomicU64::new(0);
 
 pub struct MessageRouter;
 
@@ -427,6 +429,57 @@ impl MessageRouter {
                 if let Some(entry) = registry.get_by_conn_id(msg.conn_id) {
                     event_bus.unsubscribe(&entry.plugin_id, unsub.event_types);
                 }
+                false
+            }
+
+            Some(envelope::Payload::EventPublish(req)) => {
+                let sender_id = registry
+                    .get_by_conn_id(msg.conn_id)
+                    .map(|e| e.plugin_id.clone())
+                    .unwrap_or_default();
+
+                let (status, event_id) = if check_permission(
+                    registry,
+                    &sender_id,
+                    PermissionType::PermissionEventPublish,
+                )
+                .is_err()
+                {
+                    (
+                        EventPublishStatus::EventPublishPermissionDeny,
+                        String::new(),
+                    )
+                } else {
+                    let now_ms = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis();
+                    let seq = EVENT_PUBLISH_SEQ.fetch_add(1, Ordering::Relaxed);
+                    let event_id = format!("evt-{sender_id}-{now_ms}-{seq}");
+                    let namespaced_type = format!("plugin.{sender_id}.{}", req.event_type);
+                    event_bus
+                        .publish(
+                            Event {
+                                event_id: event_id.clone(),
+                                event_type: namespaced_type,
+                                payload_json: req.payload_json,
+                                retry_count: 0,
+                            },
+                            registry,
+                        )
+                        .await;
+                    (EventPublishStatus::EventPublishOk, event_id)
+                };
+
+                let ack = Envelope {
+                    payload: Some(envelope::Payload::EventPublishAck(EventPublishAck {
+                        event_id,
+                        status: status as i32,
+                        error: String::new(),
+                    })),
+                    ..Default::default()
+                };
+                Self::send_envelope(&msg.write_tx, ack).await;
                 false
             }
 
