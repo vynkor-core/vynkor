@@ -172,6 +172,8 @@ impl Kernel {
             mac_secret,
             Some(config_permissions),
             config.ipc_rate_limit_rps,
+            config.action_caller_rate_limit_rps,
+            config.action_caller_max_concurrent,
             config.action_timeout_ms,
             config.max_conn_errors,
             config.max_tracked_error_conns,
