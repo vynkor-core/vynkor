@@ -1,4 +1,4 @@
-use super::helpers::start_kernel;
+use super::helpers::{start_kernel, start_kernel_with_config, test_config};
 use std::time::Duration;
 use tokio::time::timeout;
 use veyron::proto::veyron::{ActionStatus, CommandStatus, PluginManifest};
@@ -413,6 +413,315 @@ async fn kernel_denies_action_when_requester_lacks_required_permission() {
         never_received.is_err(),
         "provider must never receive the ActionRequest when the requester lacks the permission"
     );
+
+    let _ = shutdown_tx.send(());
+}
+
+#[tokio::test]
+async fn action_concurrency_cap_denies_third_concurrent_call_to_same_provider() {
+    // R6-03: a caller with action_caller_max_concurrent = 2 gets a 3rd concurrent
+    // ActionRequest to the SAME provider denied, but a concurrent request to a
+    // DIFFERENT provider still succeeds — proves per-(caller, provider) keying.
+    let mut cfg = test_config("/tmp/veyron_integ_action_concurrency_cap.sock", 19230);
+    cfg.action_caller_max_concurrent = Some(2);
+    let (shutdown_tx, _registry, _bus) = start_kernel_with_config(cfg).await;
+
+    let mut provider_x = VeyronClient::connect("/tmp/veyron_integ_action_concurrency_cap.sock")
+        .await
+        .unwrap();
+    provider_x
+        .register(
+            "provider-x",
+            PluginManifest {
+                actions: vec!["slow_action".to_string()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let mut provider_y = VeyronClient::connect("/tmp/veyron_integ_action_concurrency_cap.sock")
+        .await
+        .unwrap();
+    provider_y
+        .register(
+            "provider-y",
+            PluginManifest {
+                actions: vec!["other_action".to_string()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let mut caller = VeyronClient::connect("/tmp/veyron_integ_action_concurrency_cap.sock")
+        .await
+        .unwrap();
+    caller
+        .register("caller-a", PluginManifest::default())
+        .await
+        .unwrap();
+
+    // Fire 2 raw ActionRequests to provider-x without waiting for a response —
+    // provider-x never replies to these, so both stay pending and fill the cap.
+    for i in 0..2 {
+        let env = veyron::proto::veyron::Envelope {
+            payload: Some(veyron::proto::veyron::envelope::Payload::ActionRequest(
+                veyron::proto::veyron::ActionRequest {
+                    action_id: format!("fill-{i}"),
+                    action: "slow_action".to_string(),
+                    params_json: b"{}".to_vec(),
+                    timeout_ms: 5000,
+                },
+            )),
+            ..Default::default()
+        };
+        caller.send("kernel", env).await.unwrap();
+    }
+
+    // A 3rd ActionRequest to the SAME provider must be denied immediately —
+    // the kernel never forwards it, so no provider recv() is needed here.
+    let deny_env = veyron::proto::veyron::Envelope {
+        payload: Some(veyron::proto::veyron::envelope::Payload::ActionRequest(
+            veyron::proto::veyron::ActionRequest {
+                action_id: "act-3".to_string(),
+                action: "slow_action".to_string(),
+                params_json: b"{}".to_vec(),
+                timeout_ms: 5000,
+            },
+        )),
+        ..Default::default()
+    };
+    caller.send("kernel", deny_env).await.unwrap();
+
+    let deny_resp = timeout(Duration::from_secs(2), caller.recv())
+        .await
+        .expect("must not hang — denial is synchronous")
+        .expect("recv failed");
+    match deny_resp.payload {
+        Some(veyron::proto::veyron::envelope::Payload::ActionResponse(resp)) => {
+            assert_eq!(resp.action_id, "act-3");
+            assert_eq!(
+                resp.status,
+                ActionStatus::ActionQuotaExceeded as i32,
+                "3rd concurrent action to the same provider must be denied once cap is reached"
+            );
+        }
+        other => panic!("expected ActionResponse, got {other:?}"),
+    }
+
+    // A request to the DIFFERENT provider (provider-y) must still succeed —
+    // proves the cap is per-(caller, provider), not global.
+    let other_env = veyron::proto::veyron::Envelope {
+        payload: Some(veyron::proto::veyron::envelope::Payload::ActionRequest(
+            veyron::proto::veyron::ActionRequest {
+                action_id: "act-4".to_string(),
+                action: "other_action".to_string(),
+                params_json: b"{}".to_vec(),
+                timeout_ms: 2000,
+            },
+        )),
+        ..Default::default()
+    };
+    caller.send("kernel", other_env).await.unwrap();
+
+    let received = timeout(Duration::from_secs(2), provider_y.recv())
+        .await
+        .expect("provider-y recv timed out")
+        .expect("provider-y recv failed");
+    let internal_action_id = match received.payload {
+        Some(veyron::proto::veyron::envelope::Payload::ActionRequest(req)) => {
+            assert_eq!(req.action, "other_action");
+            req.action_id
+        }
+        other => panic!("expected ActionRequest, got {other:?}"),
+    };
+    let resp_env = veyron::proto::veyron::Envelope {
+        payload: Some(veyron::proto::veyron::envelope::Payload::ActionResponse(
+            veyron::proto::veyron::ActionResponse {
+                action_id: internal_action_id,
+                status: ActionStatus::ActionOk as i32,
+                data_json: b"{}".to_vec(),
+                error: String::new(),
+            },
+        )),
+        ..Default::default()
+    };
+    provider_y.send("kernel", resp_env).await.unwrap();
+
+    let resp_y = timeout(Duration::from_secs(2), caller.recv())
+        .await
+        .expect("must not hang")
+        .expect("recv failed");
+    match resp_y.payload {
+        Some(veyron::proto::veyron::envelope::Payload::ActionResponse(resp)) => {
+            assert_eq!(resp.action_id, "act-4");
+            assert_eq!(
+                resp.status,
+                ActionStatus::ActionOk as i32,
+                "a different provider must be unaffected by the caller's cap against provider-x"
+            );
+        }
+        other => panic!("expected ActionResponse, got {other:?}"),
+    }
+
+    let _ = shutdown_tx.send(());
+}
+
+#[tokio::test]
+async fn action_rate_limit_denies_burst_above_configured_rps() {
+    // R6-03: with action_caller_rate_limit_rps = 1, a rapid second request from
+    // the same (caller, provider) within the same second is denied.
+    let mut cfg = test_config("/tmp/veyron_integ_action_rate_limit.sock", 19231);
+    cfg.action_caller_rate_limit_rps = Some(1);
+    let (shutdown_tx, _registry, _bus) = start_kernel_with_config(cfg).await;
+
+    let mut provider = VeyronClient::connect("/tmp/veyron_integ_action_rate_limit.sock")
+        .await
+        .unwrap();
+    provider
+        .register(
+            "rl-provider",
+            PluginManifest {
+                actions: vec!["ping_action".to_string()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let mut caller = VeyronClient::connect("/tmp/veyron_integ_action_rate_limit.sock")
+        .await
+        .unwrap();
+    caller
+        .register("rl-caller", PluginManifest::default())
+        .await
+        .unwrap();
+
+    // First request: routes through fine (rps=1 allows one immediately).
+    let request_fut = tokio::spawn(async move {
+        let resp = caller
+            .send_action("ping_action", b"{}", 2000)
+            .await
+            .unwrap();
+        (caller, resp)
+    });
+
+    let received = timeout(Duration::from_secs(2), provider.recv())
+        .await
+        .expect("provider recv timed out")
+        .expect("provider recv failed");
+    let internal_action_id = match received.payload {
+        Some(veyron::proto::veyron::envelope::Payload::ActionRequest(req)) => req.action_id,
+        other => panic!("expected ActionRequest, got {other:?}"),
+    };
+    let resp_env = veyron::proto::veyron::Envelope {
+        payload: Some(veyron::proto::veyron::envelope::Payload::ActionResponse(
+            veyron::proto::veyron::ActionResponse {
+                action_id: internal_action_id,
+                status: ActionStatus::ActionOk as i32,
+                data_json: b"{}".to_vec(),
+                error: String::new(),
+            },
+        )),
+        ..Default::default()
+    };
+    provider.send("kernel", resp_env).await.unwrap();
+
+    let (mut caller, first) = timeout(Duration::from_secs(2), request_fut)
+        .await
+        .expect("timed out")
+        .expect("task panicked");
+    assert_eq!(first.status, ActionStatus::ActionOk as i32);
+
+    // Immediately send a second request — with rps=1 the bucket should be empty.
+    let second = timeout(
+        Duration::from_secs(2),
+        caller.send_action("ping_action", b"{}", 2000),
+    )
+    .await
+    .expect("must not hang")
+    .expect("send_action failed");
+    assert_eq!(
+        second.status,
+        ActionStatus::ActionQuotaExceeded as i32,
+        "immediate second request must be denied by the rps=1 limiter"
+    );
+
+    let _ = shutdown_tx.send(());
+}
+
+#[tokio::test]
+async fn action_quota_unset_leaves_routing_unlimited() {
+    // R6-03: with both quota configs left at their None default, action routing
+    // behaves exactly as before this feature (regression guard for the opt-in
+    // convention).
+    let (shutdown_tx, _registry, _bus) =
+        start_kernel("/tmp/veyron_integ_action_quota_unset.sock", 19232).await;
+
+    let mut provider = VeyronClient::connect("/tmp/veyron_integ_action_quota_unset.sock")
+        .await
+        .unwrap();
+    provider
+        .register(
+            "unlimited-provider",
+            PluginManifest {
+                actions: vec!["ping_action".to_string()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let mut caller = VeyronClient::connect("/tmp/veyron_integ_action_quota_unset.sock")
+        .await
+        .unwrap();
+    caller
+        .register("unlimited-caller", PluginManifest::default())
+        .await
+        .unwrap();
+
+    for i in 0..5 {
+        let request_fut = tokio::spawn(async move {
+            let resp = caller
+                .send_action("ping_action", b"{}", 2000)
+                .await
+                .unwrap();
+            (caller, resp)
+        });
+
+        let received = timeout(Duration::from_secs(2), provider.recv())
+            .await
+            .unwrap_or_else(|_| panic!("provider recv timed out on iteration {i}"))
+            .expect("provider recv failed");
+        let internal_action_id = match received.payload {
+            Some(veyron::proto::veyron::envelope::Payload::ActionRequest(req)) => req.action_id,
+            other => panic!("expected ActionRequest, got {other:?}"),
+        };
+        let resp_env = veyron::proto::veyron::Envelope {
+            payload: Some(veyron::proto::veyron::envelope::Payload::ActionResponse(
+                veyron::proto::veyron::ActionResponse {
+                    action_id: internal_action_id,
+                    status: ActionStatus::ActionOk as i32,
+                    data_json: b"{}".to_vec(),
+                    error: String::new(),
+                },
+            )),
+            ..Default::default()
+        };
+        provider.send("kernel", resp_env).await.unwrap();
+
+        let (c, resp) = timeout(Duration::from_secs(2), request_fut)
+            .await
+            .unwrap_or_else(|_| panic!("timed out on iteration {i}"))
+            .expect("task panicked");
+        caller = c;
+        assert_eq!(
+            resp.status,
+            ActionStatus::ActionOk as i32,
+            "with no quota configured, no request should ever be denied (iteration {i})"
+        );
+    }
 
     let _ = shutdown_tx.send(());
 }
