@@ -569,6 +569,189 @@ async fn action_concurrency_cap_denies_third_concurrent_call_to_same_provider() 
 }
 
 #[tokio::test]
+async fn action_concurrency_cap_releases_after_response_allowing_retry() {
+    // R6-03: proves the release path end-to-end, not just that the cap denies.
+    // With action_caller_max_concurrent = 1, a 2nd concurrent request to the
+    // same provider is denied while the 1st is still in flight. Once the
+    // provider answers the 1st request, the slot frees up with no explicit
+    // decrement anywhere — the cap is a live scan of pending actions — and a
+    // 3rd request from the same caller to the same provider must then route
+    // through successfully.
+    let mut cfg = test_config(
+        "/tmp/veyron_integ_action_concurrency_cap_release.sock",
+        19233,
+    );
+    cfg.action_caller_max_concurrent = Some(1);
+    let (shutdown_tx, _registry, _bus) = start_kernel_with_config(cfg).await;
+
+    let mut provider =
+        VeyronClient::connect("/tmp/veyron_integ_action_concurrency_cap_release.sock")
+            .await
+            .unwrap();
+    provider
+        .register(
+            "release-provider",
+            PluginManifest {
+                actions: vec!["slow_action".to_string()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let mut caller = VeyronClient::connect("/tmp/veyron_integ_action_concurrency_cap_release.sock")
+        .await
+        .unwrap();
+    caller
+        .register("release-caller", PluginManifest::default())
+        .await
+        .unwrap();
+
+    // Fire a raw ActionRequest that fills the (caller, provider) cap of 1.
+    // The provider does not reply yet, so it stays pending.
+    let fill_env = veyron::proto::veyron::Envelope {
+        payload: Some(veyron::proto::veyron::envelope::Payload::ActionRequest(
+            veyron::proto::veyron::ActionRequest {
+                action_id: "fill-1".to_string(),
+                action: "slow_action".to_string(),
+                params_json: b"{}".to_vec(),
+                timeout_ms: 5000,
+            },
+        )),
+        ..Default::default()
+    };
+    caller.send("kernel", fill_env).await.unwrap();
+
+    // A 2nd request to the same provider must be denied immediately — the
+    // cap is already full and the kernel never forwards it to the provider.
+    let denied_env = veyron::proto::veyron::Envelope {
+        payload: Some(veyron::proto::veyron::envelope::Payload::ActionRequest(
+            veyron::proto::veyron::ActionRequest {
+                action_id: "denied-1".to_string(),
+                action: "slow_action".to_string(),
+                params_json: b"{}".to_vec(),
+                timeout_ms: 5000,
+            },
+        )),
+        ..Default::default()
+    };
+    caller.send("kernel", denied_env).await.unwrap();
+
+    let denied_resp = timeout(Duration::from_secs(2), caller.recv())
+        .await
+        .expect("must not hang — denial is synchronous")
+        .expect("recv failed");
+    match denied_resp.payload {
+        Some(veyron::proto::veyron::envelope::Payload::ActionResponse(resp)) => {
+            assert_eq!(resp.action_id, "denied-1");
+            assert_eq!(
+                resp.status,
+                ActionStatus::ActionQuotaExceeded as i32,
+                "2nd concurrent action to the same provider must be denied once cap of 1 is reached"
+            );
+        }
+        other => panic!("expected ActionResponse, got {other:?}"),
+    }
+
+    // Now free the slot: the provider receives fill-1's routed request and
+    // replies OK. The caller must then receive fill-1's response.
+    let received = timeout(Duration::from_secs(2), provider.recv())
+        .await
+        .expect("provider recv timed out")
+        .expect("provider recv failed");
+    let internal_action_id = match received.payload {
+        Some(veyron::proto::veyron::envelope::Payload::ActionRequest(req)) => {
+            assert_eq!(req.action, "slow_action");
+            req.action_id
+        }
+        other => panic!("expected ActionRequest, got {other:?}"),
+    };
+    let fill_resp_env = veyron::proto::veyron::Envelope {
+        payload: Some(veyron::proto::veyron::envelope::Payload::ActionResponse(
+            veyron::proto::veyron::ActionResponse {
+                action_id: internal_action_id,
+                status: ActionStatus::ActionOk as i32,
+                data_json: b"{}".to_vec(),
+                error: String::new(),
+            },
+        )),
+        ..Default::default()
+    };
+    provider.send("kernel", fill_resp_env).await.unwrap();
+
+    let fill_caller_resp = timeout(Duration::from_secs(2), caller.recv())
+        .await
+        .expect("must not hang")
+        .expect("recv failed");
+    match fill_caller_resp.payload {
+        Some(veyron::proto::veyron::envelope::Payload::ActionResponse(resp)) => {
+            assert_eq!(resp.action_id, "fill-1");
+            assert_eq!(resp.status, ActionStatus::ActionOk as i32);
+        }
+        other => panic!("expected ActionResponse, got {other:?}"),
+    }
+
+    // The slot is now free (no explicit decrement — the cap re-scans
+    // pending actions on every request). A 3rd request from the SAME
+    // caller to the SAME provider must now route through successfully.
+    let retry_env = veyron::proto::veyron::Envelope {
+        payload: Some(veyron::proto::veyron::envelope::Payload::ActionRequest(
+            veyron::proto::veyron::ActionRequest {
+                action_id: "retry-1".to_string(),
+                action: "slow_action".to_string(),
+                params_json: b"{}".to_vec(),
+                timeout_ms: 5000,
+            },
+        )),
+        ..Default::default()
+    };
+    caller.send("kernel", retry_env).await.unwrap();
+
+    let retry_received = timeout(Duration::from_secs(2), provider.recv())
+        .await
+        .expect("provider recv timed out on retry")
+        .expect("provider recv failed on retry");
+    let retry_internal_action_id = match retry_received.payload {
+        Some(veyron::proto::veyron::envelope::Payload::ActionRequest(req)) => {
+            assert_eq!(req.action, "slow_action");
+            req.action_id
+        }
+        other => panic!("expected ActionRequest, got {other:?}"),
+    };
+    let retry_resp_env = veyron::proto::veyron::Envelope {
+        payload: Some(veyron::proto::veyron::envelope::Payload::ActionResponse(
+            veyron::proto::veyron::ActionResponse {
+                action_id: retry_internal_action_id,
+                status: ActionStatus::ActionOk as i32,
+                data_json: b"{}".to_vec(),
+                error: String::new(),
+            },
+        )),
+        ..Default::default()
+    };
+    provider.send("kernel", retry_resp_env).await.unwrap();
+
+    let retry_caller_resp = timeout(Duration::from_secs(2), caller.recv())
+        .await
+        .expect("must not hang")
+        .expect("recv failed");
+    match retry_caller_resp.payload {
+        Some(veyron::proto::veyron::envelope::Payload::ActionResponse(resp)) => {
+            assert_eq!(resp.action_id, "retry-1");
+            assert_eq!(
+                resp.status,
+                ActionStatus::ActionOk as i32,
+                "retry after the in-flight action completed must succeed — proves the \
+                 scan-based cap self-corrects with no explicit decrement"
+            );
+        }
+        other => panic!("expected ActionResponse, got {other:?}"),
+    }
+
+    let _ = shutdown_tx.send(());
+}
+
+#[tokio::test]
 async fn action_rate_limit_denies_burst_above_configured_rps() {
     // R6-03: with action_caller_rate_limit_rps = 1, a rapid second request from
     // the same (caller, provider) within the same second is denied.
