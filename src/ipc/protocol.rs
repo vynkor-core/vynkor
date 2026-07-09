@@ -50,6 +50,8 @@ impl MessageRouter {
             None,
             None,
             None,
+            defaults.action_caller_rate_limit_rps,
+            defaults.action_caller_max_concurrent,
             defaults.action_timeout_ms,
             defaults.max_conn_errors,
             defaults.max_tracked_error_conns,
@@ -75,6 +77,10 @@ impl MessageRouter {
         // that an absent/empty list means "no restriction".
         config_permissions: Option<Arc<HashMap<String, Vec<String>>>>,
         ipc_rate_limit_rps: Option<u32>,
+        // R6-03: per-(caller, provider) action quota. Both None = unlimited,
+        // matching ipc_rate_limit_rps's existing opt-in convention.
+        action_caller_rate_limit_rps: Option<u32>,
+        action_caller_max_concurrent: Option<u32>,
         action_timeout_ms: u32,
         max_conn_errors: u32,
         max_tracked_error_conns: usize,
@@ -99,6 +105,14 @@ impl MessageRouter {
                 NonZeroU32::new(rps).map(|r| Arc::new(RateLimiter::keyed(Quota::per_second(r))))
             });
 
+        // R6-03: per-(caller, provider) action rate limiter. Keyed by a tuple so
+        // hammering one provider doesn't burn a caller's budget against an
+        // unrelated provider it also legitimately calls.
+        let action_limiter: Option<Arc<DefaultKeyedRateLimiter<(String, String)>>> =
+            action_caller_rate_limit_rps.and_then(|rps| {
+                NonZeroU32::new(rps).map(|r| Arc::new(RateLimiter::keyed(Quota::per_second(r))))
+            });
+
         // conn_ids are monotonically assigned and never reused, so without
         // periodic eviction this keyed state grows for the life of the
         // process (AUDIT M-01). Evict idle keys on the same cadence as the
@@ -111,6 +125,9 @@ impl MessageRouter {
                 biased;
                 _ = prune_tick.tick() => {
                     if let Some(limiter) = &ipc_limiter {
+                        limiter.retain_recent();
+                    }
+                    if let Some(limiter) = &action_limiter {
                         limiter.retain_recent();
                     }
                     for expired in registry.sweep_expired_actions(Instant::now()) {
@@ -186,6 +203,8 @@ impl MessageRouter {
                         event_store.as_deref(),
                         &mac_secret,
                         config_permissions.as_deref(),
+                        action_limiter.as_deref(),
+                        action_caller_max_concurrent,
                         action_timeout_ms,
                     )
                     .await
@@ -235,6 +254,8 @@ impl MessageRouter {
         event_store: Option<&EventStore>,
         mac_secret: &Option<Arc<Vec<u8>>>,
         config_permissions: Option<&HashMap<String, Vec<String>>>,
+        action_limiter: Option<&DefaultKeyedRateLimiter<(String, String)>>,
+        action_caller_max_concurrent: Option<u32>,
         action_timeout_ms: u32,
     ) -> bool {
         let envelope = match Envelope::decode(msg.frame.payload.as_ref()) {
@@ -525,6 +546,31 @@ impl MessageRouter {
                         }) =>
                     {
                         Some(ActionStatus::ActionPermissionDeny)
+                    }
+                    // R6-03: concurrency cap — checked before the rate limit since it's
+                    // the direct fix for "one caller holds N provider slots open" and is
+                    // cheaper (a DashMap scan, no token-bucket state touch) to fail fast on.
+                    ActionLookup::Found(ref provider)
+                        if action_caller_max_concurrent.is_some_and(|cap| {
+                            registry.count_pending_actions_for(&sender_id, &provider.plugin_id)
+                                >= cap
+                        }) =>
+                    {
+                        counter!("action_quota_denied_total", "reason" => "concurrency")
+                            .increment(1);
+                        Some(ActionStatus::ActionQuotaExceeded)
+                    }
+                    // R6-03: rate limit — keyed by (caller, provider), same governor
+                    // crate/pattern as the existing per-conn ipc_limiter.
+                    ActionLookup::Found(ref provider)
+                        if action_limiter.is_some_and(|limiter| {
+                            limiter
+                                .check_key(&(sender_id.clone(), provider.plugin_id.clone()))
+                                .is_err()
+                        }) =>
+                    {
+                        counter!("action_quota_denied_total", "reason" => "rate").increment(1);
+                        Some(ActionStatus::ActionQuotaExceeded)
                     }
                     ActionLookup::Found(provider) => {
                         let internal_id = format!(
