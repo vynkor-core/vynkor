@@ -27,6 +27,7 @@ use tracing::{info, warn};
 
 static MSG_SEQ: AtomicU64 = AtomicU64::new(0);
 static ACTION_CORRELATION_SEQ: AtomicU64 = AtomicU64::new(0);
+static EVENT_PUBLISH_SEQ: AtomicU64 = AtomicU64::new(0);
 
 pub struct MessageRouter;
 
@@ -431,7 +432,7 @@ impl MessageRouter {
                 false
             }
 
-            Some(envelope::Payload::EventPublish(_req)) => {
+            Some(envelope::Payload::EventPublish(req)) => {
                 let sender_id = registry
                     .get_by_conn_id(msg.conn_id)
                     .map(|e| e.plugin_id.clone())
@@ -449,8 +450,25 @@ impl MessageRouter {
                         String::new(),
                     )
                 } else {
-                    // Task 3 fills in the publish path here.
-                    (EventPublishStatus::EventPublishUnknown, String::new())
+                    let now_ms = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis();
+                    let seq = EVENT_PUBLISH_SEQ.fetch_add(1, Ordering::Relaxed);
+                    let event_id = format!("evt-{sender_id}-{now_ms}-{seq}");
+                    let namespaced_type = format!("plugin.{sender_id}.{}", req.event_type);
+                    event_bus
+                        .publish(
+                            Event {
+                                event_id: event_id.clone(),
+                                event_type: namespaced_type,
+                                payload_json: req.payload_json,
+                                retry_count: 0,
+                            },
+                            registry,
+                        )
+                        .await;
+                    (EventPublishStatus::EventPublishOk, event_id)
                 };
 
                 let ack = Envelope {
