@@ -80,6 +80,15 @@ pub struct Config {
     /// Exceeding the limit sends ERR_RATE_LIMITED without disconnecting the plugin.
     #[serde(default)]
     pub ipc_rate_limit_rps: Option<u32>,
+    /// R6-03: per-(caller, provider) action rate limit — requests/second one calling
+    /// plugin may send through one action provider. None = unlimited. Exceeding sends
+    /// ActionResponse{status: ACTION_QUOTA_EXCEEDED} without forwarding to the provider.
+    #[serde(default)]
+    pub action_caller_rate_limit_rps: Option<u32>,
+    /// R6-03: per-(caller, provider) max simultaneous pending actions one calling
+    /// plugin may have in flight against one action provider. None = unlimited.
+    #[serde(default)]
+    pub action_caller_max_concurrent: Option<u32>,
     /// TLS certificate (PEM). When both cert and key are set, the WS/HTTP gateway binds TLS.
     #[serde(default)]
     pub tls_cert_path: Option<PathBuf>,
@@ -268,6 +277,8 @@ impl Default for Config {
             api_rate_limit_rps: None,
             api_rate_limit_burst: None,
             ipc_rate_limit_rps: None,
+            action_caller_rate_limit_rps: None,
+            action_caller_max_concurrent: None,
             tls_cert_path: None,
             tls_key_path: None,
             registry_url: None,

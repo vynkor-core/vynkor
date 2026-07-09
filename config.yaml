@@ -26,6 +26,12 @@ allow_no_auth: true
 # Per-plugin IPC send rate limit. Exceeding returns ERR_RATE_LIMITED without disconnect.
 # ipc_rate_limit_rps: 500    # messages per second per plugin connection; default: unlimited
 
+# Per-(caller, provider) action quota (R6-03) — bounds one calling plugin from
+# starving others via actions routed through a shared provider (e.g. `network`).
+# Exceeding either returns ActionResponse{status: ACTION_QUOTA_EXCEEDED}.
+# action_caller_rate_limit_rps: 50    # action requests/second per (caller, provider); default: unlimited
+# action_caller_max_concurrent: 10    # simultaneous pending actions per (caller, provider); default: unlimited
+
 # TLS for WebSocket/HTTP gateway. When both are set, binds HTTPS/WSS instead of plain HTTP.
 # tls_cert_path: /etc/veyron/tls/cert.pem
 # tls_key_path:  /etc/veyron/tls/key.pem
