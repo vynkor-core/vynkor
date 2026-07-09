@@ -213,3 +213,83 @@ async fn publish_with_permission_namespaces_and_delivers_to_subscriber() {
 
     let _ = shutdown_tx.send(());
 }
+
+#[tokio::test]
+async fn two_plugins_publishing_same_event_type_land_on_distinct_namespaces() {
+    let (shutdown_tx, _registry, _bus) =
+        start_kernel("/tmp/veyron_integ_evpub_ns.sock", 19702).await;
+
+    let publish_manifest = PluginManifest {
+        permissions: vec!["PERMISSION_EVENT_PUBLISH".to_string()],
+        ..Default::default()
+    };
+
+    let mut network = VeyronClient::connect("/tmp/veyron_integ_evpub_ns.sock")
+        .await
+        .unwrap();
+    network
+        .register("network", publish_manifest.clone())
+        .await
+        .unwrap();
+
+    let mut weather = VeyronClient::connect("/tmp/veyron_integ_evpub_ns.sock")
+        .await
+        .unwrap();
+    weather
+        .register("weather", publish_manifest)
+        .await
+        .unwrap();
+
+    let mut subscriber = VeyronClient::connect("/tmp/veyron_integ_evpub_ns.sock")
+        .await
+        .unwrap();
+    subscriber
+        .register("evpub-ns-subscriber", PluginManifest::default())
+        .await
+        .unwrap();
+    // Only subscribes to network's namespace, not weather's.
+    subscriber
+        .subscribe(vec!["plugin.network.request_completed".to_string()])
+        .await
+        .unwrap();
+
+    tokio::time::sleep(Duration::from_millis(30)).await;
+
+    for client in [&mut network, &mut weather] {
+        let env = veyron::proto::veyron::Envelope {
+            payload: Some(envelope::Payload::EventPublish(
+                veyron::proto::veyron::EventPublish {
+                    event_type: "request_completed".to_string(),
+                    payload_json: b"{}".to_vec(),
+                },
+            )),
+            ..Default::default()
+        };
+        client.send("kernel", env).await.unwrap();
+        let _ = timeout(Duration::from_secs(2), client.recv())
+            .await
+            .expect("ack recv timed out")
+            .expect("ack recv failed");
+    }
+
+    let delivered = timeout(Duration::from_secs(2), subscriber.recv())
+        .await
+        .expect("event recv timed out")
+        .expect("event recv failed");
+    match delivered.payload {
+        Some(envelope::Payload::Event(e)) => {
+            assert_eq!(e.event_type, "plugin.network.request_completed");
+        }
+        other => panic!("expected Event, got: {:?}", other),
+    }
+
+    // weather's event on a namespace nobody subscribed to must never arrive.
+    let never_received = timeout(Duration::from_millis(300), subscriber.recv()).await;
+    assert!(
+        never_received.is_err(),
+        "subscriber must not receive plugin.weather.request_completed \
+         when only subscribed to plugin.network.request_completed"
+    );
+
+    let _ = shutdown_tx.send(());
+}
