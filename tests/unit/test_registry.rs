@@ -427,3 +427,71 @@ fn take_pending_action_if_provider_mismatched_provider_leaves_it_in_place() {
         .expect("entry must still be present for the real provider");
     assert_eq!(taken.original_action_id, "act-1");
 }
+
+fn dummy_pending_with_requester_and_provider(
+    original_action_id: &str,
+    deadline: Instant,
+    requester_id: &str,
+    provider_id: &str,
+) -> PendingAction {
+    PendingAction {
+        requester_write_tx: dummy_write_tx(),
+        original_action_id: original_action_id.to_string(),
+        requester_id: requester_id.to_string(),
+        deadline,
+        provider_id: provider_id.to_string(),
+    }
+}
+
+#[test]
+fn count_pending_actions_for_counts_only_matching_requester_and_provider() {
+    let reg = PluginRegistry::new();
+    let deadline = Instant::now() + Duration::from_secs(30);
+
+    // caller-a -> provider-x (2 in flight)
+    reg.register_pending_action(
+        "kact-1".to_string(),
+        dummy_pending_with_requester_and_provider("act-1", deadline, "caller-a", "provider-x"),
+    );
+    reg.register_pending_action(
+        "kact-2".to_string(),
+        dummy_pending_with_requester_and_provider("act-2", deadline, "caller-a", "provider-x"),
+    );
+    // caller-a -> provider-y (different provider, must not count toward provider-x)
+    reg.register_pending_action(
+        "kact-3".to_string(),
+        dummy_pending_with_requester_and_provider("act-3", deadline, "caller-a", "provider-y"),
+    );
+    // caller-b -> provider-x (different caller, must not count toward caller-a)
+    reg.register_pending_action(
+        "kact-4".to_string(),
+        dummy_pending_with_requester_and_provider("act-4", deadline, "caller-b", "provider-x"),
+    );
+
+    assert_eq!(
+        reg.count_pending_actions_for("caller-a", "provider-x"),
+        2,
+        "only caller-a's actions against provider-x must count"
+    );
+    assert_eq!(reg.count_pending_actions_for("caller-a", "provider-y"), 1);
+    assert_eq!(reg.count_pending_actions_for("caller-b", "provider-x"), 1);
+    assert_eq!(reg.count_pending_actions_for("caller-c", "provider-x"), 0);
+}
+
+#[test]
+fn count_pending_actions_for_reflects_removal() {
+    let reg = PluginRegistry::new();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    reg.register_pending_action(
+        "kact-1".to_string(),
+        dummy_pending_with_requester_and_provider("act-1", deadline, "caller-a", "provider-x"),
+    );
+    assert_eq!(reg.count_pending_actions_for("caller-a", "provider-x"), 1);
+
+    reg.take_pending_action("kact-1");
+    assert_eq!(
+        reg.count_pending_actions_for("caller-a", "provider-x"),
+        0,
+        "count must drop to 0 once the pending action is taken/removed"
+    );
+}

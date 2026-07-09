@@ -209,6 +209,19 @@ impl PluginRegistry {
             .filter_map(|k| self.take_pending_action(&k))
             .collect()
     }
+
+    /// Count in-flight pending actions for a given `(requester_id, provider_id)`
+    /// pair (R6-03). Used to enforce the per-caller concurrency cap against a
+    /// shared provider. A scan, not a maintained counter — bounded by total
+    /// kernel-wide in-flight actions, which `sweep_expired_actions` already
+    /// keeps bounded, and can't desync the way a separately incremented/
+    /// decremented counter could across the three existing removal sites.
+    pub fn count_pending_actions_for(&self, requester_id: &str, provider_id: &str) -> u32 {
+        self.pending_actions
+            .iter()
+            .filter(|e| e.requester_id == requester_id && e.provider_id == provider_id)
+            .count() as u32
+    }
 }
 
 impl Default for PluginRegistry {
