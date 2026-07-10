@@ -1383,3 +1383,110 @@ async fn stream_backpressure_aborts_both_sides_and_terminates_with_backpressure_
 
     let _ = shutdown_tx.send(());
 }
+
+/// Review-finding regression test (fix pass on Task 4/R6-02): the previous
+/// `stream_backpressure_aborts_both_sides...` test only floods the
+/// requester -> provider hop (via `send_request_chunk`), which only ever
+/// exercises a *provider* channel-full condition. It never exercises the
+/// direction that actually triggers the bug: the *requester's* channel full
+/// while `abort_stream` is notifying that very same requester.
+///
+/// `abort_stream` previously used blocking `send_envelope(...).await` for
+/// its two requester-facing notifications (`ActionStreamAbort` and the
+/// terminal `ActionResponse`). When invoked from the `ActionResponseChunk`
+/// arm because forwarding a response chunk to the requester just failed
+/// (full-but-alive channel), those two blocking sends targeted that same
+/// full channel and would stall the entire shared router loop
+/// (`run_with_context` processes every connection's messages sequentially)
+/// until the requester drained — i.e. the exact scenario non-blocking
+/// backpressure handling exists to prevent.
+///
+/// This test floods in the provider -> requester direction (via
+/// `send_response_chunk`) to fill the *requester's* inbound channel, and
+/// proves the router keeps servicing other connections promptly by having
+/// an unrelated third client ping the kernel while the flood is in flight —
+/// mirroring how `tests/unit/test_router.rs`'s
+/// `forward_to_full_channel_returns_without_waiting` proves non-blocking
+/// behavior via timing rather than just asserting eventual delivery.
+#[tokio::test]
+async fn stream_backpressure_on_requester_channel_does_not_stall_router() {
+    let (shutdown_tx, _registry, _bus) =
+        start_kernel("/tmp/veyron_integ_stream_bp_requester.sock", 19304).await;
+
+    let mut provider = VeyronClient::connect("/tmp/veyron_integ_stream_bp_requester.sock")
+        .await
+        .unwrap();
+    provider
+        .register(
+            "bp-req-provider",
+            PluginManifest {
+                actions: vec!["download".to_string()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    // Deliberately never drained: this is the channel we want to fill.
+    let mut requester = VeyronClient::connect("/tmp/veyron_integ_stream_bp_requester.sock")
+        .await
+        .unwrap();
+    requester
+        .register("bp-req-requester", PluginManifest::default())
+        .await
+        .unwrap();
+
+    requester
+        .send_action_streaming("download", 2000)
+        .await
+        .unwrap();
+
+    let received = timeout(Duration::from_secs(2), provider.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let internal_action_id = match received.payload {
+        Some(veyron::proto::veyron::envelope::Payload::ActionRequest(req)) => req.action_id,
+        other => panic!("expected ActionRequest, got {other:?}"),
+    };
+
+    // A third, unrelated connection: proves the shared router loop keeps
+    // servicing other connections promptly while the flood below is
+    // in flight and the requester's channel is full.
+    let mut bystander = VeyronClient::connect("/tmp/veyron_integ_stream_bp_requester.sock")
+        .await
+        .unwrap();
+    bystander
+        .register("bp-req-bystander", PluginManifest::default())
+        .await
+        .unwrap();
+
+    // Flood response chunks from the provider without the requester ever
+    // draining, forcing a try_send failure on the kernel -> requester hop
+    // (same magnitude convention as the existing backpressure test).
+    for seq in 0..2000u32 {
+        if provider
+            .send_response_chunk(&internal_action_id, seq, vec![0u8; 1024])
+            .await
+            .is_err()
+        {
+            break;
+        }
+    }
+
+    // While the requester's channel is (very likely) full and abort_stream
+    // may be firing repeatedly against it, the router must still service
+    // the bystander's ping promptly. Before the fix, abort_stream's
+    // blocking sends to the stuck requester channel would stall the shared
+    // router loop for every other connection until the requester drained
+    // (which never happens here) — this ping would then time out.
+    let pong = timeout(Duration::from_millis(500), bystander.ping()).await;
+    assert!(
+        pong.is_ok(),
+        "router appears stalled: bystander ping did not complete promptly \
+         while requester channel was under backpressure (abort_stream may \
+         be blocking on the full requester channel)"
+    );
+
+    let _ = shutdown_tx.send(());
+}

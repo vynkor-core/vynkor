@@ -704,6 +704,7 @@ impl MessageRouter {
                             }
                         }
                         None => {
+                            warn!(action_id = %internal_id, "request chunk provider disconnected, aborting stream");
                             Self::abort_stream(registry, &internal_id, "provider disconnected")
                                 .await;
                         }
@@ -1049,10 +1050,21 @@ impl MessageRouter {
     /// forwarding a stream chunk in either direction, so a full/closed
     /// channel never means a silently dropped (and therefore corrupting)
     /// chunk — the whole stream dies instead, loudly, on both ends.
+    ///
+    /// Both notification sends are non-blocking (`try_send_envelope`): this
+    /// is invoked from the shared router loop (`run_with_context`), which
+    /// must never block on any single connection's channel (see the
+    /// non-blocking-in-shared-loop invariant at `forward()`). In particular,
+    /// the `ActionResponseChunk` arm calls this precisely when the
+    /// *requester's* channel is full-but-alive, so a blocking send here
+    /// would stall the whole router on exactly the connection backpressure
+    /// handling exists to guard against. Best-effort delivery is acceptable:
+    /// there is no further fallback if even the abort notice can't be sent.
     async fn abort_stream(registry: &PluginRegistry, internal_id: &str, reason: &str) {
         let Some(pending) = registry.take_pending_action(internal_id) else {
             return;
         };
+        counter!("action_stream_aborted_total", "reason" => reason.to_string()).increment(1);
 
         let abort_to_requester = Envelope {
             payload: Some(envelope::Payload::ActionStreamAbort(ActionStreamAbort {
@@ -1061,7 +1073,7 @@ impl MessageRouter {
             })),
             ..Default::default()
         };
-        Self::send_envelope(&pending.requester_write_tx, abort_to_requester).await;
+        let _ = Self::try_send_envelope(&pending.requester_write_tx, abort_to_requester);
 
         let terminal_response = Envelope {
             payload: Some(envelope::Payload::ActionResponse(ActionResponse {
@@ -1072,7 +1084,7 @@ impl MessageRouter {
             })),
             ..Default::default()
         };
-        Self::send_envelope(&pending.requester_write_tx, terminal_response).await;
+        let _ = Self::try_send_envelope(&pending.requester_write_tx, terminal_response);
 
         if let Some(provider_entry) = registry.get(&pending.provider_id) {
             let abort_to_provider = Envelope {
