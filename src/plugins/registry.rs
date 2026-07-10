@@ -237,7 +237,13 @@ impl PluginRegistry {
     /// (the kernel translates to an internal id that only the provider
     /// sees), so inbound `ActionRequestChunk`s from the requester must be
     /// correlated by `(requester_id, original_action_id)` instead. A scan,
-    /// same bounded-by-in-flight-actions tradeoff as `count_pending_actions_for`.
+    /// bounded by total in-flight actions like `count_pending_actions_for` —
+    /// but unlike that method (called once per action setup), this runs once
+    /// per inbound request chunk, so its cost is O(chunks × in-flight
+    /// actions) for a streaming upload, not O(1) per action. Accepted for
+    /// now since fixing it would require a wire change letting the kernel
+    /// hand the internal id back to the requester; revisit if a high-
+    /// throughput streaming consumer materializes.
     pub fn find_pending_internal_id(
         &self,
         requester_id: &str,
