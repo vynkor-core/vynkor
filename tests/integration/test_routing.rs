@@ -41,6 +41,7 @@ async fn plugin_a_sends_to_plugin_b_and_b_receives() {
             action: "do_something".to_string(),
             params_json: b"{}".to_vec(),
             timeout_ms: 0,
+            streaming: false,
         })),
         ..Default::default()
     };

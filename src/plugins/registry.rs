@@ -22,6 +22,7 @@ pub enum ActionLookup {
 /// `PluginRegistry::pending_actions` by a kernel-minted internal id (not the
 /// requester's own `action_id`, which is only unique per-process and could
 /// collide across two different plugin connections).
+#[derive(Clone)]
 pub struct PendingAction {
     pub requester_write_tx: mpsc::Sender<Outbound>,
     pub original_action_id: String,
@@ -221,6 +222,31 @@ impl PluginRegistry {
             .iter()
             .filter(|e| e.requester_id == requester_id && e.provider_id == provider_id)
             .count() as u32
+    }
+
+    /// Read-only lookup by internal id — does not remove the entry. Used by
+    /// R6-02 chunk forwarding, which needs to peek `provider_id`/
+    /// `requester_write_tx` repeatedly across many chunks without consuming
+    /// the pending-action slot (only the terminal `ActionResponse` or an
+    /// abort removes it).
+    pub fn get_pending_action(&self, internal_id: &str) -> Option<PendingAction> {
+        self.pending_actions.get(internal_id).map(|e| e.clone())
+    }
+
+    /// Reverse lookup: the requester only ever knows its own `action_id`
+    /// (the kernel translates to an internal id that only the provider
+    /// sees), so inbound `ActionRequestChunk`s from the requester must be
+    /// correlated by `(requester_id, original_action_id)` instead. A scan,
+    /// same bounded-by-in-flight-actions tradeoff as `count_pending_actions_for`.
+    pub fn find_pending_internal_id(
+        &self,
+        requester_id: &str,
+        original_action_id: &str,
+    ) -> Option<String> {
+        self.pending_actions
+            .iter()
+            .find(|e| e.requester_id == requester_id && e.original_action_id == original_action_id)
+            .map(|e| e.key().clone())
     }
 }
 

@@ -68,6 +68,7 @@ async fn cpp_sdk_echo_plugin_round_trip() {
         action: "echo".to_string(),
         params_json: br#"{"text":"hello from harness"}"#.to_vec(),
         timeout_ms: 3000,
+        streaming: false,
     };
     client
         .send(

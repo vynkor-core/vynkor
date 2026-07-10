@@ -495,3 +495,49 @@ fn count_pending_actions_for_reflects_removal() {
         "count must drop to 0 once the pending action is taken/removed"
     );
 }
+
+#[test]
+fn get_pending_action_returns_clone_without_removing() {
+    let registry = PluginRegistry::new();
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    registry.register_pending_action(
+        "kact-1".to_string(),
+        PendingAction {
+            requester_write_tx: tx,
+            original_action_id: "orig-1".to_string(),
+            requester_id: "caller".to_string(),
+            deadline: std::time::Instant::now() + std::time::Duration::from_secs(30),
+            provider_id: "provider".to_string(),
+        },
+    );
+
+    let found = registry.get_pending_action("kact-1").expect("should find entry");
+    assert_eq!(found.original_action_id, "orig-1");
+    // Still present after a read-only get — take_pending_action must still work.
+    assert!(registry.take_pending_action("kact-1").is_some());
+}
+
+#[test]
+fn find_pending_internal_id_matches_requester_and_original_action_id() {
+    let registry = PluginRegistry::new();
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    registry.register_pending_action(
+        "kact-7".to_string(),
+        PendingAction {
+            requester_write_tx: tx,
+            original_action_id: "orig-abc".to_string(),
+            requester_id: "caller-x".to_string(),
+            deadline: std::time::Instant::now() + std::time::Duration::from_secs(30),
+            provider_id: "provider-y".to_string(),
+        },
+    );
+
+    assert_eq!(
+        registry.find_pending_internal_id("caller-x", "orig-abc"),
+        Some("kact-7".to_string())
+    );
+    // Wrong requester_id must not match, even with the right original_action_id.
+    assert_eq!(registry.find_pending_internal_id("someone-else", "orig-abc"), None);
+    // Wrong original_action_id must not match.
+    assert_eq!(registry.find_pending_internal_id("caller-x", "not-it"), None);
+}

@@ -72,6 +72,7 @@ async fn rust_sdk_send_action_request_and_receive_response() {
             action: "echo".to_string(),
             params_json: br#"{"msg":"hello"}"#.to_vec(),
             timeout_ms: 3000,
+            streaming: false,
         })),
         ..Default::default()
     };
