@@ -889,7 +889,11 @@ impl MessageRouter {
         Self::send_envelope(tx, env).await;
     }
 
-    async fn send_envelope(tx: &mpsc::Sender<Outbound>, mut env: Envelope) {
+    /// Builds the outbound wire frame for `env`, or `None` if encoding
+    /// failed — mirrors the original `send_envelope`'s silent early-return
+    /// on an encode error (unchanged behavior, just factored out so both the
+    /// blocking and non-blocking send paths share it).
+    fn build_outbound(mut env: Envelope) -> Option<Outbound> {
         let ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -901,7 +905,7 @@ impl MessageRouter {
 
         let mut payload = Vec::new();
         if env.encode(&mut payload).is_err() {
-            return;
+            return None;
         }
         let crc = crc32fast::hash(&payload);
         let frame = Frame {
@@ -917,7 +921,26 @@ impl MessageRouter {
             payload: payload.into(),
             mac: None,
         };
-        let _ = tx.send(out_frame(frame)).await;
+        Some(out_frame(frame))
+    }
+
+    async fn send_envelope(tx: &mpsc::Sender<Outbound>, env: Envelope) {
+        if let Some(out) = Self::build_outbound(env) {
+            let _ = tx.send(out).await;
+        }
+    }
+
+    /// Non-blocking counterpart of `send_envelope`, for forwarding to a
+    /// *different* connection's channel (R6-02 stream chunks) where a
+    /// blocking `.await` would reintroduce the T-03 shared-router-task
+    /// stall. Returns `false` (frame dropped, or encoding failed) on a full
+    /// or closed channel; callers are responsible for reacting (R6-02:
+    /// abort the whole stream — see `abort_stream` in Task 4).
+    pub(crate) fn try_send_envelope(tx: &mpsc::Sender<Outbound>, env: Envelope) -> bool {
+        match Self::build_outbound(env) {
+            Some(out) => tx.try_send(out).is_ok(),
+            None => false,
+        }
     }
 
     async fn send_error(tx: &mpsc::Sender<Outbound>, code: ErrorCode, message: &str) {
