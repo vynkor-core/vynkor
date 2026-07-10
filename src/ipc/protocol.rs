@@ -600,6 +600,7 @@ impl MessageRouter {
                                 action: req.action.clone(),
                                 params_json: req.params_json.clone(),
                                 timeout_ms: req.timeout_ms,
+                                streaming: req.streaming,
                             })),
                             ..Default::default()
                         };
