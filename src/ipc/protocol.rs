@@ -10,9 +10,9 @@ use crate::ipc::messages::IncomingMessage;
 use crate::kernel::commands::{CommandHandler, CommandOutcome};
 use crate::plugins::registry::{ActionLookup, PendingAction, PluginRegistry};
 use crate::proto::veyron::{
-    envelope, ActionRequest, ActionResponse, ActionStatus, Envelope, ErrorCode, ErrorMessage,
-    Event, EventPublishAck, EventPublishStatus, KernelCommandAck, PermissionType,
-    PluginRegisterAck, Pong,
+    envelope, ActionRequest, ActionRequestChunk, ActionResponse, ActionResponseChunk, ActionStatus,
+    ActionStreamAbort, Envelope, ErrorCode, ErrorMessage, Event, EventPublishAck,
+    EventPublishStatus, KernelCommandAck, PermissionType, PluginRegisterAck, Pong,
 };
 use governor::{DefaultKeyedRateLimiter, Quota, RateLimiter};
 use metrics::{counter, histogram};
@@ -671,6 +671,95 @@ impl MessageRouter {
                 false
             }
 
+            Some(envelope::Payload::ActionRequestChunk(chunk)) => {
+                let sender_id = registry
+                    .get_by_conn_id(msg.conn_id)
+                    .map(|e| e.plugin_id.clone())
+                    .unwrap_or_default();
+
+                match registry
+                    .find_pending_internal_id(&sender_id, &chunk.action_id)
+                    .and_then(|internal_id| {
+                        registry
+                            .get_pending_action(&internal_id)
+                            .map(|pending| (internal_id, pending))
+                    }) {
+                    Some((internal_id, pending)) => match registry.get(&pending.provider_id) {
+                        Some(provider_entry) => {
+                            let forwarded = Envelope {
+                                payload: Some(envelope::Payload::ActionRequestChunk(
+                                    ActionRequestChunk {
+                                        action_id: internal_id.clone(),
+                                        seq: chunk.seq,
+                                        chunk: chunk.chunk,
+                                        r#final: chunk.r#final,
+                                    },
+                                )),
+                                ..Default::default()
+                            };
+                            if !Self::try_send_envelope(&provider_entry.write_tx, forwarded) {
+                                warn!(action_id = %internal_id, "request chunk forward failed, aborting stream");
+                                Self::abort_stream(registry, &internal_id, "receiver backpressure")
+                                    .await;
+                            }
+                        }
+                        None => {
+                            Self::abort_stream(registry, &internal_id, "provider disconnected")
+                                .await;
+                        }
+                    },
+                    None => {
+                        warn!(
+                            action_id = %chunk.action_id,
+                            sender = %sender_id,
+                            "request chunk with no matching pending action, dropping"
+                        );
+                    }
+                }
+                false
+            }
+
+            Some(envelope::Payload::ActionResponseChunk(chunk)) => {
+                // Mirrors the ActionResponse arm above: the provider always
+                // deals in internal-id space, so chunk.action_id here IS the
+                // internal id already — no reverse lookup needed, but the
+                // sender must be verified as the actual routed provider
+                // before we trust it (same spoofing concern as
+                // take_pending_action_if_provider).
+                let sender_plugin_id = registry.get_by_conn_id(msg.conn_id).map(|e| e.plugin_id);
+
+                match sender_plugin_id.and_then(|pid| {
+                    registry
+                        .get_pending_action(&chunk.action_id)
+                        .filter(|pending| pending.provider_id == pid)
+                }) {
+                    Some(pending) => {
+                        let forwarded = Envelope {
+                            payload: Some(envelope::Payload::ActionResponseChunk(
+                                ActionResponseChunk {
+                                    action_id: pending.original_action_id,
+                                    seq: chunk.seq,
+                                    chunk: chunk.chunk,
+                                },
+                            )),
+                            ..Default::default()
+                        };
+                        if !Self::try_send_envelope(&pending.requester_write_tx, forwarded) {
+                            warn!(action_id = %chunk.action_id, "response chunk forward failed, aborting stream");
+                            Self::abort_stream(registry, &chunk.action_id, "receiver backpressure")
+                                .await;
+                        }
+                    }
+                    None => {
+                        warn!(
+                            action_id = %chunk.action_id,
+                            "response chunk with no matching pending action for this sender, dropping"
+                        );
+                    }
+                }
+                false
+            }
+
             Some(envelope::Payload::KernelCommand(cmd)) => {
                 let sender_id = registry
                     .get_by_conn_id(msg.conn_id)
@@ -953,5 +1042,52 @@ impl MessageRouter {
             ..Default::default()
         };
         Self::send_envelope(tx, env).await;
+    }
+
+    /// R6-02: abort an in-flight stream — remove its pending-action slot and
+    /// notify both sides. Called whenever `try_send_envelope` fails while
+    /// forwarding a stream chunk in either direction, so a full/closed
+    /// channel never means a silently dropped (and therefore corrupting)
+    /// chunk — the whole stream dies instead, loudly, on both ends.
+    async fn abort_stream(registry: &PluginRegistry, internal_id: &str, reason: &str) {
+        let Some(pending) = registry.take_pending_action(internal_id) else {
+            return;
+        };
+
+        let abort_to_requester = Envelope {
+            payload: Some(envelope::Payload::ActionStreamAbort(ActionStreamAbort {
+                action_id: pending.original_action_id.clone(),
+                reason: reason.to_string(),
+            })),
+            ..Default::default()
+        };
+        Self::send_envelope(&pending.requester_write_tx, abort_to_requester).await;
+
+        let terminal_response = Envelope {
+            payload: Some(envelope::Payload::ActionResponse(ActionResponse {
+                action_id: pending.original_action_id,
+                status: ActionStatus::ActionStreamBackpressure as i32,
+                data_json: vec![],
+                error: reason.to_string(),
+            })),
+            ..Default::default()
+        };
+        Self::send_envelope(&pending.requester_write_tx, terminal_response).await;
+
+        if let Some(provider_entry) = registry.get(&pending.provider_id) {
+            let abort_to_provider = Envelope {
+                payload: Some(envelope::Payload::ActionStreamAbort(ActionStreamAbort {
+                    action_id: internal_id.to_string(),
+                    reason: reason.to_string(),
+                })),
+                ..Default::default()
+            };
+            // Best-effort — if the provider's channel is also the one that's
+            // full, it'll simply never see this notice and will discover the
+            // stream is dead the next time it tries to send a chunk (Task 4's
+            // ActionResponseChunk arm looks up `get_pending_action` and finds
+            // nothing).
+            let _ = Self::try_send_envelope(&provider_entry.write_tx, abort_to_provider);
+        }
     }
 }

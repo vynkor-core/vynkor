@@ -1,5 +1,5 @@
 use super::helpers::{start_kernel, start_kernel_with_config, test_config};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::time::timeout;
 use veyron::proto::veyron::{ActionStatus, CommandStatus, PluginManifest};
 
@@ -1154,6 +1154,232 @@ async fn provider_side_action_failure_proxies_through_unchanged() {
 
     assert_eq!(resp.status, ActionStatus::ActionError as i32);
     assert_eq!(resp.error, "upstream weather service unreachable");
+
+    let _ = shutdown_tx.send(());
+}
+
+#[tokio::test]
+async fn kernel_forwards_request_chunks_to_provider_with_translated_action_id() {
+    let (shutdown_tx, _registry, _bus) =
+        start_kernel("/tmp/veyron_integ_stream_upload.sock", 19301).await;
+
+    let mut provider = VeyronClient::connect("/tmp/veyron_integ_stream_upload.sock")
+        .await
+        .unwrap();
+    provider
+        .register(
+            "upload-provider",
+            PluginManifest {
+                actions: vec!["upload".to_string()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let mut requester = VeyronClient::connect("/tmp/veyron_integ_stream_upload.sock")
+        .await
+        .unwrap();
+    requester
+        .register("upload-requester", PluginManifest::default())
+        .await
+        .unwrap();
+
+    let action_id = requester
+        .send_action_streaming("upload", 2000)
+        .await
+        .unwrap();
+    requester
+        .send_request_chunk(&action_id, 0, b"hello ".to_vec(), false)
+        .await
+        .unwrap();
+    requester
+        .send_request_chunk(&action_id, 1, b"world".to_vec(), true)
+        .await
+        .unwrap();
+
+    // Provider sees the initial streaming ActionRequest first.
+    let received = timeout(Duration::from_secs(2), provider.recv())
+        .await
+        .expect("provider recv timed out")
+        .expect("provider recv failed");
+    let internal_action_id = match received.payload {
+        Some(veyron::proto::veyron::envelope::Payload::ActionRequest(req)) => {
+            assert_eq!(req.action, "upload");
+            assert!(req.streaming);
+            req.action_id
+        }
+        other => panic!("expected streaming ActionRequest, got {other:?}"),
+    };
+
+    // Then the two chunks, translated to the internal action_id, in order.
+    let chunk0 = timeout(Duration::from_secs(2), provider.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    match chunk0.payload {
+        Some(veyron::proto::veyron::envelope::Payload::ActionRequestChunk(c)) => {
+            assert_eq!(c.action_id, internal_action_id);
+            assert_eq!(c.seq, 0);
+            assert_eq!(c.chunk, b"hello ");
+            assert!(!c.r#final);
+        }
+        other => panic!("expected ActionRequestChunk, got {other:?}"),
+    }
+
+    let chunk1 = timeout(Duration::from_secs(2), provider.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    match chunk1.payload {
+        Some(veyron::proto::veyron::envelope::Payload::ActionRequestChunk(c)) => {
+            assert_eq!(c.action_id, internal_action_id);
+            assert_eq!(c.seq, 1);
+            assert_eq!(c.chunk, b"world");
+            assert!(c.r#final);
+        }
+        other => panic!("expected final ActionRequestChunk, got {other:?}"),
+    }
+
+    let _ = shutdown_tx.send(());
+}
+
+#[tokio::test]
+async fn kernel_forwards_response_chunks_to_requester_with_original_action_id() {
+    let (shutdown_tx, _registry, _bus) =
+        start_kernel("/tmp/veyron_integ_stream_download.sock", 19302).await;
+
+    let mut provider = VeyronClient::connect("/tmp/veyron_integ_stream_download.sock")
+        .await
+        .unwrap();
+    provider
+        .register(
+            "download-provider",
+            PluginManifest {
+                actions: vec!["download".to_string()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let mut requester = VeyronClient::connect("/tmp/veyron_integ_stream_download.sock")
+        .await
+        .unwrap();
+    requester
+        .register("download-requester", PluginManifest::default())
+        .await
+        .unwrap();
+
+    let original_action_id = requester
+        .send_action_streaming("download", 2000)
+        .await
+        .unwrap();
+
+    let received = timeout(Duration::from_secs(2), provider.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let internal_action_id = match received.payload {
+        Some(veyron::proto::veyron::envelope::Payload::ActionRequest(req)) => req.action_id,
+        other => panic!("expected ActionRequest, got {other:?}"),
+    };
+
+    provider
+        .send_response_chunk(&internal_action_id, 0, b"chunk-a".to_vec())
+        .await
+        .unwrap();
+
+    let forwarded = timeout(Duration::from_secs(2), requester.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    match forwarded.payload {
+        Some(veyron::proto::veyron::envelope::Payload::ActionResponseChunk(c)) => {
+            assert_eq!(c.action_id, original_action_id);
+            assert_eq!(c.seq, 0);
+            assert_eq!(c.chunk, b"chunk-a");
+        }
+        other => panic!("expected ActionResponseChunk, got {other:?}"),
+    }
+
+    let _ = shutdown_tx.send(());
+}
+
+#[tokio::test]
+async fn stream_backpressure_aborts_both_sides_and_terminates_with_backpressure_status() {
+    let (shutdown_tx, _registry, _bus) =
+        start_kernel("/tmp/veyron_integ_stream_backpressure.sock", 19303).await;
+
+    let mut provider = VeyronClient::connect("/tmp/veyron_integ_stream_backpressure.sock")
+        .await
+        .unwrap();
+    provider
+        .register(
+            "bp-provider",
+            PluginManifest {
+                actions: vec!["upload".to_string()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let mut requester = VeyronClient::connect("/tmp/veyron_integ_stream_backpressure.sock")
+        .await
+        .unwrap();
+    requester
+        .register("bp-requester", PluginManifest::default())
+        .await
+        .unwrap();
+
+    let action_id = requester
+        .send_action_streaming("upload", 2000)
+        .await
+        .unwrap();
+
+    // Drain the provider's registration ack etc. first.
+    let _ = timeout(Duration::from_secs(2), provider.recv()).await; // initial ActionRequest
+
+    // Flood far more chunks than the provider's outbound channel capacity
+    // without the provider ever draining, forcing a try_send failure on the
+    // kernel -> provider hop. (Config's default channel capacity is generous;
+    // this loop count matches DEFAULT_CHANNEL_CAPACITY-sized fixtures used
+    // elsewhere in this file for the same purpose — see
+    // action_concurrency_cap_denies_third_concurrent_call_to_same_provider
+    // for the established magnitude convention in this test file.)
+    let mut saw_backpressure = false;
+    for seq in 0..2000u32 {
+        if requester
+            .send_request_chunk(&action_id, seq, vec![0u8; 1024], false)
+            .await
+            .is_err()
+        {
+            break;
+        }
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        match timeout(Duration::from_millis(500), requester.recv()).await {
+            Ok(Ok(env)) => {
+                if let Some(veyron::proto::veyron::envelope::Payload::ActionResponse(resp)) =
+                    env.payload
+                {
+                    assert_eq!(resp.action_id, action_id);
+                    assert_eq!(resp.status, ActionStatus::ActionStreamBackpressure as i32);
+                    saw_backpressure = true;
+                    break;
+                }
+            }
+            _ => continue,
+        }
+    }
+
+    assert!(
+        saw_backpressure,
+        "expected requester to receive an ActionResponse{{status: ACTION_STREAM_BACKPRESSURE}}"
+    );
 
     let _ = shutdown_tx.send(());
 }
