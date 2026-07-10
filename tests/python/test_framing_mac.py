@@ -124,7 +124,7 @@ def test_async_read_frame_mac_verifies():
         reader.feed_eof()
         return await async_read_frame(reader, session_key=key)
 
-    result = asyncio.run(_run())
+    flags, result = asyncio.run(_run())
     assert result == payload
 
 
