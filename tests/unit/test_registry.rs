@@ -511,7 +511,9 @@ fn get_pending_action_returns_clone_without_removing() {
         },
     );
 
-    let found = registry.get_pending_action("kact-1").expect("should find entry");
+    let found = registry
+        .get_pending_action("kact-1")
+        .expect("should find entry");
     assert_eq!(found.original_action_id, "orig-1");
     // Still present after a read-only get — take_pending_action must still work.
     assert!(registry.take_pending_action("kact-1").is_some());
@@ -537,7 +539,13 @@ fn find_pending_internal_id_matches_requester_and_original_action_id() {
         Some("kact-7".to_string())
     );
     // Wrong requester_id must not match, even with the right original_action_id.
-    assert_eq!(registry.find_pending_internal_id("someone-else", "orig-abc"), None);
+    assert_eq!(
+        registry.find_pending_internal_id("someone-else", "orig-abc"),
+        None
+    );
     // Wrong original_action_id must not match.
-    assert_eq!(registry.find_pending_internal_id("caller-x", "not-it"), None);
+    assert_eq!(
+        registry.find_pending_internal_id("caller-x", "not-it"),
+        None
+    );
 }
