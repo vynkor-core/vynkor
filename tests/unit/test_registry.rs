@@ -341,6 +341,9 @@ fn dummy_pending_with_provider(
         requester_id: "requester".to_string(),
         deadline,
         provider_id: provider_id.to_string(),
+        streaming: false,
+        session_accepted: false,
+        last_activity: Instant::now(),
     }
 }
 
@@ -440,6 +443,9 @@ fn dummy_pending_with_requester_and_provider(
         requester_id: requester_id.to_string(),
         deadline,
         provider_id: provider_id.to_string(),
+        streaming: false,
+        session_accepted: false,
+        last_activity: Instant::now(),
     }
 }
 
@@ -508,6 +514,9 @@ fn get_pending_action_returns_clone_without_removing() {
             requester_id: "caller".to_string(),
             deadline: std::time::Instant::now() + std::time::Duration::from_secs(30),
             provider_id: "provider".to_string(),
+            streaming: false,
+            session_accepted: false,
+            last_activity: std::time::Instant::now(),
         },
     );
 
@@ -531,6 +540,9 @@ fn find_pending_internal_id_matches_requester_and_original_action_id() {
             requester_id: "caller-x".to_string(),
             deadline: std::time::Instant::now() + std::time::Duration::from_secs(30),
             provider_id: "provider-y".to_string(),
+            streaming: false,
+            session_accepted: false,
+            last_activity: std::time::Instant::now(),
         },
     );
 
@@ -548,4 +560,227 @@ fn find_pending_internal_id_matches_requester_and_original_action_id() {
         registry.find_pending_internal_id("caller-x", "not-it"),
         None
     );
+}
+
+#[test]
+fn resolve_action_response_accepts_streaming_ok_without_evicting() {
+    let registry = PluginRegistry::new();
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    registry.register_pending_action(
+        "kact-stream".to_string(),
+        PendingAction {
+            requester_write_tx: tx,
+            original_action_id: "orig-1".to_string(),
+            requester_id: "caller".to_string(),
+            deadline: Instant::now() + Duration::from_secs(30),
+            provider_id: "provider".to_string(),
+            streaming: true,
+            session_accepted: false,
+            last_activity: Instant::now(),
+        },
+    );
+
+    let resolved = registry
+        .resolve_action_response("kact-stream", "provider", true)
+        .expect("must resolve for the matching provider");
+    assert!(
+        resolved.session_accepted,
+        "OK response must accept the session"
+    );
+
+    // Entry must still be present (not evicted) after acceptance.
+    let still_present = registry
+        .get_pending_action("kact-stream")
+        .expect("accepted session must not be evicted");
+    assert!(still_present.session_accepted);
+}
+
+#[test]
+fn resolve_action_response_evicts_streaming_error() {
+    let registry = PluginRegistry::new();
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    registry.register_pending_action(
+        "kact-stream-err".to_string(),
+        PendingAction {
+            requester_write_tx: tx,
+            original_action_id: "orig-1".to_string(),
+            requester_id: "caller".to_string(),
+            deadline: Instant::now() + Duration::from_secs(30),
+            provider_id: "provider".to_string(),
+            streaming: true,
+            session_accepted: false,
+            last_activity: Instant::now(),
+        },
+    );
+
+    let resolved = registry
+        .resolve_action_response("kact-stream-err", "provider", false)
+        .expect("must resolve for the matching provider");
+    assert!(!resolved.session_accepted);
+    assert!(
+        registry.get_pending_action("kact-stream-err").is_none(),
+        "a rejected streaming request must be evicted immediately"
+    );
+}
+
+#[test]
+fn resolve_action_response_evicts_non_streaming_ok() {
+    let registry = PluginRegistry::new();
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    registry.register_pending_action(
+        "kact-plain".to_string(),
+        PendingAction {
+            requester_write_tx: tx,
+            original_action_id: "orig-1".to_string(),
+            requester_id: "caller".to_string(),
+            deadline: Instant::now() + Duration::from_secs(30),
+            provider_id: "provider".to_string(),
+            streaming: false,
+            session_accepted: false,
+            last_activity: Instant::now(),
+        },
+    );
+
+    registry
+        .resolve_action_response("kact-plain", "provider", true)
+        .expect("must resolve for the matching provider");
+    assert!(
+        registry.get_pending_action("kact-plain").is_none(),
+        "a non-streaming action must always evict on ActionResponse, OK or not"
+    );
+}
+
+#[test]
+fn resolve_action_response_rejects_mismatched_provider() {
+    let registry = PluginRegistry::new();
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    registry.register_pending_action(
+        "kact-1".to_string(),
+        PendingAction {
+            requester_write_tx: tx,
+            original_action_id: "orig-1".to_string(),
+            requester_id: "caller".to_string(),
+            deadline: Instant::now() + Duration::from_secs(30),
+            provider_id: "real-provider".to_string(),
+            streaming: true,
+            session_accepted: false,
+            last_activity: Instant::now(),
+        },
+    );
+
+    assert!(
+        registry
+            .resolve_action_response("kact-1", "impostor", true)
+            .is_none(),
+        "an unrelated plugin must not be able to resolve another provider's pending action"
+    );
+    // Entry must be untouched.
+    assert!(registry.get_pending_action("kact-1").is_some());
+}
+
+#[test]
+fn touch_pending_action_updates_last_activity() {
+    let registry = PluginRegistry::new();
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    let old = Instant::now() - Duration::from_secs(60);
+    registry.register_pending_action(
+        "kact-1".to_string(),
+        PendingAction {
+            requester_write_tx: tx,
+            original_action_id: "orig-1".to_string(),
+            requester_id: "caller".to_string(),
+            deadline: Instant::now() + Duration::from_secs(30),
+            provider_id: "provider".to_string(),
+            streaming: true,
+            session_accepted: true,
+            last_activity: old,
+        },
+    );
+
+    registry.touch_pending_action("kact-1");
+
+    let updated = registry.get_pending_action("kact-1").unwrap();
+    assert!(
+        updated.last_activity > old,
+        "touch_pending_action must advance last_activity"
+    );
+}
+
+#[test]
+fn touch_pending_action_missing_entry_is_a_noop() {
+    let registry = PluginRegistry::new();
+    // Must not panic.
+    registry.touch_pending_action("does-not-exist");
+}
+
+#[test]
+fn sweep_idle_sessions_evicts_only_accepted_and_idle() {
+    let registry = PluginRegistry::new();
+    let now = Instant::now();
+
+    let mk = |session_accepted: bool, last_activity: Instant| PendingAction {
+        requester_write_tx: dummy_write_tx(),
+        original_action_id: "orig".to_string(),
+        requester_id: "caller".to_string(),
+        deadline: now + Duration::from_secs(3600),
+        provider_id: "provider".to_string(),
+        streaming: true,
+        session_accepted,
+        last_activity,
+    };
+
+    // Accepted + idle past the bound -> swept.
+    registry.register_pending_action(
+        "kact-idle".to_string(),
+        mk(true, now - Duration::from_secs(120)),
+    );
+    // Accepted + recently active -> not swept.
+    registry.register_pending_action(
+        "kact-active".to_string(),
+        mk(true, now - Duration::from_secs(1)),
+    );
+    // Not yet accepted (still in the accept/reject window) -> never touched
+    // by this sweep, regardless of last_activity.
+    registry.register_pending_action(
+        "kact-unaccepted".to_string(),
+        mk(false, now - Duration::from_secs(120)),
+    );
+
+    let idle = registry.sweep_idle_sessions(now, Duration::from_secs(60));
+    assert_eq!(idle.len(), 1);
+    assert_eq!(idle[0].0, "kact-idle");
+
+    assert!(registry.get_pending_action("kact-idle").is_none());
+    assert!(registry.get_pending_action("kact-active").is_some());
+    assert!(registry.get_pending_action("kact-unaccepted").is_some());
+}
+
+#[test]
+fn sweep_expired_actions_skips_accepted_sessions() {
+    let registry = PluginRegistry::new();
+    let now = Instant::now();
+
+    // Deadline already passed, but session_accepted -> must survive this sweep.
+    registry.register_pending_action(
+        "kact-accepted-past-deadline".to_string(),
+        PendingAction {
+            requester_write_tx: dummy_write_tx(),
+            original_action_id: "orig".to_string(),
+            requester_id: "caller".to_string(),
+            deadline: now - Duration::from_secs(1),
+            provider_id: "provider".to_string(),
+            streaming: true,
+            session_accepted: true,
+            last_activity: now,
+        },
+    );
+
+    let expired = registry.sweep_expired_actions(now);
+    assert!(
+        expired.is_empty(),
+        "an accepted session must be exempt from the deadline sweep"
+    );
+    assert!(registry
+        .get_pending_action("kact-accepted-past-deadline")
+        .is_some());
 }

@@ -2,7 +2,7 @@ use crate::ipc::connection::Outbound;
 use crate::proto::veyron::PluginManifest;
 use crate::utils::errors::VeyronError;
 use dashmap::DashMap;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 
 #[derive(Debug, Clone)]
@@ -33,6 +33,20 @@ pub struct PendingAction {
     /// consume this slot, so an unrelated registered plugin can't spoof or
     /// steal the response for an action it wasn't routed.
     pub provider_id: String,
+    /// Mirrors the originating `ActionRequest.streaming` (R6-02/R6-04).
+    /// Distinguishes "this ActionResponse{OK} accepts a long-lived session,
+    /// don't evict" from "this ActionResponse completes an ordinary action,
+    /// evict as always" — both share the same ActionResponse wire message.
+    pub streaming: bool,
+    /// R6-04: flips true on the provider's first ActionResponse{OK} for a
+    /// streaming request. False entries are still subject to the R5-07
+    /// deadline sweep (`sweep_expired_actions`); true entries are exempt
+    /// from it and instead governed by `sweep_idle_sessions`.
+    pub session_accepted: bool,
+    /// R6-04: last time an ActionRequestChunk/ActionResponseChunk was seen
+    /// in either direction for this entry. Updated by `touch_pending_action`.
+    /// Only meaningful once `session_accepted` is true.
+    pub last_activity: Instant,
 }
 
 #[derive(Debug, Clone)]
@@ -196,12 +210,87 @@ impl PluginRegistry {
             .map(|(_, v)| v)
     }
 
-    /// Evict and return all pending actions whose deadline has passed as of `now`.
+    /// R6-04: resolve an inbound `ActionResponse` against its pending
+    /// action, atomically (single DashMap shard lock via `entry()`, same
+    /// TOCTOU-safety concern `register()` already documents). If the
+    /// response is `ACTION_OK` for a `streaming` request, the session is
+    /// *accepted in place* — `session_accepted` flips true, `last_activity`
+    /// resets, and the entry is NOT removed; the (now-updated) clone is
+    /// returned so the caller can still forward the accepting response.
+    /// Every other case (non-streaming, or a streaming request that
+    /// errored) evicts exactly as `take_pending_action_if_provider` always
+    /// has. Returns `None` if `internal_id` doesn't exist or wasn't routed
+    /// to `provider_id` (response-spoofing guard, unchanged).
+    pub fn resolve_action_response(
+        &self,
+        internal_id: &str,
+        provider_id: &str,
+        status_ok: bool,
+    ) -> Option<PendingAction> {
+        use dashmap::mapref::entry::Entry;
+        match self.pending_actions.entry(internal_id.to_string()) {
+            Entry::Occupied(mut occ) => {
+                if occ.get().provider_id != provider_id {
+                    return None;
+                }
+                if status_ok && occ.get().streaming {
+                    occ.get_mut().session_accepted = true;
+                    occ.get_mut().last_activity = Instant::now();
+                    Some(occ.get().clone())
+                } else {
+                    Some(occ.remove())
+                }
+            }
+            Entry::Vacant(_) => None,
+        }
+    }
+
+    /// R6-04: bump `last_activity` for an in-flight (found-or-not) pending
+    /// action. Called on every `ActionRequestChunk`/`ActionResponseChunk`
+    /// forwarded in either direction, so `sweep_idle_sessions` only fires on
+    /// genuinely idle sessions. No-op if the entry doesn't exist (e.g. a
+    /// late chunk for an already-evicted action — the chunk-forwarding arms
+    /// already warn-and-drop that case separately).
+    pub fn touch_pending_action(&self, internal_id: &str) {
+        if let Some(mut entry) = self.pending_actions.get_mut(internal_id) {
+            entry.last_activity = Instant::now();
+        }
+    }
+
+    /// R6-04: evict and return `(internal_id, PendingAction)` for every
+    /// *accepted* session idle longer than `idle_timeout` as of `now`.
+    /// Mirrors `sweep_expired_actions`'s shape but filters on
+    /// `session_accepted` + `last_activity` instead of `deadline` — the two
+    /// sweeps are intentionally disjoint (a `PendingAction` is subject to
+    /// exactly one of them at any time).
+    pub fn sweep_idle_sessions(
+        &self,
+        now: Instant,
+        idle_timeout: Duration,
+    ) -> Vec<(String, PendingAction)> {
+        let idle_keys: Vec<String> = self
+            .pending_actions
+            .iter()
+            .filter(|e| e.session_accepted && now.duration_since(e.last_activity) > idle_timeout)
+            .map(|e| e.key().clone())
+            .collect();
+
+        idle_keys
+            .into_iter()
+            .filter_map(|k| self.take_pending_action(&k).map(|p| (k, p)))
+            .collect()
+    }
+
+    /// Evict and return all pending actions whose deadline has passed as of
+    /// `now`. R6-04: an accepted streaming session is exempt — its
+    /// `deadline` only ever governed the accept/reject window, and it's
+    /// legitimately expected to outlive that once accepted. See
+    /// `sweep_idle_sessions` for the sweep that applies post-acceptance.
     pub fn sweep_expired_actions(&self, now: Instant) -> Vec<PendingAction> {
         let expired_keys: Vec<String> = self
             .pending_actions
             .iter()
-            .filter(|e| e.deadline <= now)
+            .filter(|e| !e.session_accepted && e.deadline <= now)
             .map(|e| e.key().clone())
             .collect();
 
