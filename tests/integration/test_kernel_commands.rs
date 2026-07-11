@@ -1490,3 +1490,577 @@ async fn stream_backpressure_on_requester_channel_does_not_stall_router() {
 
     let _ = shutdown_tx.send(());
 }
+
+#[tokio::test]
+async fn session_streaming_accept_exchange_and_graceful_close() {
+    let (shutdown_tx, _registry, _bus) =
+        start_kernel("/tmp/veyron_integ_session_lifecycle.sock", 19310).await;
+
+    let mut provider = VeyronClient::connect("/tmp/veyron_integ_session_lifecycle.sock")
+        .await
+        .unwrap();
+    provider
+        .register(
+            "session-provider",
+            PluginManifest {
+                actions: vec!["ws_session".to_string()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let mut requester = VeyronClient::connect("/tmp/veyron_integ_session_lifecycle.sock")
+        .await
+        .unwrap();
+    requester
+        .register("session-requester", PluginManifest::default())
+        .await
+        .unwrap();
+
+    let action_id = requester
+        .send_action_streaming("ws_session", 2000)
+        .await
+        .unwrap();
+
+    // Provider sees the initial streaming ActionRequest, accepts it.
+    let received = timeout(Duration::from_secs(2), provider.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let internal_action_id = match received.payload {
+        Some(veyron::proto::veyron::envelope::Payload::ActionRequest(req)) => {
+            assert!(req.streaming);
+            req.action_id
+        }
+        other => panic!("expected streaming ActionRequest, got {other:?}"),
+    };
+
+    provider
+        .send(
+            "kernel",
+            veyron::proto::veyron::Envelope {
+                payload: Some(veyron::proto::veyron::envelope::Payload::ActionResponse(
+                    veyron::proto::veyron::ActionResponse {
+                        action_id: internal_action_id.clone(),
+                        status: ActionStatus::ActionOk as i32,
+                        data_json: vec![],
+                        error: String::new(),
+                    },
+                )),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    // Requester gets the accepting ActionResponse.
+    let accept = timeout(Duration::from_secs(2), requester.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    match accept.payload {
+        Some(veyron::proto::veyron::envelope::Payload::ActionResponse(resp)) => {
+            assert_eq!(resp.action_id, action_id);
+            assert_eq!(resp.status, ActionStatus::ActionOk as i32);
+        }
+        other => panic!("expected accepting ActionResponse, got {other:?}"),
+    }
+
+    // Multiple round trips of chunks, both directions, after acceptance.
+    requester
+        .send_request_chunk(&action_id, 0, b"ping-1".to_vec(), false)
+        .await
+        .unwrap();
+    let c = timeout(Duration::from_secs(2), provider.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    match c.payload {
+        Some(veyron::proto::veyron::envelope::Payload::ActionRequestChunk(c)) => {
+            assert_eq!(c.action_id, internal_action_id);
+            assert_eq!(c.chunk, b"ping-1");
+        }
+        other => panic!("expected ActionRequestChunk, got {other:?}"),
+    }
+
+    provider
+        .send_response_chunk(&internal_action_id, 0, b"pong-1".to_vec())
+        .await
+        .unwrap();
+    let c = timeout(Duration::from_secs(2), requester.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    match c.payload {
+        Some(veyron::proto::veyron::envelope::Payload::ActionResponseChunk(c)) => {
+            assert_eq!(c.action_id, action_id);
+            assert_eq!(c.chunk, b"pong-1");
+        }
+        other => panic!("expected ActionResponseChunk, got {other:?}"),
+    }
+
+    requester
+        .send_request_chunk(&action_id, 1, b"ping-2".to_vec(), false)
+        .await
+        .unwrap();
+    let c = timeout(Duration::from_secs(2), provider.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    match c.payload {
+        Some(veyron::proto::veyron::envelope::Payload::ActionRequestChunk(c)) => {
+            assert_eq!(c.chunk, b"ping-2");
+        }
+        other => panic!("expected ActionRequestChunk, got {other:?}"),
+    }
+
+    // Graceful close from the requester forwards to the provider.
+    requester.close_session(&action_id, "done").await.unwrap();
+
+    let closed = timeout(Duration::from_secs(2), provider.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    match closed.payload {
+        Some(veyron::proto::veyron::envelope::Payload::SessionClose(close)) => {
+            assert_eq!(close.action_id, internal_action_id);
+            assert_eq!(close.reason, "done");
+        }
+        other => panic!("expected SessionClose, got {other:?}"),
+    }
+
+    // Session is evicted: a second close attempt is rejected (no matching session).
+    let close_again = requester.close_session(&action_id, "done again").await;
+    assert!(
+        close_again.is_ok(),
+        "sending must succeed even though the kernel will reject it"
+    );
+    let err = timeout(Duration::from_secs(2), requester.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    match err.payload {
+        Some(veyron::proto::veyron::envelope::Payload::Error(e)) => {
+            assert!(!e.message.is_empty());
+        }
+        other => panic!("expected an Error for closing an already-evicted session, got {other:?}"),
+    }
+
+    let _ = shutdown_tx.send(());
+}
+
+#[tokio::test]
+async fn session_streaming_rejection_evicts_without_session_close() {
+    let (shutdown_tx, _registry, _bus) =
+        start_kernel("/tmp/veyron_integ_session_reject.sock", 19311).await;
+
+    let mut provider = VeyronClient::connect("/tmp/veyron_integ_session_reject.sock")
+        .await
+        .unwrap();
+    provider
+        .register(
+            "session-reject-provider",
+            PluginManifest {
+                actions: vec!["ws_session".to_string()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let mut requester = VeyronClient::connect("/tmp/veyron_integ_session_reject.sock")
+        .await
+        .unwrap();
+    requester
+        .register("session-reject-requester", PluginManifest::default())
+        .await
+        .unwrap();
+
+    let action_id = requester
+        .send_action_streaming("ws_session", 2000)
+        .await
+        .unwrap();
+
+    let received = timeout(Duration::from_secs(2), provider.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let internal_action_id = match received.payload {
+        Some(veyron::proto::veyron::envelope::Payload::ActionRequest(req)) => req.action_id,
+        other => panic!("expected ActionRequest, got {other:?}"),
+    };
+
+    provider
+        .send(
+            "kernel",
+            veyron::proto::veyron::Envelope {
+                payload: Some(veyron::proto::veyron::envelope::Payload::ActionResponse(
+                    veyron::proto::veyron::ActionResponse {
+                        action_id: internal_action_id,
+                        status: ActionStatus::ActionError as i32,
+                        data_json: vec![],
+                        error: "provider refused the session".to_string(),
+                    },
+                )),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let rejected = timeout(Duration::from_secs(2), requester.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    match rejected.payload {
+        Some(veyron::proto::veyron::envelope::Payload::ActionResponse(resp)) => {
+            assert_eq!(resp.action_id, action_id);
+            assert_eq!(resp.status, ActionStatus::ActionError as i32);
+        }
+        other => panic!("expected error ActionResponse, got {other:?}"),
+    }
+
+    // No SessionClose is needed or sent — a rejection evicts immediately,
+    // same as any non-streaming failure. Confirm eviction: close_session
+    // now gets rejected as "no matching session".
+    requester
+        .close_session(&action_id, "irrelevant")
+        .await
+        .unwrap();
+    let err = timeout(Duration::from_secs(2), requester.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        err.payload,
+        Some(veyron::proto::veyron::envelope::Payload::Error(_))
+    ));
+
+    let _ = shutdown_tx.send(());
+}
+
+#[tokio::test]
+async fn session_close_before_acceptance_is_rejected() {
+    let (shutdown_tx, _registry, _bus) =
+        start_kernel("/tmp/veyron_integ_session_close_early.sock", 19312).await;
+
+    let mut provider = VeyronClient::connect("/tmp/veyron_integ_session_close_early.sock")
+        .await
+        .unwrap();
+    provider
+        .register(
+            "session-early-provider",
+            PluginManifest {
+                actions: vec!["ws_session".to_string()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let mut requester = VeyronClient::connect("/tmp/veyron_integ_session_close_early.sock")
+        .await
+        .unwrap();
+    requester
+        .register("session-early-requester", PluginManifest::default())
+        .await
+        .unwrap();
+
+    let action_id = requester
+        .send_action_streaming("ws_session", 5000)
+        .await
+        .unwrap();
+
+    // Provider never responds. Requester tries to close before any accept.
+    let _ = timeout(Duration::from_secs(2), provider.recv()).await; // drain the initial ActionRequest
+
+    requester
+        .close_session(&action_id, "changed my mind")
+        .await
+        .unwrap();
+
+    let err = timeout(Duration::from_secs(2), requester.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    match err.payload {
+        Some(veyron::proto::veyron::envelope::Payload::Error(e)) => {
+            assert!(!e.message.is_empty());
+        }
+        other => panic!("expected an Error for closing before acceptance, got {other:?}"),
+    }
+
+    let _ = shutdown_tx.send(());
+}
+
+#[tokio::test]
+async fn session_close_from_third_party_is_rejected() {
+    let (shutdown_tx, _registry, _bus) =
+        start_kernel("/tmp/veyron_integ_session_close_thirdparty.sock", 19313).await;
+
+    let mut provider = VeyronClient::connect("/tmp/veyron_integ_session_close_thirdparty.sock")
+        .await
+        .unwrap();
+    provider
+        .register(
+            "session-tp-provider",
+            PluginManifest {
+                actions: vec!["ws_session".to_string()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let mut requester = VeyronClient::connect("/tmp/veyron_integ_session_close_thirdparty.sock")
+        .await
+        .unwrap();
+    requester
+        .register("session-tp-requester", PluginManifest::default())
+        .await
+        .unwrap();
+
+    let mut impostor = VeyronClient::connect("/tmp/veyron_integ_session_close_thirdparty.sock")
+        .await
+        .unwrap();
+    impostor
+        .register("session-tp-impostor", PluginManifest::default())
+        .await
+        .unwrap();
+
+    let action_id = requester
+        .send_action_streaming("ws_session", 2000)
+        .await
+        .unwrap();
+
+    let received = timeout(Duration::from_secs(2), provider.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let internal_action_id = match received.payload {
+        Some(veyron::proto::veyron::envelope::Payload::ActionRequest(req)) => req.action_id,
+        other => panic!("expected ActionRequest, got {other:?}"),
+    };
+
+    provider
+        .send(
+            "kernel",
+            veyron::proto::veyron::Envelope {
+                payload: Some(veyron::proto::veyron::envelope::Payload::ActionResponse(
+                    veyron::proto::veyron::ActionResponse {
+                        action_id: internal_action_id.clone(),
+                        status: ActionStatus::ActionOk as i32,
+                        data_json: vec![],
+                        error: String::new(),
+                    },
+                )),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let _ = timeout(Duration::from_secs(2), requester.recv()).await; // drain the accept
+
+    // Impostor guesses the internal action_id and tries to close it.
+    impostor
+        .close_session(&internal_action_id, "not yours")
+        .await
+        .unwrap();
+    let err = timeout(Duration::from_secs(2), impostor.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        err.payload,
+        Some(veyron::proto::veyron::envelope::Payload::Error(_))
+    ));
+
+    // Session must still be open for the real requester.
+    requester
+        .close_session(&action_id, "the real close")
+        .await
+        .unwrap();
+    let closed = timeout(Duration::from_secs(2), provider.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        closed.payload,
+        Some(veyron::proto::veyron::envelope::Payload::SessionClose(_))
+    ));
+
+    let _ = shutdown_tx.send(());
+}
+
+#[tokio::test]
+async fn session_idle_timeout_aborts_both_sides() {
+    let mut cfg = test_config("/tmp/veyron_integ_session_idle.sock", 19314);
+    cfg.session_idle_timeout_secs = Some(1);
+    let (shutdown_tx, _registry, _bus) = start_kernel_with_config(cfg).await;
+
+    let mut provider = VeyronClient::connect("/tmp/veyron_integ_session_idle.sock")
+        .await
+        .unwrap();
+    provider
+        .register(
+            "session-idle-provider",
+            PluginManifest {
+                actions: vec!["ws_session".to_string()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let mut requester = VeyronClient::connect("/tmp/veyron_integ_session_idle.sock")
+        .await
+        .unwrap();
+    requester
+        .register("session-idle-requester", PluginManifest::default())
+        .await
+        .unwrap();
+
+    let action_id = requester
+        .send_action_streaming("ws_session", 5000)
+        .await
+        .unwrap();
+
+    let received = timeout(Duration::from_secs(2), provider.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let internal_action_id = match received.payload {
+        Some(veyron::proto::veyron::envelope::Payload::ActionRequest(req)) => req.action_id,
+        other => panic!("expected ActionRequest, got {other:?}"),
+    };
+
+    provider
+        .send(
+            "kernel",
+            veyron::proto::veyron::Envelope {
+                payload: Some(veyron::proto::veyron::envelope::Payload::ActionResponse(
+                    veyron::proto::veyron::ActionResponse {
+                        action_id: internal_action_id,
+                        status: ActionStatus::ActionOk as i32,
+                        data_json: vec![],
+                        error: String::new(),
+                    },
+                )),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let _ = timeout(Duration::from_secs(2), requester.recv()).await; // drain the accept
+
+    // Do nothing for longer than session_idle_timeout_secs + the 60s...
+    // Actually the prune tick interval is fixed at 60s in run_with_context,
+    // independent of session_idle_timeout_secs — wait for a tick.
+    let abort = timeout(Duration::from_secs(75), requester.recv())
+        .await
+        .expect("must receive an abort within one prune tick after idling")
+        .unwrap();
+    match abort.payload {
+        Some(veyron::proto::veyron::envelope::Payload::ActionStreamAbort(a)) => {
+            assert_eq!(a.action_id, action_id);
+            assert_eq!(a.reason, "idle timeout");
+        }
+        other => panic!("expected ActionStreamAbort, got {other:?}"),
+    }
+
+    let provider_abort = timeout(Duration::from_secs(5), provider.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        provider_abort.payload,
+        Some(veyron::proto::veyron::envelope::Payload::ActionStreamAbort(
+            _
+        ))
+    ));
+
+    let _ = shutdown_tx.send(());
+}
+
+#[tokio::test]
+async fn session_idle_timeout_unset_leaves_accepted_session_open() {
+    let (shutdown_tx, _registry, _bus) =
+        start_kernel("/tmp/veyron_integ_session_idle_unset.sock", 19315).await;
+
+    let mut provider = VeyronClient::connect("/tmp/veyron_integ_session_idle_unset.sock")
+        .await
+        .unwrap();
+    provider
+        .register(
+            "session-idle-unset-provider",
+            PluginManifest {
+                actions: vec!["ws_session".to_string()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let mut requester = VeyronClient::connect("/tmp/veyron_integ_session_idle_unset.sock")
+        .await
+        .unwrap();
+    requester
+        .register("session-idle-unset-requester", PluginManifest::default())
+        .await
+        .unwrap();
+
+    let action_id = requester
+        .send_action_streaming("ws_session", 5000)
+        .await
+        .unwrap();
+
+    let received = timeout(Duration::from_secs(2), provider.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let internal_action_id = match received.payload {
+        Some(veyron::proto::veyron::envelope::Payload::ActionRequest(req)) => req.action_id,
+        other => panic!("expected ActionRequest, got {other:?}"),
+    };
+
+    provider
+        .send(
+            "kernel",
+            veyron::proto::veyron::Envelope {
+                payload: Some(veyron::proto::veyron::envelope::Payload::ActionResponse(
+                    veyron::proto::veyron::ActionResponse {
+                        action_id: internal_action_id,
+                        status: ActionStatus::ActionOk as i32,
+                        data_json: vec![],
+                        error: String::new(),
+                    },
+                )),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let _ = timeout(Duration::from_secs(2), requester.recv()).await; // drain the accept
+
+    // With session_idle_timeout_secs unset (test_config's default), no abort
+    // should arrive even after the idle sweep would otherwise have fired.
+    let result = timeout(Duration::from_secs(3), requester.recv()).await;
+    assert!(
+        result.is_err(),
+        "no message expected: an unset idle timeout must leave the session open indefinitely"
+    );
+
+    // Session is still usable: a graceful close still works.
+    requester.close_session(&action_id, "done").await.unwrap();
+    let closed = timeout(Duration::from_secs(2), provider.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        closed.payload,
+        Some(veyron::proto::veyron::envelope::Payload::SessionClose(_))
+    ));
+
+    let _ = shutdown_tx.send(());
+}
