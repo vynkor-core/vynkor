@@ -89,6 +89,14 @@ pub struct Config {
     /// plugin may have in flight against one action provider. None = unlimited.
     #[serde(default)]
     pub action_caller_max_concurrent: Option<u32>,
+    /// R6-04: seconds of inactivity (no chunk traffic) after which an
+    /// *accepted* streaming session is force-terminated with
+    /// ActionStreamAbort{reason: "idle timeout"} to both sides. None =
+    /// disabled (accepted sessions may live indefinitely), matching R6-03's
+    /// "unset = unlimited" convention. Only applies post-acceptance — the
+    /// accept/reject window is still governed by ActionRequest.timeout_ms.
+    #[serde(default)]
+    pub session_idle_timeout_secs: Option<u32>,
     /// TLS certificate (PEM). When both cert and key are set, the WS/HTTP gateway binds TLS.
     #[serde(default)]
     pub tls_cert_path: Option<PathBuf>,
@@ -279,6 +287,7 @@ impl Default for Config {
             ipc_rate_limit_rps: None,
             action_caller_rate_limit_rps: None,
             action_caller_max_concurrent: None,
+            session_idle_timeout_secs: None,
             tls_cert_path: None,
             tls_key_path: None,
             registry_url: None,

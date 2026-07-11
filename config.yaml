@@ -32,6 +32,12 @@ allow_no_auth: true
 # action_caller_rate_limit_rps: 50    # action requests/second per (caller, provider); default: unlimited
 # action_caller_max_concurrent: 10    # simultaneous pending actions per (caller, provider); default: unlimited
 
+# R6-04: idle timeout for an accepted long-lived streaming session (seconds
+# since the last ActionRequestChunk/ActionResponseChunk in either direction).
+# Past this, the kernel force-terminates the session with
+# ActionStreamAbort{reason: "idle timeout"} to both sides. Default: unlimited.
+# session_idle_timeout_secs: 300
+
 # TLS for WebSocket/HTTP gateway. When both are set, binds HTTPS/WSS instead of plain HTTP.
 # tls_cert_path: /etc/veyron/tls/cert.pem
 # tls_key_path:  /etc/veyron/tls/key.pem
