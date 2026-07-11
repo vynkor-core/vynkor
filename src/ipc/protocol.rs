@@ -660,11 +660,9 @@ impl MessageRouter {
                 let sender_plugin_id = registry.get_by_conn_id(msg.conn_id).map(|e| e.plugin_id);
 
                 let status_ok = resp.status == ActionStatus::ActionOk as i32;
-                let taken = sender_plugin_id
-                    .as_ref()
-                    .and_then(|plugin_id| {
-                        registry.resolve_action_response(&resp.action_id, plugin_id, status_ok)
-                    });
+                let taken = sender_plugin_id.as_ref().and_then(|plugin_id| {
+                    registry.resolve_action_response(&resp.action_id, plugin_id, status_ok)
+                });
 
                 match taken {
                     Some(pending) => {
@@ -708,30 +706,35 @@ impl MessageRouter {
                     Some((internal_id, pending)) => {
                         registry.touch_pending_action(&internal_id);
                         match registry.get(&pending.provider_id) {
-                        Some(provider_entry) => {
-                            let forwarded = Envelope {
-                                payload: Some(envelope::Payload::ActionRequestChunk(
-                                    ActionRequestChunk {
-                                        action_id: internal_id.clone(),
-                                        seq: chunk.seq,
-                                        chunk: chunk.chunk,
-                                        r#final: chunk.r#final,
-                                    },
-                                )),
-                                ..Default::default()
-                            };
-                            if !Self::try_send_envelope(&provider_entry.write_tx, forwarded) {
-                                warn!(action_id = %internal_id, "request chunk forward failed, aborting stream");
-                                Self::abort_stream(registry, &internal_id, "receiver backpressure")
+                            Some(provider_entry) => {
+                                let forwarded = Envelope {
+                                    payload: Some(envelope::Payload::ActionRequestChunk(
+                                        ActionRequestChunk {
+                                            action_id: internal_id.clone(),
+                                            seq: chunk.seq,
+                                            chunk: chunk.chunk,
+                                            r#final: chunk.r#final,
+                                        },
+                                    )),
+                                    ..Default::default()
+                                };
+                                if !Self::try_send_envelope(&provider_entry.write_tx, forwarded) {
+                                    warn!(action_id = %internal_id, "request chunk forward failed, aborting stream");
+                                    Self::abort_stream(
+                                        registry,
+                                        &internal_id,
+                                        "receiver backpressure",
+                                    )
+                                    .await;
+                                }
+                            }
+                            None => {
+                                warn!(action_id = %internal_id, "request chunk provider disconnected, aborting stream");
+                                Self::abort_stream(registry, &internal_id, "provider disconnected")
                                     .await;
                             }
                         }
-                        None => {
-                            warn!(action_id = %internal_id, "request chunk provider disconnected, aborting stream");
-                            Self::abort_stream(registry, &internal_id, "provider disconnected")
-                                .await;
-                        }
-                    }},
+                    }
                     None => {
                         warn!(
                             action_id = %chunk.action_id,
@@ -840,8 +843,7 @@ impl MessageRouter {
                                 })),
                                 ..Default::default()
                             };
-                            let _ =
-                                Self::try_send_envelope(&pending.requester_write_tx, forwarded);
+                            let _ = Self::try_send_envelope(&pending.requester_write_tx, forwarded);
                         } else if let Some(provider_entry) = registry.get(&pending.provider_id) {
                             let forwarded = Envelope {
                                 payload: Some(envelope::Payload::SessionClose(SessionClose {
@@ -850,8 +852,7 @@ impl MessageRouter {
                                 })),
                                 ..Default::default()
                             };
-                            let _ =
-                                Self::try_send_envelope(&provider_entry.write_tx, forwarded);
+                            let _ = Self::try_send_envelope(&provider_entry.write_tx, forwarded);
                         }
                         registry.take_pending_action(&internal_id);
                         false
