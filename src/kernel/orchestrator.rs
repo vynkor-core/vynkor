@@ -177,6 +177,7 @@ impl Kernel {
             config.action_timeout_ms,
             config.max_conn_errors,
             config.max_tracked_error_conns,
+            config.session_idle_timeout_secs,
         ));
 
         // disconnect handler: unregister plugin + publish system.plugin_left

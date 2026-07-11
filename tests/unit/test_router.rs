@@ -690,6 +690,7 @@ async fn poisoned_session_key_cell_still_installs_mac_key() {
         30_000,
         16,
         8192,
+        None,
     ));
 
     let (write_tx, mut write_rx) = make_write_pair();
@@ -938,6 +939,7 @@ fn spawn_router_with_jwt_and_config_perms(
         30_000,
         16,
         8192,
+        None,
     ));
     tx
 }
@@ -1077,6 +1079,7 @@ async fn unregistered_connection_error_budget_survives_map_prune() {
         30_000,
         /* max_conn_errors */ 3,
         /* max_tracked_error_conns */ 1,
+        None,
     ));
 
     let (tx, mut rx_out) = mpsc::channel::<Outbound>(64);

@@ -12,7 +12,7 @@ use crate::plugins::registry::{ActionLookup, PendingAction, PluginRegistry};
 use crate::proto::veyron::{
     envelope, ActionRequest, ActionRequestChunk, ActionResponse, ActionResponseChunk, ActionStatus,
     ActionStreamAbort, Envelope, ErrorCode, ErrorMessage, Event, EventPublishAck,
-    EventPublishStatus, KernelCommandAck, PermissionType, PluginRegisterAck, Pong,
+    EventPublishStatus, KernelCommandAck, PermissionType, PluginRegisterAck, Pong, SessionClose,
 };
 use governor::{DefaultKeyedRateLimiter, Quota, RateLimiter};
 use metrics::{counter, histogram};
@@ -55,6 +55,7 @@ impl MessageRouter {
             defaults.action_timeout_ms,
             defaults.max_conn_errors,
             defaults.max_tracked_error_conns,
+            defaults.session_idle_timeout_secs,
         )
         .await
     }
@@ -84,6 +85,9 @@ impl MessageRouter {
         action_timeout_ms: u32,
         max_conn_errors: u32,
         max_tracked_error_conns: usize,
+        // R6-04: idle-timeout bound for accepted streaming sessions. None =
+        // disabled, matching action_caller_rate_limit_rps's unlimited convention.
+        session_idle_timeout_secs: Option<u32>,
     ) {
         // Per-connection protocol-error budget. A connection that produces a burst
         // of malformed/denied/unhandled messages (which each generate an error
@@ -141,6 +145,20 @@ impl MessageRouter {
                             ..Default::default()
                         };
                         Self::send_envelope(&expired.requester_write_tx, response).await;
+                    }
+                    if let Some(idle_secs) = session_idle_timeout_secs {
+                        let idle_timeout = Duration::from_secs(idle_secs as u64);
+                        for (internal_id, pending) in
+                            registry.sweep_idle_sessions(Instant::now(), idle_timeout)
+                        {
+                            Self::notify_forced_termination(
+                                &registry,
+                                &internal_id,
+                                pending,
+                                "idle timeout",
+                            )
+                            .await;
+                        }
                     }
                     continue;
                 }
@@ -591,6 +609,9 @@ impl MessageRouter {
                                 deadline: Instant::now()
                                     + Duration::from_millis(effective_timeout_ms as u64),
                                 provider_id: provider.plugin_id.clone(),
+                                streaming: req.streaming,
+                                session_accepted: false,
+                                last_activity: Instant::now(),
                             },
                         );
 
@@ -638,12 +659,12 @@ impl MessageRouter {
                 // sequential internal action_id (AUDIT: response-spoofing gap).
                 let sender_plugin_id = registry.get_by_conn_id(msg.conn_id).map(|e| e.plugin_id);
 
-                let taken = match &sender_plugin_id {
-                    Some(plugin_id) => {
-                        registry.take_pending_action_if_provider(&resp.action_id, plugin_id)
-                    }
-                    None => None,
-                };
+                let status_ok = resp.status == ActionStatus::ActionOk as i32;
+                let taken = sender_plugin_id
+                    .as_ref()
+                    .and_then(|plugin_id| {
+                        registry.resolve_action_response(&resp.action_id, plugin_id, status_ok)
+                    });
 
                 match taken {
                     Some(pending) => {
@@ -684,7 +705,9 @@ impl MessageRouter {
                             .get_pending_action(&internal_id)
                             .map(|pending| (internal_id, pending))
                     }) {
-                    Some((internal_id, pending)) => match registry.get(&pending.provider_id) {
+                    Some((internal_id, pending)) => {
+                        registry.touch_pending_action(&internal_id);
+                        match registry.get(&pending.provider_id) {
                         Some(provider_entry) => {
                             let forwarded = Envelope {
                                 payload: Some(envelope::Payload::ActionRequestChunk(
@@ -708,7 +731,7 @@ impl MessageRouter {
                             Self::abort_stream(registry, &internal_id, "provider disconnected")
                                 .await;
                         }
-                    },
+                    }},
                     None => {
                         warn!(
                             action_id = %chunk.action_id,
@@ -735,6 +758,7 @@ impl MessageRouter {
                         .filter(|pending| pending.provider_id == pid)
                 }) {
                     Some(pending) => {
+                        registry.touch_pending_action(&chunk.action_id);
                         let forwarded = Envelope {
                             payload: Some(envelope::Payload::ActionResponseChunk(
                                 ActionResponseChunk {
@@ -759,6 +783,94 @@ impl MessageRouter {
                     }
                 }
                 false
+            }
+
+            Some(envelope::Payload::SessionClose(close)) => {
+                let sender_id = match registry.get_by_conn_id(msg.conn_id) {
+                    Some(entry) => entry.plugin_id,
+                    None => {
+                        Self::send_error(
+                            &msg.write_tx,
+                            ErrorCode::ErrNotRegistered,
+                            "not registered",
+                        )
+                        .await;
+                        return true;
+                    }
+                };
+
+                // SessionClose can come from either peer. The provider always
+                // addresses by internal id (mirrors ActionResponseChunk); the
+                // requester only knows its own action_id and needs the same
+                // reverse lookup ActionRequestChunk uses.
+                let resolved = match registry.get_pending_action(&close.action_id) {
+                    Some(pending) if pending.provider_id == sender_id => {
+                        Some((close.action_id.clone(), pending, true))
+                    }
+                    _ => registry
+                        .find_pending_internal_id(&sender_id, &close.action_id)
+                        .and_then(|internal_id| {
+                            registry
+                                .get_pending_action(&internal_id)
+                                .map(|pending| (internal_id, pending, false))
+                        }),
+                };
+
+                match resolved {
+                    Some((internal_id, pending, _)) if !pending.session_accepted => {
+                        warn!(
+                            action_id = %internal_id,
+                            sender = %sender_id,
+                            "SessionClose before session acceptance, rejecting"
+                        );
+                        Self::send_error(
+                            &msg.write_tx,
+                            ErrorCode::ErrUnknown,
+                            "session not accepted, nothing to close",
+                        )
+                        .await;
+                        true
+                    }
+                    Some((internal_id, pending, from_provider)) => {
+                        if from_provider {
+                            let forwarded = Envelope {
+                                payload: Some(envelope::Payload::SessionClose(SessionClose {
+                                    action_id: pending.original_action_id.clone(),
+                                    reason: close.reason.clone(),
+                                })),
+                                ..Default::default()
+                            };
+                            let _ =
+                                Self::try_send_envelope(&pending.requester_write_tx, forwarded);
+                        } else if let Some(provider_entry) = registry.get(&pending.provider_id) {
+                            let forwarded = Envelope {
+                                payload: Some(envelope::Payload::SessionClose(SessionClose {
+                                    action_id: internal_id.clone(),
+                                    reason: close.reason.clone(),
+                                })),
+                                ..Default::default()
+                            };
+                            let _ =
+                                Self::try_send_envelope(&provider_entry.write_tx, forwarded);
+                        }
+                        registry.take_pending_action(&internal_id);
+                        false
+                    }
+                    None => {
+                        warn!(
+                            action_id = %close.action_id,
+                            sender = %sender_id,
+                            "SessionClose with no matching accepted session, dropping"
+                        );
+                        Self::send_error(
+                            &msg.write_tx,
+                            ErrorCode::ErrUnknown,
+                            "no matching session",
+                        )
+                        .await;
+                        true
+                    }
+                }
             }
 
             Some(envelope::Payload::KernelCommand(cmd)) => {
@@ -1045,25 +1157,44 @@ impl MessageRouter {
         Self::send_envelope(tx, env).await;
     }
 
-    /// R6-02: abort an in-flight stream — remove its pending-action slot and
-    /// notify both sides. Called whenever `try_send_envelope` fails while
-    /// forwarding a stream chunk in either direction, so a full/closed
+    /// R6-02/R6-04: abort an in-flight stream — remove its pending-action
+    /// slot and notify both sides. Called whenever `try_send_envelope` fails
+    /// while forwarding a stream chunk in either direction, so a full/closed
     /// channel never means a silently dropped (and therefore corrupting)
     /// chunk — the whole stream dies instead, loudly, on both ends.
-    ///
-    /// Both notification sends are non-blocking (`try_send_envelope`): this
-    /// is invoked from the shared router loop (`run_with_context`), which
-    /// must never block on any single connection's channel (see the
-    /// non-blocking-in-shared-loop invariant at `forward()`). In particular,
-    /// the `ActionResponseChunk` arm calls this precisely when the
-    /// *requester's* channel is full-but-alive, so a blocking send here
-    /// would stall the whole router on exactly the connection backpressure
-    /// handling exists to guard against. Best-effort delivery is acceptable:
-    /// there is no further fallback if even the abort notice can't be sent.
     async fn abort_stream(registry: &PluginRegistry, internal_id: &str, reason: &str) {
         let Some(pending) = registry.take_pending_action(internal_id) else {
             return;
         };
+        Self::notify_forced_termination(registry, internal_id, pending, reason).await;
+    }
+
+    /// Shared by `abort_stream` (backpressure/disconnect, R6-02) and the
+    /// idle-timeout sweep (R6-04). Sends `ActionStreamAbort` to both sides.
+    ///
+    /// R6-04: `pending.session_accepted` decides whether the requester also
+    /// gets a terminal `ActionResponse{ACTION_STREAM_BACKPRESSURE}`. Before
+    /// acceptance the requester is still awaiting its *first* (and only
+    /// expected) `ActionResponse`, so one must be synthesized here — this is
+    /// unchanged R6-02 behavior. Once a session is accepted, the requester
+    /// already received the real accepting `ActionResponse{OK}`; sending a
+    /// second `ActionResponse` for the same `action_id` would be a
+    /// surprising duplicate the requester never expects, so only
+    /// `ActionStreamAbort` is sent. The idle-timeout sweep only ever finds
+    /// accepted sessions (see `sweep_idle_sessions`), so this branch is
+    /// always taken for that caller — no special-casing needed there.
+    ///
+    /// Both notification sends are non-blocking (`try_send_envelope`): this
+    /// is invoked from the shared router loop, which must never block on
+    /// any single connection's channel (see the non-blocking-in-shared-loop
+    /// invariant at `forward()`). Best-effort delivery is acceptable: there
+    /// is no further fallback if even the abort notice can't be sent.
+    async fn notify_forced_termination(
+        registry: &PluginRegistry,
+        internal_id: &str,
+        pending: PendingAction,
+        reason: &str,
+    ) {
         counter!("action_stream_aborted_total", "reason" => reason.to_string()).increment(1);
 
         let abort_to_requester = Envelope {
@@ -1075,16 +1206,18 @@ impl MessageRouter {
         };
         let _ = Self::try_send_envelope(&pending.requester_write_tx, abort_to_requester);
 
-        let terminal_response = Envelope {
-            payload: Some(envelope::Payload::ActionResponse(ActionResponse {
-                action_id: pending.original_action_id,
-                status: ActionStatus::ActionStreamBackpressure as i32,
-                data_json: vec![],
-                error: reason.to_string(),
-            })),
-            ..Default::default()
-        };
-        let _ = Self::try_send_envelope(&pending.requester_write_tx, terminal_response);
+        if !pending.session_accepted {
+            let terminal_response = Envelope {
+                payload: Some(envelope::Payload::ActionResponse(ActionResponse {
+                    action_id: pending.original_action_id,
+                    status: ActionStatus::ActionStreamBackpressure as i32,
+                    data_json: vec![],
+                    error: reason.to_string(),
+                })),
+                ..Default::default()
+            };
+            let _ = Self::try_send_envelope(&pending.requester_write_tx, terminal_response);
+        }
 
         if let Some(provider_entry) = registry.get(&pending.provider_id) {
             let abort_to_provider = Envelope {
@@ -1096,9 +1229,7 @@ impl MessageRouter {
             };
             // Best-effort — if the provider's channel is also the one that's
             // full, it'll simply never see this notice and will discover the
-            // stream is dead the next time it tries to send a chunk (Task 4's
-            // ActionResponseChunk arm looks up `get_pending_action` and finds
-            // nothing).
+            // stream is dead the next time it tries to send a chunk.
             let _ = Self::try_send_envelope(&provider_entry.write_tx, abort_to_provider);
         }
     }
