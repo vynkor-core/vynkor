@@ -228,7 +228,7 @@ Current posture: **pre-production**. Kernel core (framing, MAC, fragmentation, s
 - **Message schema:** `proto/veyron_protocol.proto` (single source of truth)
 - **Plugin registry schema:** `docs/PLUGIN_REGISTRY_SCHEMA.md`
 - **Audit:** `AUDIT.md`
-- **Roadmap:** `ROADMAP.md` (historical phases in `docs/archive/`)
+- **Roadmap:** `ROADMAP.md`
 
 ---
 
