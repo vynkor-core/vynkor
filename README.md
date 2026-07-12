@@ -3,6 +3,7 @@
 **A Unix-native plugin kernel written in Rust.** Routes bytes between isolated processes over Unix Domain Sockets. Knows nothing about your business logic. Does not care about AI.
 
 > **Two projects. Clear boundaries.**
+>
 > - **Veyron** — the "dumb" core. Routes frames, supervises processes, enforces permissions.
 > - **Kairo** — a smart plugin built *on top of* Veyron. AI agent, memory, voice. Uses the kernel as infrastructure.
 
@@ -12,30 +13,30 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    External Clients                          │
+│                    External Clients                         │
 │           (browser, mobile app, remote sensor)              │
-└──────────────────────┬──────────────────────────────────────┘
-                       │ WebSocket / HTTP  (JWT required)
-                       │
-┌──────────────────────▼──────────────────────────────────────┐
-│                   Veyron Core (Rust)                         │
-│                                                              │
+└──────────────────────────┬──────────────────────────────────┘
+                           │ WebSocket / HTTP  (JWT required)
+                           │
+┌──────────────────────────▼──────────────────────────────────┐
+│                   Veyron Core (Rust)                        │
+│                                                             │
 │  ┌─────────────┐  ┌──────────────┐  ┌────────────────────┐  │
 │  │ API Gateway │  │ Message      │  │ Plugin Supervisor  │  │
-│  │ (Axum WS/  │  │ Router       │  │ (spawn, restart,   │  │
-│  │  HTTP)     │  │ (target-key  │  │  SIGTERM, watchdog)│  │
-│  └──────┬─────┘  │  routing,    │  └────────────────────┘  │
-│         │        │  zero-parse) │                           │
-│         └────────►              │  ┌────────────────────┐  │
-│                  └──────┬───────┘  │ Plugin Registry    │  │
-│                         │          │ (DashMap, pong     │  │
-│                         │          │  timestamps)       │  │
-│                         │          └────────────────────┘  │
-└─────────────────────────┼───────────────────────────────────┘
-                          │ Unix Domain Sockets (UDS)
-          ┌───────────────┼────────────────────────┐
-          │               │                         │
-┌─────────▼──────┐ ┌──────▼────────┐ ┌─────────────▼──────┐
+│  │ (Axum WS/   │  │ Router       │  │ (spawn, restart,   │  │
+│  │  HTTP)      │  │ (target-key  │  │  SIGTERM, watchdog)│  │
+│  └──────┬──────┘  │  routing,    │  └────────────────────┘  │
+│         │         │  zero-parse) │                          │
+│         └────────►│              │  ┌────────────────────┐  │
+│                   └──────┬───────┘  │ Plugin Registry    │  │
+│                          │          │ (DashMap, pong     │  │
+│                          │          │  timestamps)       │  │
+│                          │          └────────────────────┘  │
+└──────────────────────────┼──────────────────────────────────┘
+                           │ Unix Domain Sockets (UDS)
+         ┌─────────────────┼────────────────────┐
+         │                 │                    │
+┌────────▼───────┐ ┌───────▼───────┐ ┌──────────▼─────────┐
 │  Plugin: Kairo │ │ Plugin: STT   │ │  Plugin: Weather   │
 │  (Rust)        │ │ (Python)      │ │  (any language)    │
 │  AI agent      │ │ Speech-to-text│ │                    │
@@ -102,7 +103,7 @@ Every plugin runs in a separate OS process. The kernel spawns it, injects `VEYRO
 ### Build
 
 ```bash
-git clone https://github.com/your-org/veyron
+git clone https://github.com/veyron-core/veyron
 cd veyron
 cargo build --release
 ```
