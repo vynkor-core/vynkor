@@ -70,6 +70,11 @@ A high-performance plugin kernel written in Rust with C++ interop and multi-SDK 
 - Methods: `on_init()`, `on_shutdown()`, `on_message()`
 - All use protobuf for serialization
 
+**Comment style:**
+- lowercase, terse, commit-message tone — not a docstring
+- explain *why*, not what (code already says what)
+- e.g. `// kernel-assigned id, not the requester's original action_id` not `// This variable stores the ID.`
+
 ### Critical Files (Edit Carefully)
 
 - **`proto/veyron_protocol.proto`** ← Changes affect ALL plugins
