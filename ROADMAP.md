@@ -31,16 +31,22 @@ Wire format is already final (proto mirrored to all three SDKs, no proto
 work needed here) — this phase is pure client-library work, one pair of
 SDKs at a time.
 
-### P7-01 — `publish_event` in C++ and Python SDKs
+### P7-01 — `publish_event` in C++ and Python SDKs ✅ done
 
 Rust reference: `VeyronClient::publish_event()` (`sdk/rust/src/client.rs:465`).
 Sends `EventPublish`, awaits `EventPublishAck`, surfaces
 `EventPublishStatus` (`EVENT_PUBLISH_OK`/`ERROR`/`PERMISSION_DENY`) as a
 typed result/exception.
 
-**Needed:** `VeyronClient::publish_event()` in `sdk/cpp/include/veyron/client.hpp`
-+ `.cpp`, and `async def publish_event()` in `sdk/python/veyron/client.py`.
-Neither SDK has any trace of `EventPublish` today (checked — zero matches).
+Shipped: `VeyronClient::publish_event()` in `sdk/cpp/include/veyron/client.hpp`
++ `.cpp` (new `read_frame_full_with_deadline` primitive in `framing.hpp/.cpp`
+to bound the total wait, not just mid-frame completion), and
+`async def publish_event()` in `sdk/python/veyron/client.py` (also
+regenerated `veyron_protocol_pb2.py`, which had never been rebuilt since
+`EventPublish`/`EventPublishAck` were added to the proto in R6-01). Both
+SDKs bumped to 0.1.1 and published (`veyron-sdk` on crates.io and PyPI).
+5 test cases per SDK: OK ack, PERMISSION_DENY ack returned not raised,
+kernel Error raises, timeout raises, unrelated envelope discarded.
 
 ### P7-02 — Streaming actions in C++ and Python SDKs
 
@@ -83,7 +89,7 @@ instead of just ping/echo.
 
 | Item | Scope | Depends on |
 |------|-------|------------|
-| P7-01 | `publish_event` — C++ + Python | none |
+| P7-01 | `publish_event` — C++ + Python ✅ done | none |
 | P7-02 | streaming actions — C++ + Python | none |
 | P7-03 | `close_session` — C++ + Python | P7-02 |
 | P7-04 | cross-SDK integration tests | P7-01..03 |
