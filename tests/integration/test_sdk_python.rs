@@ -381,13 +381,15 @@ async fn python_sdk_publish_event_from_plugin() {
         .send(
             "kernel",
             veyron::proto::veyron::Envelope {
-                payload: Some(envelope::Payload::ActionRequest(veyron::proto::veyron::ActionRequest {
-                    action_id: "py-publish-act-1".to_string(),
-                    action: "publish_test".to_string(),
-                    params_json: params.clone(),
-                    timeout_ms: 3000,
-                    streaming: false,
-                })),
+                payload: Some(envelope::Payload::ActionRequest(
+                    veyron::proto::veyron::ActionRequest {
+                        action_id: "py-publish-act-1".to_string(),
+                        action: "publish_test".to_string(),
+                        params_json: params.clone(),
+                        timeout_ms: 3000,
+                        streaming: false,
+                    },
+                )),
                 ..Default::default()
             },
         )

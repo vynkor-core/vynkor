@@ -83,14 +83,36 @@ inherent to protobuf oneof `HasField`. This closed the test gap only:
 `tests/python/test_session_close.py` (2 cases), mirroring Rust SDK test
 `recv_distinguishes_session_close_from_stream_abort`.
 
-### P7-04 — Cross-SDK integration coverage
+### P7-04 — Cross-SDK integration coverage ✅ done
 
-Once P7-01..03 land in both SDKs, add integration tests exercising each
-combination that matters in practice: Rust-kernel + C++-plugin streaming
-round trip, Python-plugin publish_event with a Rust subscriber, etc. — same
-shape as the existing `tests/integration/test_sdk_cpp.rs` /
-`test_sdk_python.rs` harnesses, extended to cover the new message types
-instead of just ping/echo.
+Design: `docs/superpowers/specs/2026-07-14-p7-04-cross-sdk-integration-design.md`.
+Full matrix: 3 message types × 2 SDKs = 6 new integration tests, kernel
+always the real Rust kernel (`SdkHarness`), counterpart always the Rust SDK
+test harness driven directly from `#[tokio::test]` (not a second subprocess
+— matches the existing `cpp_sdk_echo_plugin_round_trip` /
+`python_sdk_register_and_ping` pattern).
+
+Both `sdk/cpp/examples/echo_plugin.cpp` and `sdk/python/examples/echo_plugin.py`
+gained a `stream_echo` action (accumulates `ActionRequestChunk`s by seq until
+`final`, replies with 2 `ActionResponseChunk`s + a terminal `ActionResponse`),
+a `publish_test` action (calls `publish_event`, replies OK/ERROR from the
+ack), and a `SessionClose` → `session_closed:<reason>` stdout branch.
+`stream_echo` also sends an early accepting `ActionResponse{OK}` immediately
+on the initial streaming `ActionRequest` — discovered during planning that
+the kernel's `SessionClose` handler (`src/ipc/protocol.rs`) rejects the
+request until `PendingAction::session_accepted` flips true, which only
+happens on a provider `ActionResponse{OK}` for a streaming action
+(`src/plugins/registry.rs::resolve_action_response`); without the early
+accept, a mid-stream `SessionClose` can never reach the plugin.
+
+Shipped: `cpp_sdk_streaming_action_round_trip`, `cpp_sdk_publish_event_from_plugin`,
+`cpp_sdk_session_close_dispatch` in `tests/integration/test_sdk_cpp.rs`;
+`python_sdk_streaming_action_round_trip`, `python_sdk_publish_event_from_plugin`,
+`python_sdk_session_close_dispatch` in `tests/integration/test_sdk_python.rs`
+(the latter spawning the real `examples/echo_plugin.py` via
+`python3 -m examples.echo_plugin`, a first for the Python integration
+tests — prior ones only ran inline `-c` scripts). Each skips gracefully
+without the relevant subprocess dependency, matching existing convention.
 
 ---
 
@@ -101,7 +123,7 @@ instead of just ping/echo.
 | P7-01 | `publish_event` — C++ + Python ✅ done | none |
 | P7-02 | streaming actions — C++ + Python ✅ done | none |
 | P7-03 | `close_session` recv-side dispatch — C++ + Python ✅ done | P7-02 |
-| P7-04 | cross-SDK integration tests | P7-01..03 |
+| P7-04 | cross-SDK integration tests ✅ done | P7-01..03 |
 
 **Ship gate:** not yet scheduled — candidate work, pick up when a plugin
 (e.g. `network`) actually needs streaming/session/event-publish from a
