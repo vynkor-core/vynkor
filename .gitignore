@@ -2,8 +2,9 @@
 /target/
 **/target/
 **/*.rs.bk
-Cargo.lock
 fuzz/corpus/*
+fuzz/Cargo.lock
+examples/*/Cargo.lock
 # c++
 build/
 bin/

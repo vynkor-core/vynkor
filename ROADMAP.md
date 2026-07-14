@@ -71,14 +71,17 @@ Python) now used by both `publish_event` and `send_action`, per P7-01's
 deferred note. 8 test cases per SDK
 (`sdk/cpp/tests/test_send_action.cpp`, `tests/python/test_send_action.py`).
 
-### P7-03 — Session close in C++ and Python SDKs
+### P7-03 — Session close in C++ and Python SDKs ✅ done
 
 Rust reference: `close_session()` (`client.rs:646`), sends `SessionClose{action_id, reason}`.
 The send side shipped early as part of P7-02 (mechanically identical to the
-chunk senders). What's left here is each SDK's `recv()`/dispatch loop
-distinguishing an inbound `SessionClose` from `ActionStreamAbort`
-(mirrors Rust SDK test `recv_distinguishes_session_close_from_stream_abort`),
-plus the accept-in-place semantics documented above.
+chunk senders). `recv()` in both SDKs already decoded `SessionClose`
+correctly as a plain `Envelope` oneof field (present since R6-04/P7-02) —
+no dispatch code was needed, distinguishing it from `ActionStreamAbort` is
+inherent to protobuf oneof `HasField`. This closed the test gap only:
+`sdk/cpp/tests/test_session_close.cpp` (2 cases) and
+`tests/python/test_session_close.py` (2 cases), mirroring Rust SDK test
+`recv_distinguishes_session_close_from_stream_abort`.
 
 ### P7-04 — Cross-SDK integration coverage
 
@@ -97,7 +100,7 @@ instead of just ping/echo.
 |------|-------|------------|
 | P7-01 | `publish_event` — C++ + Python ✅ done | none |
 | P7-02 | streaming actions — C++ + Python ✅ done | none |
-| P7-03 | `close_session` recv-side dispatch — C++ + Python | P7-02 |
+| P7-03 | `close_session` recv-side dispatch — C++ + Python ✅ done | P7-02 |
 | P7-04 | cross-SDK integration tests | P7-01..03 |
 
 **Ship gate:** not yet scheduled — candidate work, pick up when a plugin
