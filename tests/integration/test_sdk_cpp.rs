@@ -206,3 +206,97 @@ async fn cpp_sdk_streaming_action_round_trip() {
     let _ = child.kill();
     let _ = child.wait();
 }
+
+/// A second harness client subscribes to the plugin's namespaced event type;
+/// the sender fires the "publish_test" action; both the published Event and
+/// the terminal ActionResponse are observed.
+#[tokio::test]
+async fn cpp_sdk_publish_event_from_plugin() {
+    let Some(bin) = echo_plugin_binary() else {
+        eprintln!(
+            "[SKIP] C++ echo_plugin binary not found — build via `cmake -B sdk/cpp/build -S sdk/cpp \
+             && cmake --build sdk/cpp/build --target echo_plugin` (see sdk/cpp/README.md), \
+             or set VEYRON_CPP_ECHO_PLUGIN to an existing binary path"
+        );
+        return;
+    };
+
+    let harness = SdkHarness::start().await;
+    let socket = harness.socket_path.to_str().unwrap().to_string();
+
+    let mut child = Command::new(&bin)
+        .env("VEYRON_SOCKET_PATH", &socket)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn C++ echo plugin");
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let mut subscriber = VeyronClient::connect(&socket)
+        .await
+        .expect("subscriber connect failed");
+    subscriber
+        .register("test-cpp-subscriber", PluginManifest::default())
+        .await
+        .expect("register failed");
+    subscriber
+        .subscribe(vec!["plugin.echo-plugin.test_publish".to_string()])
+        .await
+        .expect("subscribe failed");
+
+    let mut sender = VeyronClient::connect(&socket)
+        .await
+        .expect("sender connect failed");
+    sender
+        .register("test-cpp-publish-sender", PluginManifest::default())
+        .await
+        .expect("register failed");
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let params = br#"{"msg":"hi from cpp harness"}"#.to_vec();
+    sender
+        .send(
+            "kernel",
+            Envelope {
+                payload: Some(envelope::Payload::ActionRequest(ActionRequest {
+                    action_id: "cpp-publish-act-1".to_string(),
+                    action: "publish_test".to_string(),
+                    params_json: params.clone(),
+                    timeout_ms: 3000,
+                    streaming: false,
+                })),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("send failed");
+
+    let event_env = tokio::time::timeout(Duration::from_secs(3), subscriber.recv())
+        .await
+        .expect("subscriber recv timed out")
+        .expect("subscriber recv failed");
+    match event_env.payload {
+        Some(envelope::Payload::Event(e)) => {
+            assert_eq!(e.event_type, "plugin.echo-plugin.test_publish");
+            assert_eq!(e.payload_json, params);
+        }
+        other => panic!("expected Event, got {other:?}"),
+    }
+
+    let resp_env = tokio::time::timeout(Duration::from_secs(3), sender.recv())
+        .await
+        .expect("sender recv timed out")
+        .expect("sender recv failed");
+    match resp_env.payload {
+        Some(envelope::Payload::ActionResponse(r)) => {
+            assert_eq!(r.action_id, "cpp-publish-act-1");
+            assert_eq!(r.status, ActionStatus::ActionOk as i32);
+        }
+        other => panic!("expected ActionResponse, got {other:?}"),
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
