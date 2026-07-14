@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 use std::process::{Command, Stdio};
 use std::time::Duration;
+use tokio::io::AsyncBufReadExt;
 use veyron::proto::veyron::{envelope, ActionRequest, ActionStatus, Envelope, PluginManifest};
 use veyron_sdk::VeyronClient;
 
@@ -296,6 +297,100 @@ async fn cpp_sdk_publish_event_from_plugin() {
         }
         other => panic!("expected ActionResponse, got {other:?}"),
     }
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// Sends SessionClose mid-stream (after chunk 0, before `final`) and
+/// verifies the plugin's stdout shows it correctly discriminated
+/// SessionClose from ActionStreamAbort over the real wire. The child is
+/// killed explicitly at the end rather than asserting a natural exit(0):
+/// the plugin's connection is to the kernel, not to this harness client, and
+/// it only exits cleanly on an explicit PluginShutdown from the kernel,
+/// which nothing here sends (out of scope — no plugin.hpp changes allowed).
+#[tokio::test]
+async fn cpp_sdk_session_close_dispatch() {
+    let Some(bin) = echo_plugin_binary() else {
+        eprintln!(
+            "[SKIP] C++ echo_plugin binary not found — build via `cmake -B sdk/cpp/build -S sdk/cpp \
+             && cmake --build sdk/cpp/build --target echo_plugin` (see sdk/cpp/README.md), \
+             or set VEYRON_CPP_ECHO_PLUGIN to an existing binary path"
+        );
+        return;
+    };
+
+    let harness = SdkHarness::start().await;
+    let socket = harness.socket_path.to_str().unwrap().to_string();
+
+    let mut child = tokio::process::Command::new(&bin)
+        .env("VEYRON_SOCKET_PATH", &socket)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn C++ echo plugin");
+
+    let stdout = child.stdout.take().unwrap();
+    let mut reader = tokio::io::BufReader::new(stdout).lines();
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let mut client = VeyronClient::connect(&socket)
+        .await
+        .expect("SDK connect failed");
+    client
+        .register("test-cpp-close-sender", PluginManifest::default())
+        .await
+        .expect("register failed");
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let action_id = client
+        .send_action_streaming("stream_echo", 3000)
+        .await
+        .expect("send_action_streaming failed");
+    client
+        .send_request_chunk(&action_id, 0, b"partial".to_vec(), false)
+        .await
+        .expect("send chunk failed");
+
+    // Wait for the plugin's early session-accept ActionResponse before
+    // closing — the kernel rejects SessionClose until session_accepted
+    // flips true (see Task 1's early-accept note).
+    let accept = tokio::time::timeout(Duration::from_secs(3), client.recv())
+        .await
+        .expect("recv timed out")
+        .expect("recv failed");
+    match accept.payload {
+        Some(envelope::Payload::ActionResponse(r)) => {
+            assert_eq!(r.action_id, action_id);
+            assert_eq!(r.status, ActionStatus::ActionOk as i32);
+        }
+        other => panic!("expected accepting ActionResponse, got {other:?}"),
+    }
+
+    client
+        .close_session(&action_id, "test closing session")
+        .await
+        .expect("close_session failed");
+
+    // Keep reading until we find the session_closed line
+    let mut found = false;
+    for _ in 0..100 {
+        let line = tokio::time::timeout(Duration::from_secs(3), reader.next_line())
+            .await
+            .expect("timed out waiting for session_closed line")
+            .expect("failed reading plugin stdout");
+        if let Some(l) = line {
+            if l == "session_closed:test closing session" {
+                found = true;
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+    assert!(found, "session_closed line not found");
 
     let _ = child.kill();
     let _ = child.wait();
