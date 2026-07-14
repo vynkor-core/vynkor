@@ -48,31 +48,37 @@ SDKs bumped to 0.1.1 and published (`veyron-sdk` on crates.io and PyPI).
 5 test cases per SDK: OK ack, PERMISSION_DENY ack returned not raised,
 kernel Error raises, timeout raises, unrelated envelope discarded.
 
-### P7-02 — Streaming actions in C++ and Python SDKs
+### P7-02 — Streaming actions in C++ and Python SDKs ✅ done
 
 Rust reference: `send_action_streaming()` (`client.rs:571`),
 `send_request_chunk()`/`send_response_chunk()` (`:594`/`:618`), plus
 `send_action()`'s handling of an inbound `ActionStreamAbort` for the
 awaited `action_id`.
 
-**Needed:** port all three to both SDKs. Chunk send/recv must reuse each
-SDK's existing fragmentation buffer plumbing (`sdk/cpp` gained
-`FLAG_FRAGMENTED` support in T-18; `sdk/python/veyron/client.py`'s
-`send_fragmented` already exists) — streaming chunks are a distinct
-wire message (`ActionRequestChunk`/`ActionResponseChunk`), not the same
-mechanism, so don't conflate the two, but the reassembly-buffer pattern
-(`stream_id -> pending bytes`, idle prune, cap) is directly reusable.
+Scope grew during design (`docs/superpowers/specs/2026-07-14-p7-02-streaming-actions-sdk-design.md`):
+neither SDK had plain non-streaming `send_action` yet either, and its
+`ActionStreamAbort` handling can't be ported separately from the
+deadline-loop it lives in, so this shipped all five of `send_action`,
+`send_action_streaming`, `send_request_chunk`, `send_response_chunk`, and
+`close_session` (send side) together. `ActionRequestChunk`/
+`ActionResponseChunk` are a distinct wire message from `FLAG_FRAGMENTED`
+fragmentation (T-18) — not reused, per the original scoping note above.
+
+Shipped: all five methods in `sdk/cpp/include/veyron/client.hpp` + `.cpp`
+and `sdk/python/veyron/client.py`. Both SDKs extracted a shared
+deadline-loop helper (`wait_for_response` in C++, `_await_matching` in
+Python) now used by both `publish_event` and `send_action`, per P7-01's
+deferred note. 8 test cases per SDK
+(`sdk/cpp/tests/test_send_action.cpp`, `tests/python/test_send_action.py`).
 
 ### P7-03 — Session close in C++ and Python SDKs
 
 Rust reference: `close_session()` (`client.rs:646`), sends `SessionClose{action_id, reason}`.
-Depends on P7-02 landing first (sessions are built on the streaming
-primitive — accept-in-place via the first `ActionResponse{OK}` on a
-streaming request).
-
-**Needed:** `close_session()` in both SDKs, plus each SDK's `recv()`/dispatch
-loop distinguishing an inbound `SessionClose` from `ActionStreamAbort`
-(mirrors Rust SDK test `recv_distinguishes_session_close_from_stream_abort`).
+The send side shipped early as part of P7-02 (mechanically identical to the
+chunk senders). What's left here is each SDK's `recv()`/dispatch loop
+distinguishing an inbound `SessionClose` from `ActionStreamAbort`
+(mirrors Rust SDK test `recv_distinguishes_session_close_from_stream_abort`),
+plus the accept-in-place semantics documented above.
 
 ### P7-04 — Cross-SDK integration coverage
 
@@ -90,8 +96,8 @@ instead of just ping/echo.
 | Item | Scope | Depends on |
 |------|-------|------------|
 | P7-01 | `publish_event` — C++ + Python ✅ done | none |
-| P7-02 | streaming actions — C++ + Python | none |
-| P7-03 | `close_session` — C++ + Python | P7-02 |
+| P7-02 | streaming actions — C++ + Python ✅ done | none |
+| P7-03 | `close_session` recv-side dispatch — C++ + Python | P7-02 |
 | P7-04 | cross-SDK integration tests | P7-01..03 |
 
 **Ship gate:** not yet scheduled — candidate work, pick up when a plugin
