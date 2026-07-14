@@ -97,7 +97,7 @@ Every plugin runs in a separate OS process. The kernel spawns it, injects `VEYRO
 
 ### Prerequisites
 
-- Rust 1.78+ (`rustup update stable`)
+- Rust 1.85+ (`rustup update stable`) — matches `veyron-wire`'s MSRV, which the kernel depends on
 - Linux or macOS (Linux required for full sandbox isolation)
 
 ### Build
@@ -171,7 +171,11 @@ impl Plugin for MyPlugin {
 // MyPlugin.run().await connects via $VEYRON_SOCKET_PATH and registers.
 ```
 
-SDKs available: `sdk/rust/`, `sdk/cpp/`, `sdk/python/`. See `examples/echo_plugin_rs/`.
+SDKs available: `sdk/rust/`, `sdk/cpp/`, `sdk/python/` — all three support
+`send_action`, streaming actions (`send_action_streaming` +
+request/response chunks), `close_session`, and `publish_event`. See
+`examples/echo_plugin_rs/`, `sdk/cpp/examples/echo_plugin.cpp`,
+`sdk/python/examples/echo_plugin.py`.
 
 Published packages:
 
@@ -185,9 +189,6 @@ Published packages:
 cargo add veyron-sdk    # Rust plugins
 pip install veyron-sdk  # Python plugins
 ```
-
-> **Note:** the SDK `Plugin` base classes currently only work against a kernel
-> started with `allow_no_auth: true` — JWT/secret plumbing is roadmap item R5-05.
 
 ---
 
@@ -219,7 +220,7 @@ sdk/
 
 Report vulnerabilities via GitHub Security Advisories (not public issues). See `AUDIT.md` for the current audit findings and score.
 
-Current posture: **pre-production**. Kernel core (framing, MAC, fragmentation, supervision) is solid and regression-tested; compressed-frame support now works across all three SDKs (R5-01). Remaining open items are tracked in `AUDIT.md` and `ROADMAP.md` (Phase 5).
+Current posture: **pre-production**. Kernel core (framing, MAC, fragmentation, supervision) is solid and regression-tested; compressed-frame support works across all three SDKs (R5-01), and Rust/C++/Python SDKs now have full parity on `publish_event`, streaming actions, and session close (Phase 7). Remaining open items are tracked in `AUDIT.md` and `ROADMAP.md`.
 
 ---
 
