@@ -323,3 +323,101 @@ async fn python_sdk_streaming_action_round_trip() {
     let _ = plugin.kill().await;
     let _ = plugin.wait().await;
 }
+
+/// A second harness client subscribes to the plugin's namespaced event type;
+/// the sender fires the "publish_test" action; both the published Event and
+/// the terminal ActionResponse are observed.
+#[tokio::test]
+async fn python_sdk_publish_event_from_plugin() {
+    if !python3_available() {
+        eprintln!("[SKIP] python3 not found");
+        return;
+    }
+    if !python_deps_available() {
+        eprintln!("[SKIP] Python SDK deps (google.protobuf/veyron) not importable");
+        return;
+    }
+
+    let harness = SdkHarness::start().await;
+    let socket = harness.socket_path.to_str().unwrap().to_string();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let mut plugin = tokio::process::Command::new("python3")
+        .arg("-m")
+        .arg("examples.echo_plugin")
+        .current_dir(sdk_python_dir())
+        .env("VEYRON_SOCKET_PATH", &socket)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("failed to spawn python3 echo_plugin");
+
+    tokio::time::sleep(Duration::from_millis(400)).await;
+
+    let mut subscriber = VeyronClient::connect(&socket)
+        .await
+        .expect("subscriber connect failed");
+    subscriber
+        .register("test-py-subscriber", PluginManifest::default())
+        .await
+        .expect("register failed");
+    subscriber
+        .subscribe(vec!["plugin.echo-plugin.test_publish".to_string()])
+        .await
+        .expect("subscribe failed");
+
+    let mut sender = VeyronClient::connect(&socket)
+        .await
+        .expect("sender connect failed");
+    sender
+        .register("test-py-publish-sender", PluginManifest::default())
+        .await
+        .expect("register failed");
+
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    let params = br#"{"msg":"hi from python harness"}"#.to_vec();
+    sender
+        .send(
+            "kernel",
+            veyron::proto::veyron::Envelope {
+                payload: Some(envelope::Payload::ActionRequest(veyron::proto::veyron::ActionRequest {
+                    action_id: "py-publish-act-1".to_string(),
+                    action: "publish_test".to_string(),
+                    params_json: params.clone(),
+                    timeout_ms: 3000,
+                    streaming: false,
+                })),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("send failed");
+
+    let event_env = tokio::time::timeout(Duration::from_secs(5), subscriber.recv())
+        .await
+        .expect("subscriber recv timed out")
+        .expect("subscriber recv failed");
+    match event_env.payload {
+        Some(envelope::Payload::Event(e)) => {
+            assert_eq!(e.event_type, "plugin.echo-plugin.test_publish");
+            assert_eq!(e.payload_json, params);
+        }
+        other => panic!("expected Event, got {other:?}"),
+    }
+
+    let resp_env = tokio::time::timeout(Duration::from_secs(5), sender.recv())
+        .await
+        .expect("sender recv timed out")
+        .expect("sender recv failed");
+    match resp_env.payload {
+        Some(envelope::Payload::ActionResponse(r)) => {
+            assert_eq!(r.action_id, "py-publish-act-1");
+            assert_eq!(r.status, ActionStatus::ActionOk as i32);
+        }
+        other => panic!("expected ActionResponse, got {other:?}"),
+    }
+
+    let _ = plugin.kill().await;
+    let _ = plugin.wait().await;
+}
