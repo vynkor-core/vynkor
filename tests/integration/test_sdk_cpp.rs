@@ -392,6 +392,6 @@ async fn cpp_sdk_session_close_dispatch() {
     }
     assert!(found, "session_closed line not found");
 
-    let _ = child.kill();
-    let _ = child.wait();
+    let _ = child.kill().await;
+    let _ = child.wait().await;
 }
