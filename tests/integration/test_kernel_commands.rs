@@ -473,6 +473,7 @@ async fn action_concurrency_cap_denies_third_concurrent_call_to_same_provider() 
                     params_json: b"{}".to_vec(),
                     timeout_ms: 5000,
                     streaming: false,
+                    ..Default::default()
                 },
             )),
             ..Default::default()
@@ -490,6 +491,7 @@ async fn action_concurrency_cap_denies_third_concurrent_call_to_same_provider() 
                 params_json: b"{}".to_vec(),
                 timeout_ms: 5000,
                 streaming: false,
+                ..Default::default()
             },
         )),
         ..Default::default()
@@ -522,6 +524,7 @@ async fn action_concurrency_cap_denies_third_concurrent_call_to_same_provider() 
                 params_json: b"{}".to_vec(),
                 timeout_ms: 2000,
                 streaming: false,
+                ..Default::default()
             },
         )),
         ..Default::default()
@@ -620,6 +623,7 @@ async fn action_concurrency_cap_releases_after_response_allowing_retry() {
                 params_json: b"{}".to_vec(),
                 timeout_ms: 5000,
                 streaming: false,
+                ..Default::default()
             },
         )),
         ..Default::default()
@@ -636,6 +640,7 @@ async fn action_concurrency_cap_releases_after_response_allowing_retry() {
                 params_json: b"{}".to_vec(),
                 timeout_ms: 5000,
                 streaming: false,
+                ..Default::default()
             },
         )),
         ..Default::default()
@@ -707,6 +712,7 @@ async fn action_concurrency_cap_releases_after_response_allowing_retry() {
                 params_json: b"{}".to_vec(),
                 timeout_ms: 5000,
                 streaming: false,
+                ..Default::default()
             },
         )),
         ..Default::default()

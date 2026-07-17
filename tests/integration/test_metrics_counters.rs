@@ -89,6 +89,7 @@ async fn messages_routed_counter_appears_after_routing() {
             params_json: b"{}".to_vec(),
             timeout_ms: 0,
             streaming: false,
+            ..Default::default()
         })),
         ..Default::default()
     };
@@ -127,6 +128,7 @@ async fn ipc_send_denied_counter_appears_after_permission_denial() {
             params_json: b"{}".to_vec(),
             timeout_ms: 0,
             streaming: false,
+            ..Default::default()
         })),
         ..Default::default()
     };

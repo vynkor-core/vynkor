@@ -71,6 +71,7 @@ async fn cpp_sdk_echo_plugin_round_trip() {
         params_json: br#"{"text":"hello from harness"}"#.to_vec(),
         timeout_ms: 3000,
         streaming: false,
+        ..Default::default()
     };
     client
         .send(
@@ -267,6 +268,7 @@ async fn cpp_sdk_publish_event_from_plugin() {
                     params_json: params.clone(),
                     timeout_ms: 3000,
                     streaming: false,
+                    ..Default::default()
                 })),
                 ..Default::default()
             },
