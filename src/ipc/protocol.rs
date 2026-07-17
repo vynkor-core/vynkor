@@ -622,6 +622,11 @@ impl MessageRouter {
                                 params_json: req.params_json.clone(),
                                 timeout_ms: req.timeout_ms,
                                 streaming: req.streaming,
+                                // Stamped from the authenticated sender_id, never
+                                // from req.caller_plugin_id — the inbound value
+                                // (if any) is discarded here, making this field
+                                // unspoofable by the caller.
+                                caller_plugin_id: sender_id.clone(),
                             })),
                             ..Default::default()
                         };

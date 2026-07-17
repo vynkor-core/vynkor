@@ -42,6 +42,7 @@ async fn plugin_a_sends_to_plugin_b_and_b_receives() {
             params_json: b"{}".to_vec(),
             timeout_ms: 0,
             streaming: false,
+            ..Default::default()
         })),
         ..Default::default()
     };
@@ -65,4 +66,59 @@ async fn plugin_a_sends_to_plugin_b_and_b_receives() {
     );
 
     let _ = shutdown_tx.send(());
+}
+
+#[tokio::test]
+async fn action_request_gets_caller_plugin_id_stamped_and_spoof_overwritten() {
+    let (_shutdown_tx, _registry, _bus) =
+        start_kernel("/tmp/veyron_integ_caller_stamp.sock", 19202).await;
+
+    let mut requester = VeyronClient::connect("/tmp/veyron_integ_caller_stamp.sock")
+        .await
+        .unwrap();
+    let mut provider = VeyronClient::connect("/tmp/veyron_integ_caller_stamp.sock")
+        .await
+        .unwrap();
+
+    requester
+        .register("requester_plugin", PluginManifest::default())
+        .await
+        .unwrap();
+    provider
+        .register(
+            "provider_plugin",
+            PluginManifest {
+                actions: vec!["do_something".to_string()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    // Requester sends an ActionRequest with a spoofed caller_plugin_id —
+    // the kernel must overwrite it with the real registered sender id.
+    let req = Envelope {
+        payload: Some(envelope::Payload::ActionRequest(ActionRequest {
+            action_id: "req-001".to_string(),
+            action: "do_something".to_string(),
+            params_json: b"{}".to_vec(),
+            timeout_ms: 0,
+            streaming: false,
+            caller_plugin_id: "not_the_real_caller".to_string(),
+        })),
+        ..Default::default()
+    };
+    requester.send("kernel", req).await.unwrap();
+
+    let received = timeout(Duration::from_secs(2), provider.recv())
+        .await
+        .expect("recv timed out")
+        .expect("recv failed");
+
+    match received.payload {
+        Some(envelope::Payload::ActionRequest(forwarded)) => {
+            assert_eq!(forwarded.caller_plugin_id, "requester_plugin");
+        }
+        other => panic!("expected ActionRequest, got {other:?}"),
+    }
 }
