@@ -14,6 +14,7 @@ mod test_manifest_enforcement;
 mod test_metrics;
 mod test_permissions;
 mod test_proto;
+mod test_proto_sync;
 mod test_registry;
 mod test_router;
 mod test_sdk;
