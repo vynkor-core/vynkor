@@ -379,6 +379,14 @@ pub fn extract_zip(
                     "Malformed archive: decompressed size exceeds max {max_extracted_bytes} bytes. Aborting."
                 )));
             }
+            // restore stored unix mode (exec bit) — fs::File::create gives 0644,
+            // so a plugin binary would otherwise extract non-executable
+            #[cfg(unix)]
+            if let Some(mode) = entry.unix_mode() {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&out, fs::Permissions::from_mode(mode & 0o7777))
+                    .map_err(VeyronError::Io)?;
+            }
         }
     }
 

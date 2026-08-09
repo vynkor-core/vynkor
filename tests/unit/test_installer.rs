@@ -140,6 +140,37 @@ fn clean_zip_extracts() {
     assert!(dest.join("bin/foo").exists());
 }
 
+// QA finding (phase 8): zip stores the binary as 0755 but extraction yielded
+// 0644, so marketplace-installed plugins could never spawn. extraction must
+// restore the stored unix mode.
+#[cfg(unix)]
+#[test]
+fn extraction_restores_exec_bit() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempdir().unwrap();
+    let archive = tmp.path().join("exec.zip");
+    let dest = tmp.path().join("extracted");
+    fs::create_dir_all(&dest).unwrap();
+
+    let file = fs::File::create(&archive).unwrap();
+    let mut zip = zip::ZipWriter::new(file);
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Stored)
+        .unix_permissions(0o755);
+    zip.start_file("database", options).unwrap();
+    zip.write_all(b"ELF").unwrap();
+    zip.finish().unwrap();
+
+    extract_zip(&archive, &dest, 1024 * 1024 * 1024, 10_000).unwrap();
+
+    let mode = fs::metadata(dest.join("database"))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert!(mode & 0o111 != 0, "exec bit lost: {mode:o}");
+}
+
 // AUDIT M-06: archive with more entries than the cap must be rejected
 // before any extraction happens.
 #[test]
