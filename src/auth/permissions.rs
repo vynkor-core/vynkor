@@ -16,6 +16,14 @@ pub fn required_permission_for_action(action: &str) -> Option<PermissionType> {
     }
 }
 
+// lowercases and strips the PERMISSION_ prefix so manifests can declare either
+// the documented lowercase form (network) or the proto name (PERMISSION_NETWORK)
+fn normalize_permission(s: &str) -> String {
+    s.strip_prefix("PERMISSION_")
+        .unwrap_or(s)
+        .to_ascii_lowercase()
+}
+
 pub fn check_permission(
     registry: &PluginRegistry,
     plugin_id: &str,
@@ -25,12 +33,18 @@ pub fn check_permission(
         .get(plugin_id)
         .ok_or_else(|| VeyronError::PluginNotFound(plugin_id.to_string()))?;
 
-    let required_str = required.as_str_name();
-    if entry.manifest.permissions.iter().any(|p| p == required_str) {
+    let required_norm = normalize_permission(required.as_str_name());
+    if entry
+        .manifest
+        .permissions
+        .iter()
+        .any(|p| normalize_permission(p) == required_norm)
+    {
         Ok(())
     } else {
         Err(VeyronError::PermissionDenied(format!(
-            "{plugin_id} lacks {required_str}"
+            "{plugin_id} lacks {}",
+            required.as_str_name()
         )))
     }
 }

@@ -41,6 +41,22 @@ fn plugin_with_network_permission_passes_check() {
     assert!(result.is_ok());
 }
 
+// R8-03: manifest may declare the documented lowercase form; the runtime check
+// must not demand the PERMISSION_-prefixed proto name verbatim.
+#[test]
+fn plugin_with_lowercase_permission_passes_check() {
+    let registry = registry_with("net_plugin", vec!["network"]);
+    let result = check_permission(&registry, "net_plugin", PermissionType::PermissionNetwork);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn plugin_with_mixed_case_permission_passes_check() {
+    let registry = registry_with("net_plugin", vec!["PERMISSION_network"]);
+    let result = check_permission(&registry, "net_plugin", PermissionType::PermissionNetwork);
+    assert!(result.is_ok());
+}
+
 #[test]
 fn plugin_without_network_permission_is_denied() {
     let registry = registry_with("bare_plugin", vec![]);
