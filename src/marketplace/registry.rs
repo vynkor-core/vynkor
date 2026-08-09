@@ -22,7 +22,7 @@ const REGISTRY_URL: &str =
 /// the new constant in a kernel release; the corresponding private key must
 /// never be committed to this repo.
 const MAINTAINER_PUBLIC_KEY_HEX: &str =
-    "d7574bd235c7d2039575f87d33eb92f33b07457ab8eff89614464a10265f8c65";
+    "ed8c39a19dcbfed1a3a436b914a8ce9bf2b449c534808ce92c78adcfa2590928";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegistryEntry {
