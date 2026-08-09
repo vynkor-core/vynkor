@@ -51,7 +51,7 @@ Top-level structure: a JSON array of plugin entries.
 | `name` | string | Human-readable display name. No length limit. |
 | `description` | string | One-sentence summary. Used by `vyn plugin search`. |
 | `version` | string | Semver of the released archive (`MAJOR.MINOR.PATCH`). |
-| `permissions` | string[] | Lowercase permission names without `PERMISSION_` prefix, matching names in `PermissionType` enum. |
+| `permissions` | string[] | Lowercase permission names without `PERMISSION_` prefix, matching names in `PermissionType` enum. The `PERMISSION_`-prefixed proto form (e.g. `PERMISSION_STORAGE`) is also accepted. |
 | `archive_url` | string | HTTPS URL to the `.zip` binary archive. |
 | `source_url` | string | HTTPS URL to the `.zip` source archive. Required for audit; may be same as `archive_url` for source-only plugins. |
 | `sha256` | string | SHA-256 of the archive bytes at `archive_url`, as 64-char lowercase hex. Verified before extraction. |
@@ -182,7 +182,9 @@ After extraction, `vyn install` re-validates using the local `plugin.json`
 ## Permissions Reference
 
 String names used in `registry.json` `permissions` and `plugin.json` `permissions` map to
-`PermissionType` proto enum values (lowercase, `PERMISSION_` prefix stripped):
+`PermissionType` proto enum values. Both the lowercase form (`storage`) and the
+`PERMISSION_`-prefixed proto name (`PERMISSION_STORAGE`) are accepted; the allowed set is
+derived from the enum, so a permission added to the proto is installable without a kernel change:
 
 | String name | Proto value | Meaning |
 |-------------|-------------|---------|
@@ -197,6 +199,8 @@ String names used in `registry.json` `permissions` and `plugin.json` `permission
 | `ipc_send` | `PERMISSION_IPC_SEND` | Unicast/broadcast to other plugins (also needs `ipc_targets`) |
 | `audio_stream` | `PERMISSION_AUDIO_STREAM` | Peer-to-peer raw audio via FLAG_RAW_BINARY |
 | `kernel_admin` | `PERMISSION_KERNEL_ADMIN` | Admin `KernelCommand`s (e.g. `reload_config`); `health_check` is exempt |
+| `event_publish` | `PERMISSION_EVENT_PUBLISH` | Publish events to the kernel event bus |
+| `storage` | `PERMISSION_STORAGE` | Per-caller KV/SQL storage (database plugin) |
 
-This list is normative and mirrors `KNOWN_PERMISSIONS` in `src/marketplace/installer.rs` and the
-`PermissionType` enum in `proto/veyron_protocol.proto`.
+This list is normative and derived from the `PermissionType` enum in
+`proto/veyron_protocol.proto` (see `known_permissions()` in `src/marketplace/installer.rs`).
