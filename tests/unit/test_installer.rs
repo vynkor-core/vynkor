@@ -7,6 +7,29 @@ use tempfile::tempdir;
 
 use veyron::marketplace::installer::{extract_zip, validate_manifest};
 use veyron::marketplace::registry::{check_kernel_compatibility, RegistryEntry};
+use veyron::proto::veyron::PermissionType;
+
+// prost 0.13+ derives inherent as_str_name/try_from (no Enumeration::values);
+// probe codes, stopping after a run of misses so a reserved gap (7) is fine.
+fn all_permission_types() -> Vec<PermissionType> {
+    let mut out = Vec::new();
+    let mut misses = 0;
+    for i in 0i32.. {
+        match PermissionType::try_from(i) {
+            Ok(pt) => {
+                out.push(pt);
+                misses = 0;
+            }
+            Err(_) => {
+                misses += 1;
+                if misses >= 4 {
+                    break;
+                }
+            }
+        }
+    }
+    out
+}
 
 fn make_entry(slug: &str, min: &str, max: &str) -> RegistryEntry {
     RegistryEntry {
@@ -206,6 +229,42 @@ fn manifest_unknown_permission_errors() {
         msg.contains("unknown permission") && msg.contains("teleport"),
         "unexpected: {msg}"
     );
+}
+
+// R8-02: every proto permission (both forms) must pass — drift guard for future enums
+#[test]
+fn manifest_accepts_every_proto_permission() {
+    let kernel = Version::parse("0.1.0").unwrap();
+    for pt in all_permission_types() {
+        let proto_name = pt.as_str_name();
+        if proto_name == "PERMISSION_UNKNOWN" {
+            continue;
+        }
+        let lower = proto_name
+            .strip_prefix("PERMISSION_")
+            .unwrap_or(proto_name)
+            .to_ascii_lowercase();
+        for perm in [proto_name, lower.as_str()] {
+            let tmp = tempdir().unwrap();
+            write_manifest(
+                tmp.path(),
+                &format!(
+                    r#"{{
+                        "plugin_id": "perm-check",
+                        "version": "1.0.0",
+                        "permissions": ["{perm}"],
+                        "binary": "perm-check",
+                        "kernel_compatibility_range": {{"min": "0.1.0", "max": "*"}}
+                    }}"#
+                ),
+            );
+            let res = validate_manifest(&tmp.path().join("plugin.json"), &kernel);
+            assert!(
+                res.is_ok(),
+                "permission {perm} (proto {proto_name}) should be accepted, got: {res:?}"
+            );
+        }
+    }
 }
 
 // Step 7: kernel incompatible in plugin.json → validation error

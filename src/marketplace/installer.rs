@@ -2,6 +2,7 @@ use std::fs;
 use std::io;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use indicatif::{ProgressBar, ProgressStyle};
 use semver::Version;
@@ -11,21 +12,44 @@ use sha2::{Digest, Sha256};
 use crate::marketplace::registry::{
     check_kernel_compatibility, verify_entry_signature, RegistryEntry,
 };
+use crate::proto::veyron::PermissionType;
 use crate::utils::errors::VeyronError;
 
-const KNOWN_PERMISSIONS: &[&str] = &[
-    "network",
-    "files_read",
-    "files_write",
-    "system",
-    "audio",
-    "notify",
-    "scheduler",
-    "browser",
-    "ipc_send",
-    "audio_stream",
-    "kernel_admin",
-];
+// permission strings accepted in plugin.json: every proto enum variant in both
+// the documented lowercase form (storage) and the PERMISSION_-prefixed proto
+// name (PERMISSION_STORAGE), so a future proto permission can't silently break
+// installs. UNKNOWN stays excluded. prost 0.13+ has no values(); probe codes,
+// stopping after a run of misses so the reserved gap (7) is fine.
+fn known_permissions() -> &'static [String] {
+    static KNOWN: OnceLock<Vec<String>> = OnceLock::new();
+    KNOWN.get_or_init(|| {
+        let mut out = Vec::new();
+        let mut misses = 0;
+        for i in 0i32.. {
+            match PermissionType::try_from(i) {
+                Ok(pt) => {
+                    let name = pt.as_str_name();
+                    if name != "PERMISSION_UNKNOWN" {
+                        out.push(name.to_string());
+                        out.push(
+                            name.strip_prefix("PERMISSION_")
+                                .unwrap_or(name)
+                                .to_ascii_lowercase(),
+                        );
+                    }
+                    misses = 0;
+                }
+                Err(_) => {
+                    misses += 1;
+                    if misses >= 4 {
+                        break;
+                    }
+                }
+            }
+        }
+        out
+    })
+}
 
 #[derive(Debug, Deserialize)]
 pub struct InstallManifest {
@@ -408,8 +432,9 @@ pub fn validate_manifest(
     };
     check_kernel_compatibility(&compat_entry, kernel_ver)?;
 
+    let known = known_permissions();
     for perm in &manifest.permissions {
-        if !KNOWN_PERMISSIONS.contains(&perm.as_str()) {
+        if !known.contains(perm) {
             return Err(VeyronError::Internal(format!(
                 "Plugin '{}' declares unknown permission '{perm}'.",
                 manifest.plugin_id
