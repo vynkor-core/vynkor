@@ -1,8 +1,8 @@
-# Veyron ROADMAP — Phase 7
+# Veyron ROADMAP — Phase 8
 
-**Baseline:** 2026-07-13 · Kernel `0.1.0`
+**Baseline:** 2026-08-10 · Kernel `0.1.0`
 **Branch:** `develop`
-**Previous phases:** `docs/archive/` (Phase 1–2: `ROADMAP_phase1.md`/`ROADMAP_v2.md`/`ROADMAP_v3.md` · Phase 3–4: `ROADMAP_v4.md` · Phase 5: `ROADMAP_v5.md` · Phase 6 (network protocol support + full audit remediation): `ROADMAP_v6.md`, all items complete)
+**Previous phases:** `docs/archive/` (Phase 1–2: `ROADMAP_phase1.md`/`ROADMAP_v2.md`/`ROADMAP_v3.md` · Phase 3–4: `ROADMAP_v4.md` · Phase 5: `ROADMAP_v5.md` · Phase 6: `ROADMAP_v6.md` · Phase 7 (C++/Python SDK parity): `ROADMAP_v7.md`, all items complete)
 
 ---
 
@@ -16,118 +16,112 @@
 
 ---
 
-## Current baseline — 2026-07-13
+## Current baseline — 2026-08-10
 
-Phase 6 landed the wire protocol for event-publish (R6-01), streaming actions
-(R6-02), per-caller quotas (R6-03), and long-lived sessions (R6-04) — but
-**kernel + Rust SDK only** in every case. C++ and Python SDKs were explicitly
-scoped out as "deferred as follow-up" (`docs/archive/ROADMAP_v6.md`). That
-follow-up is Phase 7.
+Phase 7 shipped full C++/Python SDK parity with the Rust reference client
+(`publish_event`, streaming actions, session close, cross-SDK integration
+tests). On the protocol side, kernel support for `PERMISSION_STORAGE` and
+`ActionRequest.caller_plugin_id` landed on `develop` (`13274d4`,
+`e00ec96`, `6b3691f`) — but the marketplace installer's permission allowlist
+(`src/marketplace/installer.rs`) was never updated to match, so installing the
+`database` plugin fails with `Plugin 'database' declares unknown permission
+'PERMISSION_STORAGE'`. Phase 8 fixes that drift at the root: the known
+permission set stops being a hand-maintained list and is derived from the
+`PermissionType` proto enum itself, so it can never fall behind the protocol
+again.
 
-## Phase 7 — C++ / Python SDK parity with Rust
+## Phase 8 — Permission/protocol sync
 
-The Rust SDK (`sdk/rust/src/client.rs`) is the reference implementation.
-Wire format is already final (proto mirrored to all three SDKs, no proto
-work needed here) — this phase is pure client-library work, one pair of
-SDKs at a time.
+The proto's `PermissionType` enum is the single source of truth for what a
+plugin may declare. Phase 7's protocol work proved the enum can grow
+(`PERMISSION_EVENT_PUBLISH`, `PERMISSION_STORAGE`) while the installer's
+hand-typed list quietly rots. This phase derives the validation set from the
+generated enum, adds drift-detection tests, and lands the follow-ups the
+`database` plugin needs across the sibling repos.
 
-### P7-01 — `publish_event` in C++ and Python SDKs ✅ done
+- [x] R8-01 — **Installer permission validation derived from the proto enum:**
+  replace `const KNOWN_PERMISSIONS` in `src/marketplace/installer.rs` with a
+  set derived from `PermissionType::values()` (prost `Enumeration`), accepting
+  both the documented lowercase form (`storage`) and the `PERMISSION_`-prefixed
+  proto name (`PERMISSION_STORAGE`); unknown permissions keep the exact
+  existing error.
+  - Files: `src/marketplace/installer.rs`, `tests/unit/test_installer.rs`.
+  - Acceptance: `vyn plugin install database` no longer fails with the
+    unknown-permission error; `"teleport"` is still rejected.
 
-Rust reference: `VeyronClient::publish_event()` (`sdk/rust/src/client.rs:465`).
-Sends `EventPublish`, awaits `EventPublishAck`, surfaces
-`EventPublishStatus` (`EVENT_PUBLISH_OK`/`ERROR`/`PERMISSION_DENY`) as a
-typed result/exception.
+- [x] R8-02 — **Permission drift-detection tests:** new test walking
+  `PermissionType::values()`: every variant except `PERMISSION_UNKNOWN` must
+  pass `validate_manifest` in both forms — a future proto permission can never
+  silently fail installation again.
+  - Files: `tests/unit/test_installer.rs`.
+  - Acceptance: `cargo test --test unit manifest_accepts_every_proto_permission` green.
 
-Shipped: `VeyronClient::publish_event()` in `sdk/cpp/include/veyron/client.hpp`
-+ `.cpp` (new `read_frame_full_with_deadline` primitive in `framing.hpp/.cpp`
-to bound the total wait, not just mid-frame completion), and
-`async def publish_event()` in `sdk/python/veyron/client.py` (also
-regenerated `veyron_protocol_pb2.py`, which had never been rebuilt since
-`EventPublish`/`EventPublishAck` were added to the proto in R6-01). Both
-SDKs bumped to 0.1.1 and published (`veyron-sdk` on crates.io and PyPI).
-5 test cases per SDK: OK ack, PERMISSION_DENY ack returned not raised,
-kernel Error raises, timeout raises, unrelated envelope discarded.
+- [x] R8-03 — **Runtime `check_permission` form normalization:**
+  `src/auth/permissions.rs::check_permission` compares declared permissions
+  against `as_str_name()` with exact equality; normalize the comparison
+  (case-insensitive, `PERMISSION_`-prefix-stripped on both sides) so a plugin
+  declaring the lowercase form is not denied at runtime.
+  - Files: `src/auth/permissions.rs`, unit tests.
+  - Acceptance: a manifest declaring `"network"` satisfies a
+    `PermissionNetwork` requirement; missing permissions still denied.
 
-### P7-02 — Streaming actions in C++ and Python SDKs ✅ done
+- [x] R8-04 — **Registry schema doc alignment:** `docs/PLUGIN_REGISTRY_SCHEMA.md`
+  adds `storage`/`event_publish` rows to the permission mapping table and
+  notes that the allowed set is derived from the `PermissionType` proto enum
+  (both forms accepted).
+  - Acceptance: mapping rows present; no schema restructuring.
 
-Rust reference: `send_action_streaming()` (`client.rs:571`),
-`send_request_chunk()`/`send_response_chunk()` (`:594`/`:618`), plus
-`send_action()`'s handling of an inbound `ActionStreamAbort` for the
-awaited `action_id`.
+- [x] R8-05 — **Proto-copy byte-identity drift test:** test asserting the three
+  vendored `veyron_protocol.proto` copies (`wire/proto`, `sdk/python/proto`,
+  `sdk/cpp/proto`) stay byte-identical.
+  - Files: `tests/unit/test_proto_sync.rs` (new), `tests/unit/mod.rs`.
+  - Acceptance: test passes; editing one copy makes it fail.
 
-Scope grew during design (`docs/superpowers/specs/2026-07-14-p7-02-streaming-actions-sdk-design.md`):
-neither SDK had plain non-streaming `send_action` yet either, and its
-`ActionStreamAbort` handling can't be ported separately from the
-deadline-loop it lives in, so this shipped all five of `send_action`,
-`send_action_streaming`, `send_request_chunk`, `send_response_chunk`, and
-`close_session` (send side) together. `ActionRequestChunk`/
-`ActionResponseChunk` are a distinct wire message from `FLAG_FRAGMENTED`
-fragmentation (T-18) — not reused, per the original scoping note above.
+- [x] R8-06 — **(cross-repo) Land the `database` plugin in veyron-plugins:**
+  merge `worktree-database-plugin` into `veyron-plugins` `main`
+  (`plugins/database/`), add the registry entry via `scripts/package.sh`
+  (permissions normalized to `["storage"]`), build `dist/database-0.1.0.zip`,
+  move `database` from Planned to Shipped in `veyron-plugins/ROADMAP.md`.
+  - Tracked in: `veyron-plugins/ROADMAP.md`.
+  - Acceptance: `vyn plugin install database` against the fixed kernel succeeds
+    and the plugin registers.
 
-Shipped: all five methods in `sdk/cpp/include/veyron/client.hpp` + `.cpp`
-and `sdk/python/veyron/client.py`. Both SDKs extracted a shared
-deadline-loop helper (`wait_for_response` in C++, `_await_matching` in
-Python) now used by both `publish_event` and `send_action`, per P7-01's
-deferred note. 8 test cases per SDK
-(`sdk/cpp/tests/test_send_action.cpp`, `tests/python/test_send_action.py`).
-
-### P7-03 — Session close in C++ and Python SDKs ✅ done
-
-Rust reference: `close_session()` (`client.rs:646`), sends `SessionClose{action_id, reason}`.
-The send side shipped early as part of P7-02 (mechanically identical to the
-chunk senders). `recv()` in both SDKs already decoded `SessionClose`
-correctly as a plain `Envelope` oneof field (present since R6-04/P7-02) —
-no dispatch code was needed, distinguishing it from `ActionStreamAbort` is
-inherent to protobuf oneof `HasField`. This closed the test gap only:
-`sdk/cpp/tests/test_session_close.cpp` (2 cases) and
-`tests/python/test_session_close.py` (2 cases), mirroring Rust SDK test
-`recv_distinguishes_session_close_from_stream_abort`.
-
-### P7-04 — Cross-SDK integration coverage ✅ done
-
-Design: `docs/superpowers/specs/2026-07-14-p7-04-cross-sdk-integration-design.md`.
-Full matrix: 3 message types × 2 SDKs = 6 new integration tests, kernel
-always the real Rust kernel (`SdkHarness`), counterpart always the Rust SDK
-test harness driven directly from `#[tokio::test]` (not a second subprocess
-— matches the existing `cpp_sdk_echo_plugin_round_trip` /
-`python_sdk_register_and_ping` pattern).
-
-Both `sdk/cpp/examples/echo_plugin.cpp` and `sdk/python/examples/echo_plugin.py`
-gained a `stream_echo` action (accumulates `ActionRequestChunk`s by seq until
-`final`, replies with 2 `ActionResponseChunk`s + a terminal `ActionResponse`),
-a `publish_test` action (calls `publish_event`, replies OK/ERROR from the
-ack), and a `SessionClose` → `session_closed:<reason>` stdout branch.
-`stream_echo` also sends an early accepting `ActionResponse{OK}` immediately
-on the initial streaming `ActionRequest` — discovered during planning that
-the kernel's `SessionClose` handler (`src/ipc/protocol.rs`) rejects the
-request until `PendingAction::session_accepted` flips true, which only
-happens on a provider `ActionResponse{OK}` for a streaming action
-(`src/plugins/registry.rs::resolve_action_response`); without the early
-accept, a mid-stream `SessionClose` can never reach the plugin.
-
-Shipped: `cpp_sdk_streaming_action_round_trip`, `cpp_sdk_publish_event_from_plugin`,
-`cpp_sdk_session_close_dispatch` in `tests/integration/test_sdk_cpp.rs`;
-`python_sdk_streaming_action_round_trip`, `python_sdk_publish_event_from_plugin`,
-`python_sdk_session_close_dispatch` in `tests/integration/test_sdk_python.rs`
-(the latter spawning the real `examples/echo_plugin.py` via
-`python3 -m examples.echo_plugin`, a first for the Python integration
-tests — prior ones only ran inline `-c` scripts). Each skips gracefully
-without the relevant subprocess dependency, matching existing convention.
+- [x] R8-07 — **(cross-repo) Publish `veyron-wire` 0.2.0, drop patch override:**
+  `cargo publish` `veyron-wire` 0.2.0 (kernel already depends on it by
+  path + `[patch.crates-io]` override whose comment says it is a no-op once
+  0.2.0 is published); remove the override and verify the workspace still
+  builds green.
+- Tracked in: `veyron-wire/`.
+- Acceptance: `cargo search veyron-wire` shows 0.2.0; no `patch.crates-io`
+  block in `Cargo.toml`; full test suite green without it.
 
 ---
+
+## Cross-repo coordination
+
+- **veyron-plugins** (`veyron-plugins/ROADMAP.md`): database plugin landing
+  (R8-06) depends on R8-01/R8-02 landing here first — the kernel must accept
+  `PERMISSION_STORAGE` before the registry entry is installable.
+- **veyron-wire** (`veyron-wire/`): 0.2.0 publish (R8-07) is release-process
+  work; kernel changes here only consume it.
+- SDK proto copies in this repo (`sdk/python/proto`, `sdk/cpp/proto`) are
+  guarded by the R8-05 drift test; the veyron-wire repo's own copy is synced
+  at release time.
 
 ## Task Summary
 
 | Item | Scope | Depends on |
 |------|-------|------------|
-| P7-01 | `publish_event` — C++ + Python ✅ done | none |
-| P7-02 | streaming actions — C++ + Python ✅ done | none |
-| P7-03 | `close_session` recv-side dispatch — C++ + Python ✅ done | P7-02 |
-| P7-04 | cross-SDK integration tests ✅ done | P7-01..03 |
+| R8-01 | installer permissions derived from `PermissionType` enum | none |
+| R8-02 | permission drift-detection tests | R8-01 |
+| R8-03 | runtime `check_permission` normalization | none |
+| R8-04 | registry schema doc alignment | none |
+| R8-05 | proto-copy byte-identity test | none |
+| R8-06 | `database` plugin landing (veyron-plugins) | R8-01, R8-02 |
+| R8-07 | `veyron-wire` 0.2.0 publish + patch removal | none |
 
-**Ship gate:** not yet scheduled — candidate work, pick up when a plugin
-(e.g. `network`) actually needs streaming/session/event-publish from a
-non-Rust SDK. No proto changes required; this is pure SDK client work.
+**Ship gate:** R8-01..R8-05 are kernel-local and land together on `develop`;
+R8-06/R8-07 are cross-repo coordination items shipped from their own repos.
 
 ## Definition of Done
 
