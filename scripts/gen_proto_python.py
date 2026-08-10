@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Generate Python protobuf bindings from proto/veyron_protocol.proto."""
+"""Generate Python protobuf bindings from wire/proto/veyron_protocol.proto."""
 import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
-PROTO = ROOT / "proto" / "veyron_protocol.proto"
+PROTO_DIR = ROOT / "wire" / "proto"
+PROTO = PROTO_DIR / "veyron_protocol.proto"
 OUT = ROOT / "sdk" / "python" / "veyron"
 
 if __name__ == "__main__":
@@ -13,7 +14,7 @@ if __name__ == "__main__":
     result = subprocess.run(
         [
             sys.executable, "-m", "grpc_tools.protoc",
-            f"-I{ROOT / 'proto'}",
+            f"-I{PROTO_DIR}",
             f"--python_out={OUT}",
             str(PROTO),
         ],
