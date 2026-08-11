@@ -160,23 +160,40 @@ impl PluginSupervisor {
         let max_vmem_mb = config
             .max_vmem_mb
             .unwrap_or(crate::plugins::runner::DEFAULT_MAX_VMEM_MB);
+        // R9-01: per-plugin process accounting via cgroup v2 `pids.max`. The
+        // scope is prepared here (parent side) so a failure degrades to the
+        // RLIMIT_NPROC fallback without killing the spawn; the child only
+        // moves itself into the prepared scope in `pre_exec`.
+        #[cfg(target_os = "linux")]
+        let cgroup_path = crate::plugins::runner::prepare_pids_cgroup(&config.plugin_id, max_procs);
+        #[cfg(not(target_os = "linux"))]
+        let cgroup_path: Option<PathBuf> = None;
         #[cfg(target_os = "linux")]
         {
             use std::os::unix::process::CommandExt;
             let sandbox = config.sandbox;
+            let cgroup_for_pre_exec = cgroup_path.clone();
             unsafe {
                 cmd.as_std_mut().pre_exec(move || {
                     if sandbox {
-                        crate::plugins::runner::sandbox_pre_exec(max_procs, max_vmem_mb)
+                        crate::plugins::runner::sandbox_pre_exec(
+                            max_procs,
+                            max_vmem_mb,
+                            cgroup_for_pre_exec.as_deref(),
+                        )
                     } else {
-                        crate::plugins::runner::apply_resource_limits(max_procs, max_vmem_mb)
+                        crate::plugins::runner::apply_resource_limits(
+                            max_procs,
+                            max_vmem_mb,
+                            cgroup_for_pre_exec.as_deref(),
+                        )
                     }
                 });
             }
         }
         #[cfg(not(target_os = "linux"))]
         {
-            let _ = (max_procs, max_vmem_mb);
+            let _ = (max_procs, max_vmem_mb, &cgroup_path);
             if config.sandbox {
                 warn!(
                     plugin_id = %config.plugin_id,
@@ -189,12 +206,59 @@ impl PluginSupervisor {
             );
         }
 
-        let mut child = cmd.spawn().map_err(VeyronError::Io)?;
+        let mut child = match cmd.spawn() {
+            Ok(child) => child,
+            Err(e) => {
+                // spawn can fail before the child ever forks (EAGAIN on
+                // fork, EMFILE on the stdout/stderr pipes) — the prepared
+                // pids scope would leak forever because the watcher task
+                // that normally cleans it up is never spawned.
+                #[cfg(target_os = "linux")]
+                if let Some(cg) = &cgroup_path {
+                    crate::plugins::runner::cleanup_pids_cgroup(cg);
+                }
+                return Err(VeyronError::Io(e));
+            }
+        };
 
         let pid = child
             .id()
             .ok_or_else(|| VeyronError::Internal("no pid".into()))?;
         let plugin_id = config.plugin_id.clone();
+
+        // Verify the child landed in its pids cgroup. The join happens in
+        // `pre_exec` before exec, so `/proc/<pid>/cgroup` is authoritative by
+        // the time spawn() returns; a mismatch means the RLIMIT_NPROC
+        // fallback is in effect and the operator should know why.
+        #[cfg(target_os = "linux")]
+        if let Some(cg) = &cgroup_path {
+            let expected = cg
+                .strip_prefix("/sys/fs/cgroup")
+                .unwrap_or(cg)
+                .to_string_lossy()
+                .into_owned();
+            match std::fs::read_to_string(format!("/proc/{pid}/cgroup")) {
+                Ok(contents) if contents.trim_end().ends_with(&expected) => {
+                    info!(
+                        plugin_id = %plugin_id,
+                        cgroup = %expected,
+                        "plugin joined per-plugin pids cgroup"
+                    );
+                }
+                Ok(contents) => {
+                    warn!(
+                        plugin_id = %plugin_id,
+                        cgroup = %expected,
+                        actual = %contents.trim(),
+                        "plugin did not join its pids cgroup — RLIMIT_NPROC fallback in effect"
+                    );
+                }
+                Err(_) => {
+                    // child already gone (e.g. an instantly-exiting test
+                    // binary) — nothing to verify; the watcher cleans up
+                }
+            }
+        }
 
         let log_buf = Arc::new(Mutex::new(VecDeque::<String>::with_capacity(
             self.max_log_lines,
@@ -243,8 +307,14 @@ impl PluginSupervisor {
 
         let tx = self.event_tx.clone();
         let id = plugin_id.clone();
+        #[cfg(target_os = "linux")]
+        let cgroup_for_cleanup = cgroup_path.clone();
         tokio::spawn(async move {
             let status = child.wait().await;
+            #[cfg(target_os = "linux")]
+            if let Some(cg) = cgroup_for_cleanup {
+                crate::plugins::runner::cleanup_pids_cgroup(&cg);
+            }
             let success = status.map(|s| s.success()).unwrap_or(false);
             let _ = tx
                 .send(ExitEvent {

@@ -354,3 +354,369 @@ async fn graceful_shutdown_kills_each_plugin_on_its_own_deadline() {
         "slow plugin must be dead once graceful_shutdown returns"
     );
 }
+
+// ── R9-01: per-plugin process accounting via cgroup v2 pids.max ─────────────
+
+/// Read the plugin's own cgroup v2 scope dir from `/proc/<pid>/cgroup`.
+/// Returns (cgroup_dir, scope_name) or None if the process is gone.
+#[cfg(target_os = "linux")]
+fn plugin_cgroup_dir(pid: u32) -> Option<(PathBuf, String)> {
+    let contents = std::fs::read_to_string(format!("/proc/{pid}/cgroup")).ok()?;
+    let rel = contents.trim().strip_prefix("0::")?;
+    let name = rel.rsplit('/').next()?.to_string();
+    Some((PathBuf::from(format!("/sys/fs/cgroup{rel}")), name))
+}
+
+/// Probe whether the host can hand us a writable pids scope; the RLIMIT_NPROC
+/// fallback applies otherwise. Creates and immediately removes a probe scope.
+#[cfg(target_os = "linux")]
+fn pids_cgroup_available() -> bool {
+    use veyron::plugins::runner::{cleanup_pids_cgroup, prepare_pids_cgroup};
+    match prepare_pids_cgroup("r9-availability-probe", 64) {
+        Some(cg) => {
+            cleanup_pids_cgroup(&cg);
+            true
+        }
+        None => false,
+    }
+}
+
+/// `pids.events` "max" counter went > 0 — the cgroup's `pids.max` was hit.
+#[cfg(target_os = "linux")]
+fn pids_max_hit(cgroup_dir: &std::path::Path) -> bool {
+    let events = std::fs::read_to_string(cgroup_dir.join("pids.events")).unwrap_or_default();
+    events
+        .lines()
+        .find_map(|l| l.strip_prefix("max "))
+        .map(|v| v.trim() != "0")
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "linux")]
+fn python3_bin() -> Option<String> {
+    match std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+    {
+        Ok(_) => Some("python3".to_string()),
+        Err(_) => None,
+    }
+}
+
+/// Storm script: sleep briefly, then hammer the cgroup with 200 long-lived
+/// threads against a 64 budget. The small stack keeps the storm well under
+/// the default RLIMIT_AS (512 MiB) so `pids.max` is the limiting factor, not
+/// virtual memory. Threads (and the main thread) hold for `hold_secs`.
+#[cfg(target_os = "linux")]
+fn storm_script(hold_secs: u64) -> String {
+    format!(
+        "import threading,time\nthreading.stack_size(256*1024)\ntime.sleep(0.5)\nfor _ in range(200):\n    try:\n        threading.Thread(target=lambda: time.sleep({hold})).start()\n    except RuntimeError:\n        pass\ntime.sleep({hold})\n",
+        hold = hold_secs
+    )
+}
+
+/// R9-01 acceptance: a plugin with `max_procs` runs inside its own cgroup
+/// v2 scope whose `pids.max` equals `max_procs`, a thread storm in that
+/// plugin hits `pids.max` (pids.events.max > 0), and the empty scope is
+/// removed when the plugin exits. Skips when the host has no writable cgroup
+/// v2 subtree with the `pids` controller (RLIMIT_NPROC fallback applies).
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn pids_cgroup_accounts_plugin_threads_per_plugin() {
+    use veyron::plugins::runner::{cleanup_pids_cgroup, prepare_pids_cgroup};
+
+    // Probe availability first: if the host cannot hand us a pids scope, the
+    // RLIMIT fallback path is in effect and there is nothing cgroup-specific
+    // to verify.
+    let probe = match prepare_pids_cgroup("r9-availability-probe", 64) {
+        Some(cg) => cg,
+        None => {
+            eprintln!("skipping: no writable cgroup v2 pids subtree on this host");
+            return;
+        }
+    };
+    cleanup_pids_cgroup(&probe);
+
+    let python = match std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+    {
+        Ok(_) => "python3".to_string(),
+        Err(_) => {
+            eprintln!("skipping thread-storm probe: python3 not found");
+            return;
+        }
+    };
+
+    let sup = Arc::new(PluginSupervisor::new("/tmp/veyron_r9_pids.sock"));
+    let config = PluginConfig {
+        plugin_id: "r9_threads".to_string(),
+        binary_path: PathBuf::from(&python),
+        // Sleep briefly so the test can assert cgroup placement, then storm
+        // 200 long-lived threads against a 64 budget — each sleeps so it
+        // accumulates in pids.current; creation beyond pids.max fails with
+        // EAGAIN (RuntimeError here) and bumps pids.events.max. The small
+        // stack size keeps the storm well under the default RLIMIT_AS
+        // (512 MiB) so pids.max is the limiting factor, not virtual memory.
+        args: vec!["-c".to_string(), storm_script(5)],
+        env: vec![],
+        restart_policy: RestartPolicy::Never,
+        max_restarts: 0,
+        sandbox: false,
+        max_procs: Some(64),
+        max_vmem_mb: None,
+        ..Default::default()
+    };
+    let proc = sup.spawn_plugin(config).await.expect("spawn must succeed");
+    // 1. The child must live in its own per-plugin scope.
+    let (cgroup_dir, scope_name) =
+        plugin_cgroup_dir(proc.pid).expect("plugin must be alive with a readable cgroup");
+    assert_eq!(
+        scope_name, "r9_threads",
+        "plugin must live in its per-plugin scope"
+    );
+
+    // 2. pids.max must reflect max_procs.
+    let pids_max =
+        std::fs::read_to_string(cgroup_dir.join("pids.max")).expect("pids.max must be readable");
+    assert_eq!(pids_max.trim(), "64", "pids.max must equal max_procs");
+
+    // 3. The thread storm must be capped by the cgroup, not the shared
+    // session budget: pids.events.max goes > 0. Poll briefly — python needs a
+    // moment to reach the storm loop.
+    let mut hit_max = false;
+    for _ in 0..30 {
+        if pids_max_hit(&cgroup_dir) {
+            hit_max = true;
+            break;
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        hit_max,
+        "a 200-thread storm must hit pids.max=64 in the plugin's own cgroup"
+    );
+
+    sup.stop_plugin("r9_threads").await.ok();
+    // The scope is reaped (SIGTERM → python exits) and must be removed once
+    // empty. Give the watcher a moment to wait() and rmdir.
+    for _ in 0..30 {
+        if !cgroup_dir.exists() {
+            break;
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        !cgroup_dir.exists(),
+        "empty plugin pids scope must be cleaned up on exit"
+    );
+}
+
+/// R9-01 sandbox variant: with `sandbox: true` the plugin must still land in
+/// its per-plugin pids scope. `sandbox_pre_exec` unshares CLONE_NEWUSER
+/// before `apply_resource_limits` runs the join, so this exercises writing
+/// `cgroup.procs` from inside the user namespace — if that silently fell back
+/// to RLIMIT_NPROC (the join error is swallowed), the placement assert below
+/// would fail.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn sandboxed_plugin_still_joins_its_pids_cgroup() {
+    if !pids_cgroup_available() {
+        eprintln!("skipping: no writable cgroup v2 pids subtree on this host");
+        return;
+    }
+    let Some(python) = python3_bin() else {
+        eprintln!("skipping thread-storm probe: python3 not found");
+        return;
+    };
+
+    // The sandbox path needs unprivileged user namespaces; hosts that restrict
+    // them (kernel.unprivileged_userns_clone=0) fail the spawn in pre_exec —
+    // probe once and skip there so the test is green where sandbox can't work.
+    let probe_sup = Arc::new(PluginSupervisor::new("/tmp/veyron_r9_sandbox_probe.sock"));
+    let probe = PluginConfig {
+        plugin_id: "r9_sandbox_probe".to_string(),
+        binary_path: PathBuf::from("/bin/true"),
+        args: vec![],
+        env: vec![],
+        restart_policy: RestartPolicy::Never,
+        max_restarts: 0,
+        sandbox: true,
+        ..Default::default()
+    };
+    if probe_sup.spawn_plugin(probe).await.is_err() {
+        eprintln!("skipping: unprivileged user namespaces unavailable (sandbox spawn failed)");
+        return;
+    }
+
+    let sup = Arc::new(PluginSupervisor::new("/tmp/veyron_r9_sandbox.sock"));
+    let config = PluginConfig {
+        plugin_id: "r9_sandbox".to_string(),
+        binary_path: PathBuf::from(&python),
+        args: vec!["-c".to_string(), storm_script(5)],
+        env: vec![],
+        restart_policy: RestartPolicy::Never,
+        max_restarts: 0,
+        sandbox: true,
+        max_procs: Some(64),
+        max_vmem_mb: None,
+        ..Default::default()
+    };
+    let proc = sup.spawn_plugin(config).await.expect("spawn must succeed");
+    let (cgroup_dir, scope_name) =
+        plugin_cgroup_dir(proc.pid).expect("plugin must be alive with a readable cgroup");
+    assert_eq!(
+        scope_name, "r9_sandbox",
+        "sandboxed plugin must live in its per-plugin scope"
+    );
+
+    let pids_max =
+        std::fs::read_to_string(cgroup_dir.join("pids.max")).expect("pids.max must be readable");
+    assert_eq!(pids_max.trim(), "64", "pids.max must equal max_procs");
+
+    let mut hit_max = false;
+    for _ in 0..30 {
+        if pids_max_hit(&cgroup_dir) {
+            hit_max = true;
+            break;
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        hit_max,
+        "a 200-thread storm in a sandboxed plugin must hit pids.max=64 in its own cgroup"
+    );
+
+    sup.stop_plugin("r9_sandbox").await.ok();
+    for _ in 0..30 {
+        if !cgroup_dir.exists() {
+            break;
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        !cgroup_dir.exists(),
+        "empty sandboxed plugin pids scope must be cleaned up on exit"
+    );
+}
+
+/// R9-01 acceptance #2: a thread storm in one plugin must not consume another
+/// plugin's budget. A storms to its `pids.max`; B then spawns 30 threads of
+/// its own 64 budget — all must succeed. Under the old shared-uid RLIMIT_NPROC
+/// fallback B's creations would EAGAIN (the uid's thread count already
+/// exceeds 64 from A); per-plugin cgroups give each plugin its own counter.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn thread_storm_in_one_plugin_does_not_consume_another_budget() {
+    if !pids_cgroup_available() {
+        eprintln!("skipping: no writable cgroup v2 pids subtree on this host");
+        return;
+    }
+    let Some(python) = python3_bin() else {
+        eprintln!("skipping thread-storm probe: python3 not found");
+        return;
+    };
+
+    let sup = Arc::new(PluginSupervisor::new("/tmp/veyron_r9_iso.sock"));
+
+    // A: storm 200 threads against its 64 budget and hold 10s so the
+    // contention window overlaps B's spawn.
+    let a_config = PluginConfig {
+        plugin_id: "r9_iso_a".to_string(),
+        binary_path: PathBuf::from(&python),
+        args: vec!["-c".to_string(), storm_script(10)],
+        env: vec![],
+        restart_policy: RestartPolicy::Never,
+        max_restarts: 0,
+        sandbox: false,
+        max_procs: Some(64),
+        max_vmem_mb: None,
+        ..Default::default()
+    };
+    let a = sup
+        .spawn_plugin(a_config)
+        .await
+        .expect("spawn A must succeed");
+    let (a_dir, a_scope) =
+        plugin_cgroup_dir(a.pid).expect("plugin A must be alive with a readable cgroup");
+    assert_eq!(
+        a_scope, "r9_iso_a",
+        "plugin A must live in its per-plugin scope"
+    );
+
+    // Wait until A has actually saturated its budget before starting B — the
+    // contention must be real for the isolation claim to mean anything.
+    let mut a_saturated = false;
+    for _ in 0..30 {
+        if pids_max_hit(&a_dir) {
+            a_saturated = true;
+            break;
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        a_saturated,
+        "plugin A must hit its pids.max before B starts"
+    );
+
+    // B: create 30 threads (well within its own 64), report the created/failed
+    // split to a result file, then hold. Under a shared RLIMIT_NPROC this
+    // would EAGAIN immediately because the uid already has A's 64+ threads.
+    let result_path = "/tmp/veyron_r9_iso_b_result";
+    let _ = std::fs::remove_file(result_path);
+    let b_script = format!(
+        "import threading,time\nthreading.stack_size(256*1024)\ncreated=0\nfailed=0\nfor _ in range(30):\n    try:\n        threading.Thread(target=lambda: time.sleep(5)).start()\n        created+=1\n    except RuntimeError:\n        failed+=1\nopen('{result_path}','w').write(f'{{created}} {{failed}}')\ntime.sleep(5)\n",
+        result_path = result_path
+    );
+    let b_config = PluginConfig {
+        plugin_id: "r9_iso_b".to_string(),
+        binary_path: PathBuf::from(&python),
+        args: vec!["-c".to_string(), b_script],
+        env: vec![],
+        restart_policy: RestartPolicy::Never,
+        max_restarts: 0,
+        sandbox: false,
+        max_procs: Some(64),
+        max_vmem_mb: None,
+        ..Default::default()
+    };
+    let b = sup
+        .spawn_plugin(b_config)
+        .await
+        .expect("spawn B must succeed");
+    let (b_dir, b_scope) =
+        plugin_cgroup_dir(b.pid).expect("plugin B must be alive with a readable cgroup");
+    assert_eq!(
+        b_scope, "r9_iso_b",
+        "plugin B must live in its per-plugin scope"
+    );
+
+    // B writes its split once the storm loop finishes; poll for the file.
+    let mut split = None;
+    for _ in 0..50 {
+        if let Ok(contents) = std::fs::read_to_string(result_path) {
+            split = Some(contents);
+            break;
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+    let split = split.expect("plugin B must report its created/failed split");
+    assert_eq!(
+        split.trim(),
+        "30 0",
+        "plugin B must create all 30 threads while A is at its pids.max"
+    );
+
+    sup.stop_plugin("r9_iso_a").await.ok();
+    sup.stop_plugin("r9_iso_b").await.ok();
+    for _ in 0..30 {
+        if !a_dir.exists() && !b_dir.exists() {
+            break;
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        !a_dir.exists() && !b_dir.exists(),
+        "empty plugin pids scopes must be cleaned up on exit"
+    );
+}
