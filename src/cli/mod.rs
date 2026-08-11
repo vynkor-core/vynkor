@@ -4,6 +4,7 @@ pub mod plugin;
 use clap::{Parser, Subcommand};
 use clap_complete::Shell;
 use plugin::PluginCmd;
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "vyn")]
@@ -67,4 +68,15 @@ pub enum Commands {
     },
     #[command(name = "__complete-slugs", hide = true)]
     CompleteSlugs,
+    /// Internal sandbox shim entrypoint (R9-02): re-exec'd by the supervisor
+    /// to run a plugin inside a private PID namespace. Hidden from help.
+    #[cfg(target_os = "linux")]
+    #[command(name = "__shim", hide = true)]
+    Shim {
+        /// Plugin binary to run inside the namespace.
+        plugin_binary: PathBuf,
+        /// Plugin argv, passed through verbatim.
+        #[arg(allow_hyphen_values = true, trailing_var_arg = true)]
+        args: Vec<String>,
+    },
 }
