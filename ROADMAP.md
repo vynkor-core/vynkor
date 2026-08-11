@@ -195,7 +195,7 @@ the entire user-namespace tree to `init_user_ns`). Phase 9 replaces the
 shared-uid rlimit accounting with cgroup accounting and closes the
 visibility/file-system gaps.
 
-- [ ] R9-01 — **Per-plugin process accounting via cgroup v2 `pids.max`
+- [x] R9-01 — **Per-plugin process accounting via cgroup v2 `pids.max`
       instead of RLIMIT_NPROC:** today a plugin's thread budget is the
       host-wide real-uid count (desktop sessions routinely run ~700+
       threads, so `max_procs` is a *shared* budget, not per-plugin
@@ -209,6 +209,12 @@ visibility/file-system gaps.
   - Acceptance: a plugin with `max_procs: 64` runs on a host whose session
     already uses 700+ threads (currently a hard EAGAIN boundary); a
     thread-storm in one plugin does not consume another plugin's budget.
+  - Done: per-plugin scopes land in the first writable ancestor that has
+    the `pids` controller (root-first walk, falls back to RLIMIT_NPROC
+    when none); scope reaped on exit. Covered by
+    `tests/unit/test_supervisor.rs`: `pids_cgroup_accounts_plugin_threads_per_plugin`,
+    `sandboxed_plugin_still_joins_its_pids_cgroup` (join from inside the
+    user namespace), `thread_storm_in_one_plugin_does_not_consume_another_budget`.
 
 - [ ] R9-02 — **PID-namespace isolation via shim supervisor:** the current
       spawn path cannot combine `unshare(CLONE_NEWPID)` with threading —
