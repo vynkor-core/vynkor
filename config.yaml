@@ -126,6 +126,36 @@ allow_no_auth: true
 # unshares the network namespace. PID-namespace isolation is deliberately
 # omitted (it breaks multithreaded plugins — see runner.rs).
 plugins:
+  # network: outbound HTTP provider. sandbox MUST stay false — the private
+  # netns has no route out, so a sandboxed network plugin cannot reach anything.
+  - id: network
+    binary: /home/behzod/.local/lib/veyron/plugins/network/network
+    restart: on-failure
+    max_restarts: 5
+    sandbox: false
+    max_procs: 64
+    max_vmem_mb: 512
+  # ai: LLM chat_completion, no permissions of its own — calls out through the
+  # `network` plugin above, so network must be running for ai to do anything.
+  - id: ai
+    binary: /home/behzod/.local/lib/veyron/plugins/ai/ai
+    restart: on-failure
+    max_restarts: 5
+    sandbox: true
+    env:
+      # Default-deny allowlist: names of env vars callers may reference via
+      # api_key_env. No keys set on dev box; add real keys per provider.
+      - AI_PLUGIN_ALLOWED_KEY_ENVS=ANTHROPIC_API_KEY,OPENAI_API_KEY,OLLAMA_API_KEY
+    max_procs: 64
+    max_vmem_mb: 512
+  # ping-pong: minimal reference plugin — replies "pong" to a "ping" action.
+  - id: ping-pong
+    binary: /home/behzod/.local/lib/veyron/plugins/ping-pong/ping-pong-rs
+    restart: on-failure
+    max_restarts: 5
+    sandbox: true
+    max_procs: 64
+    max_vmem_mb: 512
   - id: tts
     binary: /home/behzod/projects/veyron-core/veyron-plugins/plugins/tts/target/release/tts
     restart: on-failure
@@ -156,3 +186,30 @@ plugins:
     # desktop session already runs ~900, so the default would be marginal.
     max_procs: 4096
     max_vmem_mb: 1024
+
+# --- installed via `vyn plugin install network` ---
+# veyron install: network v0.1.5
+# Uncomment to auto-spawn on kernel start:
+#   - id: network
+#     binary: /home/behzod/.local/lib/veyron/plugins/network/network
+#     restart: on-failure
+#     max_restarts: 5
+#     sandbox: false     # network egress needs a route out
+
+# --- installed via `vyn plugin install ai` ---
+# veyron install: ai v0.1.0
+# Uncomment to auto-spawn on kernel start:
+#   - id: ai
+#     binary: /home/behzod/.local/lib/veyron/plugins/ai/ai
+#     restart: on-failure
+#     max_restarts: 5
+#     sandbox: true
+
+# --- installed via `vyn plugin install ping-pong` ---
+# veyron install: ping-pong v0.1.0
+# Uncomment to auto-spawn on kernel start:
+#   - id: ping-pong
+#     binary: /home/behzod/.local/lib/veyron/plugins/ping-pong/ping-pong-rs
+#     restart: on-failure
+#     max_restarts: 5
+#     sandbox: true

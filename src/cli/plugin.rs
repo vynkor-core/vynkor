@@ -1,6 +1,9 @@
 use clap::Subcommand;
 
-use crate::marketplace::installer::{install, uninstall};
+use crate::marketplace::installer::{
+    append_config_example, install, remove_config_example, uninstall, ConfigExampleStatus,
+    InstalledPlugin,
+};
 use crate::marketplace::registry::{fetch_registry, fetch_registry_with_url, RegistryEntry};
 
 #[derive(Subcommand)]
@@ -54,6 +57,7 @@ pub async fn handle(
     max_extracted_bytes: u64,
     max_archive_entries: usize,
     marketplace_public_key: Option<&str>,
+    config_path: &str,
 ) -> anyhow::Result<()> {
     let fetch = |refresh: bool| {
         let url = registry_url.unwrap_or("");
@@ -103,7 +107,7 @@ pub async fn handle(
         }
         PluginCmd::Install { target, refresh } => {
             let entries = fetch(refresh).await?;
-            install(
+            let installed: InstalledPlugin = install(
                 &entries,
                 &target,
                 tmp_dir,
@@ -113,11 +117,28 @@ pub async fn handle(
                 marketplace_public_key,
             )
             .await?;
+            append_config_example(config_path, &installed)?;
         }
         PluginCmd::Remove { target } => {
             uninstall(&target, tmp_dir)?;
 
-            if let Ok(cfg) = crate::utils::config::load_config("config.yaml") {
+            match remove_config_example(config_path, &target) {
+                Ok(ConfigExampleStatus::Removed) => {
+                    println!("✓ Removed the commented config.yaml example for '{target}'.");
+                }
+                Ok(ConfigExampleStatus::Active) => {
+                    println!(
+                        "Note: '{target}' has an active (uncommented) entry in config.yaml — left untouched."
+                    );
+                    return Ok(());
+                }
+                Ok(ConfigExampleStatus::NotFound) => {}
+                Err(e) => return Err(e.into()),
+            }
+
+            // the example block can be gone while the plugin is still live in
+            // `plugins:` (e.g. it was activated before removal) — warn then
+            if let Ok(cfg) = crate::utils::config::load_config(config_path) {
                 if cfg.plugins.iter().any(|p| p.id == target) {
                     println!(
                         "Note: '{target}' is still listed under `plugins:` in config.yaml — remove that entry too."

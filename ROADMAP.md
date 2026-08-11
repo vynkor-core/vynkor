@@ -178,8 +178,8 @@ permission-surface inconsistency; N1 is the largest single hot-path win.
 
 > Deferred audit items M7 (C++/Python fuzz harness) and M9 (zero-value enum
 > renumber, wire-breaking) remain open — tracked in the Task Summary below
-> and in `AUDIT.md`. M7 is the last substantive coverage gap; M9 ships with
-> the next protocol version bump.
+> and in `AUDIT.md`. M7 is the last substantive coverage gap; M9 rides the
+> protocol v1.4 bump (P11-03).
 
 ---
 
@@ -282,16 +282,146 @@ visibility/file-system gaps.
 
 ---
 
+## Phase 10 — Plugin config & marketplace state (deferred)
+
+Deferred until the R8/N items ship. Today a plugin's runtime settings live
+inline in `config.yaml` (`plugins:` list), the installer edits that one shared
+file with marker-comment blocks (`# veyron install:` /
+`append_config_example` / `remove_config_example`), and marketplace state is
+split between the TTL `registry.json` cache and whatever happens to exist on
+disk under `~/.local/lib/veyron/plugins/`. Fine for 5 plugins, the bottleneck
+once the fleet grows: one shared file owned by nobody in particular, text-block
+surgery, and no record of what is installed, from where, or at what version.
+Phase 10 gives each plugin its own config file and gives the marketplace an
+explicit state store. Independent of Phase 9 — can land before or after it.
+
+- [ ] R10-01 — **Per-plugin config via `plugins.d/` drop-in directory:** the
+      `plugins:` list leaves `config.yaml` for a `plugins.d/*.yaml` directory
+      (new `plugins_dir` config key, default `<config_dir>/plugins.d/`); each
+      file carries exactly one plugin entry (id, binary, restart, sandbox,
+      limits, env). `load_config` globs and merges the files — order = filename
+      sort, duplicate `id` across files = boot error, SIGHUP reload merges the
+      same way. `vyn plugin install` writes `plugins.d/<slug>.yaml`,
+      `vyn plugin remove` deletes it — the marker-block machinery
+      (`append_config_example`/`remove_config_example`) is deleted with them.
+  - Files: `src/utils/config.rs`, `src/marketplace/installer.rs`,
+    `src/cli/plugin.rs`, `config.yaml` (Veyron repo).
+  - Acceptance: install/remove never touch `config.yaml`; a hand-written
+    entry in `plugins.d/` boots; duplicate ids across files fail loudly.
+
+- [ ] R10-02 — **Explicit installed-plugin state store:** replace
+      filesystem-sniffing `~/.local/lib/veyron/plugins/<slug>` with
+      `~/.local/share/veyron/installed.json` recording slug, version, sha256,
+      install time, source registry URL. Enables `vyn plugin list --installed`
+      offline (no registry fetch), upgrade detection (installed vs registry
+      version), and a `remove` that works even when the plugin dir is missing
+      or half-deleted.
+  - Files: `src/marketplace/installer.rs` (new state module),
+    `src/cli/plugin.rs`.
+  - Acceptance: `vyn plugin list --installed` shows versions offline;
+    reinstalling the same version warns instead of re-extracting; remove
+    tolerates a missing dir.
+
+- [ ] R10-03 — **`registry.json` cache rework:** the TTL cache at
+      `~/.cache/veyron/registry.json` is a raw mirror of the remote registry
+      document. Move it under the marketplace state dir, version the schema,
+      persist per-plugin `installed_version`/`last_check`, and make
+      signature/revocation handling explicit (stale entry policy decided and
+      tested) instead of implicit TTL-only expiry.
+  - Files: `src/marketplace/registry.rs`, `src/marketplace/state.rs` (new).
+  - Acceptance: cache file carries a schema version; revoked-entry handling
+    is explicit and covered by tests.
+
+- [ ] R10-04 — **`vyn plugin enable|disable <slug>`:** toggling a per-plugin
+      file (rename/comment-out) replaces hand-editing `config.yaml` when an
+      operator wants a plugin kept on disk but not auto-spawned — today that
+      means uncommenting/commenting the installer's block by hand, which
+      `remove_config_example` then deliberately refuses to touch.
+  - Files: `src/cli/plugin.rs`, `src/plugins/loader.rs`.
+  - Acceptance: `disable` stops auto-spawn on boot without uninstalling;
+    `enable` restores it; the state survives SIGHUP reload.
+
+---
+
+## Phase 11 — Protocol v1.4: permission additions (deferred)
+
+Deferred until the veyron-plugins fleet needs them — `secrets` is the first
+plugin that cannot ship without one of these values, so P11 is the gate for
+the whole next plugin batch. Tracked from the plugin side in
+`veyron-plugins/ROADMAP.md` ("Kernel-side changes needed"); this section is
+the kernel's half of the same work. Purely an enum addition + regeneration +
+copy sync — no new Envelope payloads, no IPC/framing/orchestrator changes
+(the existing `ActionRequest`/`Event`/`EventPublish`/IPC/streaming/WS
+surfaces cover every planned plugin).
+
+- [ ] P11-01 — **Add five `PermissionType` values (15–19, contiguous):**
+  `PERMISSION_SECRETS` (15), `PERMISSION_CLIPBOARD` (16),
+  `PERMISSION_LAUNCH` (17), `PERMISSION_SCREEN` (18), `PERMISSION_HOME`
+  (19); bump the `// v 1.3` header to `// v 1.4`. Contiguity is
+  load-bearing: `known_permissions()` (`src/marketplace/installer.rs:23`)
+  probes enum codes and stops after 4 consecutive misses, so a gap ≥4
+  silently rejects plugins declaring later values. Regenerate the
+  `veyron-wire` prost types — `known_permissions()` (R8-01) and the JWT
+  `permissions` claims (free-form strings) adopt the new values with no
+  Rust source change. Bump `veyron-wire` to 0.3.0 and drop the crates-io
+  patch override if one is in effect, per the R8-07 precedent.
+  - Files: `wire/proto/veyron_protocol.proto`, `veyron-wire/` (regenerate
+    + publish).
+  - Acceptance: a plugin.json declaring `"secrets"` passes
+    `validate_manifest`; R8-02's drift test stays green.
+
+- [ ] P11-02 — **Sync all six proto copies (fixes pre-existing v1.2
+  drift):** the three in-repo copies (`wire/proto`,
+  `sdk/python/proto`, `sdk/cpp/proto`) are R8-05-guarded and move
+  together; the standalone `veyron-sdk-python`/`veyron-sdk-cpp` repos are
+  **already behind on v1.2** — missing `PERMISSION_EVENT_PUBLISH`,
+  `PERMISSION_STORAGE`, the R6 streaming messages
+  (`ActionRequestChunk`/`ActionResponseChunk`/`ActionStreamAbort`/
+  `SessionClose`), `EventPublish*`, and `ActionRequest.caller_plugin_id` —
+  and have no drift guard. Sync all six to v1.4 in one pass; extend R8-05
+  (or add a release-time check) to cover the standalone copies so they
+  can't drift again.
+  - Files: all six `veyron_protocol.proto` copies,
+    `tests/unit/test_proto_sync.rs`.
+  - Acceptance: Python/C++ SDK examples exercise `publish_event` and
+    storage-permission manifests against a v1.4 kernel.
+
+- [ ] P11-03 — **Land M9 (zero-value enum renumber) on the same bump:**
+  M9 is wire-breaking and gated on the next protocol version bump — this
+  is that bump. Renumber `PERMISSION_UNKNOWN = 0` per the `AUDIT.md` plan
+  while the enum is already being edited, and update
+  `known_permissions()`'s exclusion accordingly.
+  - Files: `wire/proto/veyron_protocol.proto` (+ all copies, same sync as
+    P11-02).
+  - Acceptance: no real permission value collides with `PERMISSION_UNKNOWN`;
+    R8-02/R8-05 tests still pass.
+
+---
+
 ## Cross-repo coordination
 
 - **veyron-plugins** (`veyron-plugins/ROADMAP.md`): database plugin landing
   (R8-06) depends on R8-01/R8-02 landing here first — the kernel must accept
-  `PERMISSION_STORAGE` before the registry entry is installable.
+  `PERMISSION_STORAGE` before the registry entry is installable. The
+  protocol v1.4 permission additions (Phase 11) are likewise tracked from
+  the plugin side in its "Kernel-side changes needed" section — `secrets`
+  is the first plugin blocked on P11.
 - **veyron-wire** (`veyron-wire/`): 0.2.0 publish (R8-07) is release-process
-  work; kernel changes here only consume it.
-- SDK proto copies in this repo (`sdk/python/proto`, `sdk/cpp/proto`) are
-  guarded by the R8-05 drift test; the veyron-wire repo's own copy is synced
-  at release time.
+  work; kernel changes here only consume it. P11-01 bumps it again to 0.3.0.
+- **veyron-sdk-python / veyron-sdk-cpp** (standalone repos): proto copies
+  have already drifted to v1.2 (no guard exists for them) — P11-02 syncs
+  them to v1.4 and adds drift protection.
+- **sdk/python/proto**, **sdk/cpp/proto** vendored copies: guarded by the R8-05
+  drift test, which reads them via sibling-repo paths (`../veyron-sdk-python`,
+  `../veyron-sdk-cpp`) after the submodule removal below.
+- **Submodules removed (temporary decision, 2026-08-11):** `sdk/*` and `wire/`
+  are no longer git submodules of this repo. The kernel consumes `veyron-wire`
+  and `veyron-sdk` from crates.io; cross-SDK integration tests and the proto
+  drift guard read sources from the sibling repos (`../veyron-wire`,
+  `../veyron-sdk-cpp`, `../veyron-sdk-python`), which CI checks out itself.
+  **Revisit in the future:** decide between a true monorepo, restored
+  submodules, or published-artifact-only consumption — see the trade-offs
+  (lockstep proto iteration vs. release cadence) recorded at removal time.
 
 ## Task Summary
 
@@ -317,6 +447,13 @@ visibility/file-system gaps.
 | R9-04 | seccomp syscall filter | R9-03 |
 | R9-05 | `/proc` `hidepid=2` interim visibility hardening | R8 + N ship gate |
 | R9-06 | docs: fix stale `AUDIT.md` pointer, record exact rlimit semantics | none |
+| R10-01 | plugin settings out of `config.yaml` → `plugins.d/` drop-in dir | R8 + N ship gate |
+| R10-02 | installed-plugin state store (`installed.json`) | none |
+| R10-03 | `registry.json` cache rework (schema version, revocation policy) | R10-02 |
+| R10-04 | `vyn plugin enable\|disable` toggle | R10-01 |
+| P11-01 | protocol v1.4 — `PermissionType` additions 15–19 (`SECRETS`/`CLIPBOARD`/`LAUNCH`/`SCREEN`/`HOME`), header bump, wire regeneration | `secrets` plugin (veyron-plugins) needs it |
+| P11-02 | proto-copy sync — 6 files / 4 repos; fixes standalone SDK v1.2 drift, adds drift guard | P11-01 |
+| P11-03 | M9 zero-value enum renumber on the v1.4 bump (wire-breaking) | P11-01 |
 
 **Ship gate:** R8-01..R8-05 are kernel-local and land together on `develop`;
 R8-06/R8-07 are cross-repo coordination items shipped from their own repos.
@@ -324,7 +461,9 @@ The Immediate N1–N5 items shipped (2026-08-11) — all kernel-local, independe
 of the cross-repo items; N5 restored the DoD `fmt` gate. Phase 9 is explicitly
 deferred — no R9 item is scheduled until R8 ships. M7/M9 remain
 deferred by decision. R9-01/R9-05 are Linux-cgroup/mount-namespace work and
-require a delegated cgroup v2 subtree or root.
+require a delegated cgroup v2 subtree or root. Phase 10 (plugin config +
+marketplace state) is likewise deferred and independent of Phase 9 — it can
+land before or after hard isolation.
 
 ## Definition of Done
 

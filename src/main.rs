@@ -110,6 +110,7 @@ async fn main() -> Result<()> {
                 cfg.max_extracted_bytes,
                 cfg.max_archive_entries,
                 cfg.marketplace_public_key.as_deref(),
+                &config,
             )
             .await?;
         }

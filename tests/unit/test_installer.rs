@@ -351,3 +351,200 @@ fn manifest_not_found_errors() {
     let err = validate_manifest(&tmp.path().join("plugin.json"), &kernel).unwrap_err();
     assert!(err.to_string().contains("Invalid plugin.json"));
 }
+
+// append_config_example: appends a commented block with binary path + marker
+#[test]
+fn append_config_example_adds_commented_block() {
+    use veyron::marketplace::installer::{append_config_example, InstalledPlugin};
+
+    let tmp = tempdir().unwrap();
+    let cfg = tmp.path().join("config.yaml");
+    fs::write(&cfg, "port: 8888\n").unwrap();
+
+    let installed = InstalledPlugin {
+        slug: "ping-pong".into(),
+        plugin_id: "ping-pong".into(),
+        version: "0.1.0".into(),
+        binary_path: Path::new("/home/u/.local/lib/veyron/plugins/ping-pong/ping-pong").into(),
+    };
+    append_config_example(&cfg.display().to_string(), &installed).unwrap();
+
+    let content = fs::read_to_string(&cfg).unwrap();
+    assert!(content.contains("# veyron install: ping-pong v0.1.0"));
+    assert!(content.contains("#   - id: ping-pong"));
+    assert!(content.contains("binary: /home/u/.local/lib/veyron/plugins/ping-pong/ping-pong"));
+    assert!(content.contains("#     sandbox: true"));
+}
+
+// append_config_example: network gets sandbox: false hint (egress needs a route)
+#[test]
+fn append_config_example_network_sandbox_false() {
+    use veyron::marketplace::installer::{append_config_example, InstalledPlugin};
+
+    let tmp = tempdir().unwrap();
+    let cfg = tmp.path().join("config.yaml");
+    fs::write(&cfg, "port: 8888\n").unwrap();
+
+    let installed = InstalledPlugin {
+        slug: "network".into(),
+        plugin_id: "network".into(),
+        version: "0.1.5".into(),
+        binary_path: Path::new("/home/u/.local/lib/veyron/plugins/network/network").into(),
+    };
+    append_config_example(&cfg.display().to_string(), &installed).unwrap();
+
+    let content = fs::read_to_string(&cfg).unwrap();
+    assert!(content.contains("#     sandbox: false"));
+}
+
+// append_config_example: second call for the same slug is a no-op (idempotent)
+#[test]
+fn append_config_example_is_idempotent() {
+    use veyron::marketplace::installer::{append_config_example, InstalledPlugin};
+
+    let tmp = tempdir().unwrap();
+    let cfg = tmp.path().join("config.yaml");
+    fs::write(&cfg, "port: 8888\n").unwrap();
+
+    let installed = InstalledPlugin {
+        slug: "database".into(),
+        plugin_id: "database".into(),
+        version: "0.1.0".into(),
+        binary_path: Path::new("/home/u/.local/lib/veyron/plugins/database/database").into(),
+    };
+    let path = cfg.display().to_string();
+    append_config_example(&path, &installed).unwrap();
+    let once = fs::read_to_string(&cfg).unwrap();
+    append_config_example(&path, &installed).unwrap();
+    let twice = fs::read_to_string(&cfg).unwrap();
+
+    assert_eq!(once, twice);
+    assert_eq!(once.matches("# veyron install: database").count(), 1);
+}
+
+// append_config_example: missing config file is a silent no-op, not an error
+#[test]
+fn append_config_example_missing_config_is_noop() {
+    use veyron::marketplace::installer::{append_config_example, InstalledPlugin};
+
+    let tmp = tempdir().unwrap();
+    let missing = tmp.path().join("does-not-exist.yaml");
+
+    let installed = InstalledPlugin {
+        slug: "network".into(),
+        plugin_id: "network".into(),
+        version: "0.1.5".into(),
+        binary_path: Path::new("/x/network").into(),
+    };
+    assert!(append_config_example(&missing.display().to_string(), &installed).is_ok());
+    assert!(!missing.exists());
+}
+
+// remove_config_example: fully-commented block is removed, config content intact
+#[test]
+fn remove_config_example_removes_commented_block() {
+    use veyron::marketplace::installer::{
+        append_config_example, remove_config_example, ConfigExampleStatus, InstalledPlugin,
+    };
+
+    let tmp = tempdir().unwrap();
+    let cfg = tmp.path().join("config.yaml");
+    fs::write(&cfg, "port: 8888\n").unwrap();
+    let path = cfg.display().to_string();
+
+    let installed = InstalledPlugin {
+        slug: "ping-pong".into(),
+        plugin_id: "ping-pong".into(),
+        version: "0.1.0".into(),
+        binary_path: Path::new("/home/u/.local/lib/veyron/plugins/ping-pong/ping-pong-rs").into(),
+    };
+    append_config_example(&path, &installed).unwrap();
+
+    let status = remove_config_example(&path, "ping-pong").unwrap();
+    assert_eq!(status, ConfigExampleStatus::Removed);
+    assert_eq!(fs::read_to_string(&cfg).unwrap(), "port: 8888\n");
+}
+
+// remove_config_example: an uncommented (live) entry is never deleted
+#[test]
+fn remove_config_example_leaves_active_block() {
+    use veyron::marketplace::installer::{remove_config_example, ConfigExampleStatus};
+
+    let tmp = tempdir().unwrap();
+    let cfg = tmp.path().join("config.yaml");
+    // operator uncommented the `- id:` line — the entry is live
+    fs::write(
+        &cfg,
+        "port: 8888\n\n\
+         # --- installed via `vyn plugin install network` ---\n\
+         # veyron install: network v0.1.5\n\
+         - id: network\n\
+         \x20 binary: /x/network\n",
+    )
+    .unwrap();
+    let path = cfg.display().to_string();
+    let before = fs::read_to_string(&cfg).unwrap();
+
+    let status = remove_config_example(&path, "network").unwrap();
+    assert_eq!(status, ConfigExampleStatus::Active);
+    assert_eq!(fs::read_to_string(&cfg).unwrap(), before);
+}
+
+// remove_config_example: no marker for the slug → NotFound, file untouched
+#[test]
+fn remove_config_example_not_found_is_noop() {
+    use veyron::marketplace::installer::{remove_config_example, ConfigExampleStatus};
+
+    let tmp = tempdir().unwrap();
+    let cfg = tmp.path().join("config.yaml");
+    fs::write(&cfg, "port: 8888\n").unwrap();
+    let path = cfg.display().to_string();
+    let before = fs::read_to_string(&cfg).unwrap();
+
+    let status = remove_config_example(&path, "ghost").unwrap();
+    assert_eq!(status, ConfigExampleStatus::NotFound);
+    assert_eq!(fs::read_to_string(&cfg).unwrap(), before);
+}
+
+// remove_config_example: missing config file → NotFound, not an error
+#[test]
+fn remove_config_example_missing_config_is_not_found() {
+    use veyron::marketplace::installer::{remove_config_example, ConfigExampleStatus};
+
+    let tmp = tempdir().unwrap();
+    let missing = tmp.path().join("does-not-exist.yaml");
+
+    let status = remove_config_example(&missing.display().to_string(), "network").unwrap();
+    assert_eq!(status, ConfigExampleStatus::NotFound);
+}
+
+// remove_config_example: removing the middle block keeps sibling blocks
+#[test]
+fn remove_config_example_keeps_sibling_blocks() {
+    use veyron::marketplace::installer::{
+        append_config_example, remove_config_example, ConfigExampleStatus, InstalledPlugin,
+    };
+
+    let tmp = tempdir().unwrap();
+    let cfg = tmp.path().join("config.yaml");
+    fs::write(&cfg, "port: 8888\n").unwrap();
+    let path = cfg.display().to_string();
+
+    let mk = |slug: &str, binary: &str| InstalledPlugin {
+        slug: slug.into(),
+        plugin_id: slug.into(),
+        version: "0.1.0".into(),
+        binary_path: Path::new(binary).into(),
+    };
+    append_config_example(&path, &mk("ping-pong", "/x/ping-pong-rs")).unwrap();
+    append_config_example(&path, &mk("network", "/x/network")).unwrap();
+    append_config_example(&path, &mk("ai", "/x/ai")).unwrap();
+
+    let status = remove_config_example(&path, "network").unwrap();
+    assert_eq!(status, ConfigExampleStatus::Removed);
+
+    let content = fs::read_to_string(&cfg).unwrap();
+    assert!(!content.contains("veyron install: network"));
+    assert!(content.contains("veyron install: ping-pong"));
+    assert!(content.contains("veyron install: ai"));
+}
