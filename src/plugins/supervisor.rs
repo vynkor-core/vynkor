@@ -34,12 +34,19 @@ pub struct PluginConfig {
     pub env: Vec<String>,
     pub restart_policy: RestartPolicy,
     pub max_restarts: u32,
-    /// Isolate plugin in new PID + network namespaces (Linux only).
+    /// Isolate plugin in private user + network namespaces (Linux only).
+    /// PID-namespace isolation is intentionally NOT included: with the
+    /// current spawn path (a `pre_exec` hook followed by exec) the plugin
+    /// would inherit a pending `pid_for_children` namespace, and the kernel
+    /// then refuses thread creation (EINVAL) — see `runner::sandbox_pre_exec`.
     pub sandbox: bool,
     /// Seconds to wait after SIGTERM before SIGKILL. 0 means use default (5s).
     pub grace_seconds: u32,
     /// RLIMIT_NPROC cap. None = `runner::DEFAULT_MAX_PROCS`. Applied
-    /// unconditionally (not gated by `sandbox`).
+    /// unconditionally (not gated by `sandbox`). The check counts *all*
+    /// threads of the real uid system-wide at clone time, so a cap below
+    /// the session's thread baseline kills every thread the plugin spawns
+    /// with EAGAIN — busy desktop sessions need an explicit, higher value.
     pub max_procs: Option<u64>,
     /// RLIMIT_AS cap in MiB. None = `runner::DEFAULT_MAX_VMEM_MB`. Applied
     /// unconditionally (not gated by `sandbox`).

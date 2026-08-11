@@ -97,6 +97,99 @@ generated enum, adds drift-detection tests, and lands the follow-ups the
 
 ---
 
+## Phase 9 — Hard isolation (deferred)
+
+Deferred until the R8 cross-repo items ship. The current sandbox (`sandbox:
+true`) isolates via user + network namespaces plus rlimits only — plugins
+share the host PID space (they can enumerate every host process via
+`/proc`), read/write host files as the real uid, and their `max_procs`
+budget is *shared with every other process of the same uid* (RLIMIT_NPROC
+is checked at each fork/clone against the real-uid thread count, walked up
+the entire user-namespace tree to `init_user_ns`). Phase 9 replaces the
+shared-uid rlimit accounting with cgroup accounting and closes the
+visibility/file-system gaps.
+
+- [ ] R9-01 — **Per-plugin process accounting via cgroup v2 `pids.max`
+      instead of RLIMIT_NPROC:** today a plugin's thread budget is the
+      host-wide real-uid count (desktop sessions routinely run ~700+
+      threads, so `max_procs` is a *shared* budget, not per-plugin
+      isolation — a thread storm in one plugin or in the desktop starves
+      the other). The cgroup v2 `pids` controller counts tasks *inside the
+      cgroup only*: supervisor creates a `veyron/<plugin_id>.scope` cgroup,
+      writes the child PID into `cgroup.procs` in `pre_exec`, and sets
+      `pids.max = max_procs`. Requires cgroup v2 (systemd default) and
+      either root or a delegated `user@1000.service` subtree.
+  - Files: `src/plugins/runner.rs` (`sandbox_pre_exec`), `src/plugins/supervisor.rs`.
+  - Acceptance: a plugin with `max_procs: 64` runs on a host whose session
+    already uses 700+ threads (currently a hard EAGAIN boundary); a
+    thread-storm in one plugin does not consume another plugin's budget.
+
+- [ ] R9-02 — **PID-namespace isolation via shim supervisor:** the current
+      spawn path cannot combine `unshare(CLONE_NEWPID)` with threading —
+      the exec'd plugin would inherit a pending `pid_for_children`
+      namespace and every thread spawn fails with EINVAL (documented in
+      `runner.rs`). Correct approach: a shim process breaks the coupling —
+      kernel forks a tiny wrapper, the wrapper unshares `CLONE_NEWPID` and
+      forks the plugin (which is *born* into the namespace as PID 1, where
+      threads work), then forwards signals and exit status. Effect: the
+      plugin sees only its own processes (`/proc` shows just itself), and
+      can no longer enumerate or signal host/other-plugin processes.
+  - Files: new `src/plugins/shim.rs`, `src/plugins/supervisor.rs`.
+  - Acceptance: a plugin's `/proc` lists only its own tasks; `ps` inside
+    the plugin shows one process; supervisor signal/exit forwarding still
+    works (restart, SIGTERM shutdown).
+
+- [ ] R9-03 — **Filesystem isolation (Landlock LSM first, minimal rootfs
+      later):** plugins currently read/write the host filesystem with the
+      real uid's credentials. Landlock (Linux 5.13+, unprivileged,
+      `no_new_privs`-compatible) lets `pre_exec` restrict file access
+      declaratively — read-only access to declared dirs, write access only
+      to the plugin's data dir — with no CAP_SYS_ADMIN requirement.
+      Heavier alternative if stricter containment is needed: mount
+      namespace + `chroot`/`pivot_root` into a minimal rootfs (plugin
+      binary + runtime libs + data dir only), which the userns already
+      grants CAP_SYS_ADMIN for.
+  - Files: `src/plugins/runner.rs`, config schema (`max_fs_access` /
+    `readonly_paths` / `writable_paths`).
+  - Acceptance: a plugin denied read access to `~` gets EACCES on open;
+    plugin writes are confined to its declared writable dirs.
+
+- [ ] R9-04 — **seccomp syscall filter in `pre_exec`:** default-deny
+      allowlist (or a tight denylist of kernel-escape-capable syscalls —
+      `ptrace`, `bpf`, `keyctl`, `reboot`, `kexec_load`, `mount`/`umount`
+      while R9-03 is unlanded) applied before exec, so a compromised
+      plugin cannot use exotic syscalls to attack the kernel. Needs a
+      runtime profiling pass per SDK (tokio/Python/CPP baseline) so the
+      allowlist doesn't break legitimate plugins.
+  - Files: `src/plugins/runner.rs`.
+  - Acceptance: a plugin calling a denied syscall gets `EPERM`/`SIGSYS`;
+      all three SDK example plugins still pass their integration tests.
+
+- [ ] R9-05 — **Interim process-visibility hardening (until R9-02):** in a
+      new mount namespace (`CLONE_NEWNS`, permitted inside the userns),
+      remount `/proc` with `hidepid=2` so plugins cannot read other
+      processes' cmdlines/environ while the shared-PID-space limitation is
+      still in force.
+  - Files: `src/plugins/runner.rs`.
+  - Acceptance: `/proc/<other-pid>/` resolves to ENOENT for non-namespace
+      processes; plugin functionality unaffected.
+
+- [ ] R9-06 — **Docs: fix stale isolation references + record exact rlimit
+      semantics:** README §5's "tracked in `AUDIT.md`" for the shim
+      supervisor is stale — the item lives here (Phase 9), fix the pointer.
+      Document that `max_procs` is a *shared real-uid* budget, not
+      per-plugin (RLIMIT_NPROC is checked per fork/clone against the
+      real-uid thread count and the check walks the userns tree up to
+      `init_user_ns`), and that the sandbox does not yet hide host
+      processes or restrict file access. Fold R9-01's cgroup migration in
+      as the eventual correct accounting.
+  - Files: `README.md` §5, `src/plugins/runner.rs` doc comments,
+    `config.yaml` (Veyron repo) `max_procs` comment.
+  - Acceptance: no stale `AUDIT.md` pointers; README accurately states
+    what the sandbox does and does not isolate today.
+
+---
+
 ## Cross-repo coordination
 
 - **veyron-plugins** (`veyron-plugins/ROADMAP.md`): database plugin landing
@@ -119,9 +212,18 @@ generated enum, adds drift-detection tests, and lands the follow-ups the
 | R8-05 | proto-copy byte-identity test | none |
 | R8-06 | `database` plugin landing (veyron-plugins) | R8-01, R8-02 |
 | R8-07 | `veyron-wire` 0.2.0 publish + patch removal | none |
+| R9-01 | cgroup v2 `pids.max` per-plugin accounting (replaces shared-uid RLIMIT_NPROC) | R8 ship gate |
+| R9-02 | PID namespace via shim supervisor | R9-01 |
+| R9-03 | filesystem isolation (Landlock / minimal rootfs) | R9-02 |
+| R9-04 | seccomp syscall filter | R9-03 |
+| R9-05 | `/proc` `hidepid=2` interim visibility hardening | R8 ship gate |
+| R9-06 | docs: fix stale `AUDIT.md` pointer, record exact rlimit semantics | none |
 
 **Ship gate:** R8-01..R8-05 are kernel-local and land together on `develop`;
 R8-06/R8-07 are cross-repo coordination items shipped from their own repos.
+Phase 9 is explicitly deferred — no R9 item is scheduled until the R8 items
+ship. R9-01/R9-05 are Linux-cgroup/mount-namespace work and require a
+delegated cgroup v2 subtree or root.
 
 ## Definition of Done
 

@@ -1,10 +1,10 @@
-port: 8080
+port: 8888
 log_level: debug
 # pid_file / log_file default to a per-user private dir (XDG_RUNTIME_DIR,
 # /run/user/<uid>, or ~/.veyron/run) — never the shared /tmp (AUDIT M-09).
 # Uncomment to override:
-# pid_file: /run/user/1000/veyron.pid
-# log_file: /run/user/1000/veyron.log
+pid_file: /run/user/1000/veyron.pid
+log_file: /run/user/1000/veyron.log
 data_dir: /tmp/veyron
 
 # Authentication is required to start. For production, set a JWT secret:
@@ -107,7 +107,7 @@ allow_no_auth: true
 #
 # plugins:
 #   - id: weather                    # unique plugin_id
-#     binary: /opt/plugins/weather   # absolute path to executable
+#     binary: .local/lib/veyron/plugins/network/network   # absolute path to executable
 #     restart: on-failure            # always | on-failure | never
 #     max_restarts: 5                # max auto-restarts (default: 5)
 #     args:                          # argv[1..] passed to the binary
@@ -115,7 +115,44 @@ allow_no_auth: true
 #       - /run/user/1000/veyron.sock  # use XDG_RUNTIME_DIR/veyron.sock (fallback: ~/.veyron/run/veyron.sock)
 #     env:                           # extra environment variables
 #       - LOG_LEVEL=info
-#     sandbox: false                 # true: isolate in new PID+net namespace (Linux)
+#     sandbox: false                 # true: isolate in private user+net namespace (Linux). PID-namespace isolation is NOT included — unshare(CLONE_NEWPID) in the spawn path makes every multithreaded plugin die with EINVAL (threads can't spawn while pid_for_children is pending). Needs a shim-process supervisor; see src/plugins/runner.rs.
 #     grace_seconds: 10              # optional, default 5 — seconds to wait after SIGTERM before SIGKILL
-#     max_procs: 64                  # optional, default 64 — RLIMIT_NPROC cap (applied to every plugin, not just sandboxed)
+#     max_procs: 1024                # optional, default 1024 — RLIMIT_NPROC cap (applied to every plugin, not just sandboxed). Counts ALL threads of the real uid at clone time: on busy sessions (hundreds of threads) the old 64 default made every plugin thread spawn fail with EAGAIN — raise it per-plugin there.
 #     max_vmem_mb: 512               # optional, default 512 — RLIMIT_AS cap in MiB (applied to every plugin, not just sandboxed)
+
+# --- Local voice stack (tts + stt) ------------------------------------------
+# sandbox: true now works for non-root kernels — sandbox_pre_exec switches
+# into a private user namespace first (see src/plugins/runner.rs), then
+# unshares the network namespace. PID-namespace isolation is deliberately
+# omitted (it breaks multithreaded plugins — see runner.rs).
+plugins:
+  - id: tts
+    binary: /home/behzod/projects/veyron-core/veyron-plugins/plugins/tts/target/release/tts
+    restart: on-failure
+    max_restarts: 5
+    sandbox: true
+    env:
+      # Cloud providers only; default-deny allowlist. No keys set on dev box.
+      - TTS_PLUGIN_ALLOWED_KEY_ENVS=OPENAI_API_KEY,ELEVENLABS_API_KEY
+      - TTS_PLUGIN_LOCAL_MODEL_DIR=/home/behzod/projects/veyron-core/veyron-plugins/models/tts/piper-ru_RU-denis-medium
+      - TTS_PLUGIN_LOCAL_MODEL_TYPE=piper
+    grace_seconds: 10
+    # RLIMIT_NPROC counts the uid's TOTAL threads at clone time — this
+    # desktop session already runs ~900, so the default would be marginal.
+    max_procs: 4096
+    max_vmem_mb: 1024
+  - id: stt
+    binary: /home/behzod/projects/veyron-core/veyron-plugins/plugins/stt/target/release/stt
+    restart: on-failure
+    max_restarts: 5
+    sandbox: true
+    env:
+      # Cloud provider only; default-deny allowlist. No key set on dev box.
+      - STT_PLUGIN_ALLOWED_KEY_ENVS=OPENAI_API_KEY
+      - STT_PLUGIN_LOCAL_MODEL_DIR=/home/behzod/projects/veyron-core/veyron-plugins/models/stt/zipformer-ru-int8
+      - STT_PLUGIN_LOCAL_MODEL_TYPE=transducer
+    grace_seconds: 10
+    # RLIMIT_NPROC counts the uid's TOTAL threads at clone time — this
+    # desktop session already runs ~900, so the default would be marginal.
+    max_procs: 4096
+    max_vmem_mb: 1024

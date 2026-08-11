@@ -89,7 +89,7 @@ Every message on UDS is wrapped in a strict 44-byte header:
 
 ### 5. Process Isolation
 
-Every plugin runs in a separate OS process. The kernel spawns it, injects `VEYRON_SOCKET_PATH`, and supervises it. On Linux with `sandbox: true`, the plugin enters new PID and network namespaces with `RLIMIT_NPROC=64` and `RLIMIT_AS=512MiB`. A plugin crash does not affect other plugins or the kernel.
+Every plugin runs in a separate OS process. The kernel spawns it, injects `VEYRON_SOCKET_PATH`, and supervises it. On Linux with `sandbox: true`, the plugin runs in private **user + network namespaces** (for non-root kernels the sandbox first switches into a private user namespace, so it works without CAP_SYS_ADMIN) with `RLIMIT_NPROC=1024` and `RLIMIT_AS=512MiB` by default. PID-namespace isolation is **not** included: the kernel cannot move the exec'd plugin into a new PID namespace from the spawn path — a process with a pending `pid_for_children` namespace (set by `unshare(CLONE_NEWPID)`) cannot create threads, which kills every multithreaded plugin with EINVAL. Doing it correctly requires a shim-process supervisor (tracked in `AUDIT.md`). A plugin crash does not affect other plugins or the kernel.
 
 ---
 

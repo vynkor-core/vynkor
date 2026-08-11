@@ -3298,7 +3298,7 @@ dependencies = [
 
 [[package]]
 name = "veyron-sdk"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "crc32fast",
  "prost 0.13.5",
