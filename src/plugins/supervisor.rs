@@ -34,11 +34,13 @@ pub struct PluginConfig {
     pub env: Vec<String>,
     pub restart_policy: RestartPolicy,
     pub max_restarts: u32,
-    /// Isolate plugin in private user + network namespaces (Linux only).
-    /// PID-namespace isolation is intentionally NOT included: with the
-    /// current spawn path (a `pre_exec` hook followed by exec) the plugin
-    /// would inherit a pending `pid_for_children` namespace, and the kernel
-    /// then refuses thread creation (EINVAL) — see `runner::sandbox_pre_exec`.
+    /// Isolate plugin in private user + network + PID namespaces (Linux only).
+    /// PID-namespace isolation runs through a shim process (`vyn __shim`, see
+    /// `plugins::shim`): the supervisor re-execs itself, the shim nests a user
+    /// namespace, creates a fresh PID namespace and private `/proc`, and forks
+    /// the plugin into it as PID 1. A plugin cannot be moved into a PID
+    /// namespace from its own spawn path — a pending `pid_for_children`
+    /// namespace makes the kernel refuse thread creation (EINVAL).
     pub sandbox: bool,
     /// Seconds to wait after SIGTERM before SIGKILL. 0 means use default (5s).
     pub grace_seconds: u32,
@@ -62,6 +64,17 @@ struct PluginEntry {
     config: PluginConfig,
     restart_count: u32,
     pid: u32,
+    /// Host pid of the sandbox shim (`vyn __shim`), when the plugin runs
+    /// sandboxed. Lifecycle signals go to the shim, which forwards them and
+    /// stays alive to reap — signalling the plugin directly would break the
+    /// shim's waitpid and orphan it inside the namespace.
+    shim_pid: Option<u32>,
+}
+
+impl PluginEntry {
+    fn signal_target(&self) -> i32 {
+        self.shim_pid.unwrap_or(self.pid) as i32
+    }
 }
 
 struct ExitEvent {
@@ -144,7 +157,34 @@ impl PluginSupervisor {
         config: PluginConfig,
         restart_count: u32,
     ) -> Result<PluginProcess, VeyronError> {
-        let mut cmd = Command::new(&config.binary_path);
+        #[cfg(target_os = "linux")]
+        let use_shim = config.sandbox;
+        #[cfg(not(target_os = "linux"))]
+        let use_shim = {
+            if config.sandbox {
+                warn!(
+                    plugin_id = %config.plugin_id,
+                    "sandbox requested, but pid-namespace isolation is linux-only — running unsandboxed",
+                );
+            }
+            false
+        };
+        // sandboxed plugins run under a shim that places them in a private
+        // PID namespace (R9-02, see plugins::shim) — the shim is our own
+        // binary re-exec'd with the hidden __shim subcommand
+        let mut cmd = if use_shim {
+            let mut c = Command::new(sandbox_shim_bin());
+            c.arg("__shim").arg(&config.binary_path);
+            // the shim mirrors the supervisor's SIGTERM→SIGKILL grace: a
+            // handler-less plugin (PID 1 of its namespace) drops SIGTERM, so
+            // the shim escalates on this deadline instead of blocking waitpid
+            if config.grace_seconds > 0 {
+                c.env("VEYRON_SHIM_GRACE_SECS", config.grace_seconds.to_string());
+            }
+            c
+        } else {
+            Command::new(&config.binary_path)
+        };
         cmd.args(&config.args)
             .env("VEYRON_SOCKET_PATH", &self.socket_path)
             .stdout(Stdio::piped())
@@ -221,10 +261,74 @@ impl PluginSupervisor {
             }
         };
 
-        let pid = child
-            .id()
-            .ok_or_else(|| VeyronError::Internal("no pid".into()))?;
         let plugin_id = config.plugin_id.clone();
+
+        let log_buf = Arc::new(Mutex::new(VecDeque::<String>::with_capacity(
+            self.max_log_lines,
+        )));
+        self.log_buffers
+            .insert(plugin_id.clone(), Arc::clone(&log_buf));
+        let max_lines = self.max_log_lines;
+
+        // With the shim, stdout is the pid channel: the first line is the
+        // plugin's host pid, printed only after the plugin signalled
+        // readiness. EOF or a timeout means the sandbox failed to come up —
+        // fail the spawn so a plugin never runs unisolated.
+        let (pid, shim_pid) = if use_shim {
+            let mut lines = BufReader::new(child.stdout.take().expect("piped stdout")).lines();
+            let line = tokio::time::timeout(Duration::from_secs(15), lines.next_line())
+                .await
+                .map_err(|_| {
+                    VeyronError::Internal(
+                        "sandbox shim did not report a plugin pid within 15s".into(),
+                    )
+                })?
+                .map_err(VeyronError::Io)?;
+            let plugin_pid = match line.as_deref().and_then(|l| l.trim().parse::<u32>().ok()) {
+                Some(p) if p > 0 => p,
+                _ => {
+                    // the shim died before the plugin entered the sandbox
+                    // (e.g. unprivileged user namespaces disabled) — kill the
+                    // shim and clean up its pids scope
+                    let _ = child.start_kill();
+                    let _ = child.wait().await;
+                    #[cfg(target_os = "linux")]
+                    if let Some(cg) = &cgroup_path {
+                        crate::plugins::runner::cleanup_pids_cgroup(cg);
+                    }
+                    return Err(VeyronError::Internal(format!(
+                        "sandbox shim exited before the plugin started (line: {line:?})"
+                    )));
+                }
+            };
+            let shim_pid = child
+                .id()
+                .ok_or_else(|| VeyronError::Internal("no shim pid".into()))?;
+            // leftover shim stdout (should be empty) drains like a normal stream
+            let buf = Arc::clone(&log_buf);
+            tokio::spawn(async move {
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let mut locked = buf.lock().await;
+                    if locked.len() >= max_lines {
+                        locked.pop_front();
+                    }
+                    locked.push_back(line);
+                }
+            });
+            (plugin_pid, Some(shim_pid))
+        } else {
+            let pid = child
+                .id()
+                .ok_or_else(|| VeyronError::Internal("no pid".into()))?;
+            if let Some(stdout) = child.stdout.take() {
+                drain_to_log(stdout, Arc::clone(&log_buf), max_lines);
+            }
+            (pid, None)
+        };
+
+        if let Some(stderr) = child.stderr.take() {
+            drain_to_log(stderr, Arc::clone(&log_buf), max_lines);
+        }
 
         // Verify the child landed in its pids cgroup. The join happens in
         // `pre_exec` before exec, so `/proc/<pid>/cgroup` is authoritative by
@@ -260,41 +364,6 @@ impl PluginSupervisor {
             }
         }
 
-        let log_buf = Arc::new(Mutex::new(VecDeque::<String>::with_capacity(
-            self.max_log_lines,
-        )));
-        self.log_buffers
-            .insert(plugin_id.clone(), Arc::clone(&log_buf));
-
-        let max_lines = self.max_log_lines;
-
-        if let Some(stdout) = child.stdout.take() {
-            let buf = Arc::clone(&log_buf);
-            tokio::spawn(async move {
-                let mut lines = BufReader::new(stdout).lines();
-                while let Ok(Some(line)) = lines.next_line().await {
-                    let mut locked = buf.lock().await;
-                    if locked.len() >= max_lines {
-                        locked.pop_front();
-                    }
-                    locked.push_back(line);
-                }
-            });
-        }
-        if let Some(stderr) = child.stderr.take() {
-            let buf = Arc::clone(&log_buf);
-            tokio::spawn(async move {
-                let mut lines = BufReader::new(stderr).lines();
-                while let Ok(Some(line)) = lines.next_line().await {
-                    let mut locked = buf.lock().await;
-                    if locked.len() >= max_lines {
-                        locked.pop_front();
-                    }
-                    locked.push_back(line);
-                }
-            });
-        }
-
         info!(plugin_id = %plugin_id, pid = pid, restart_count = restart_count, "plugin spawned");
         self.entries.insert(
             plugin_id.clone(),
@@ -302,6 +371,7 @@ impl PluginSupervisor {
                 config,
                 restart_count,
                 pid,
+                shim_pid,
             },
         );
 
@@ -311,9 +381,29 @@ impl PluginSupervisor {
         let cgroup_for_cleanup = cgroup_path.clone();
         tokio::spawn(async move {
             let status = child.wait().await;
+            // orphan-gap sweep before cleanup: a shim killed outright
+            // (watchdog SIGKILL, SIGKILL deadline) never reaps the plugin, so
+            // its death signal may never have been delivered — a still-living
+            // plugin would keep the scope populated and the rmdir below fail
+            if shim_pid.is_some() {
+                use nix::sys::signal::{kill, Signal};
+                use nix::unistd::Pid;
+                if kill(Pid::from_raw(pid as i32), None).is_ok() {
+                    let _ = kill(Pid::from_raw(pid as i32), Signal::SIGKILL);
+                }
+            }
             #[cfg(target_os = "linux")]
             if let Some(cg) = cgroup_for_cleanup {
-                crate::plugins::runner::cleanup_pids_cgroup(&cg);
+                // a just-SIGKILLed zombie takes a beat to leave the cgroup;
+                // retry briefly instead of leaking the scope dir. a fresh
+                // spawn of the same plugin id reuses the scope either way
+                for _ in 0..10 {
+                    crate::plugins::runner::cleanup_pids_cgroup(&cg);
+                    if !cg.exists() {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
             }
             let success = status.map(|s| s.success()).unwrap_or(false);
             let _ = tx
@@ -335,7 +425,7 @@ impl PluginSupervisor {
 
         // Explicit stop overrides any pending manual restart.
         self.forced_restarts.remove(plugin_id);
-        let pid = nix::unistd::Pid::from_raw(entry.1.pid as i32);
+        let pid = nix::unistd::Pid::from_raw(entry.1.signal_target());
         let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGTERM);
         Ok(())
     }
@@ -344,15 +434,17 @@ impl PluginSupervisor {
     // Marks the plugin for forced restart so it respawns even under a Never /
     // OnFailure policy or after max_restarts — a manual restart overrides policy.
     pub async fn restart_plugin(&self, plugin_id: &str) -> Result<(), VeyronError> {
-        let pid = self
+        let target = self
             .entries
             .get(plugin_id)
-            .map(|e| e.pid)
+            .map(|e| e.signal_target())
             .ok_or_else(|| VeyronError::PluginNotFound(plugin_id.to_string()))?;
 
         self.forced_restarts.insert(plugin_id.to_string(), ());
-        let nix_pid = nix::unistd::Pid::from_raw(pid as i32);
-        let _ = nix::sys::signal::kill(nix_pid, nix::sys::signal::Signal::SIGTERM);
+        let _ = nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(target),
+            nix::sys::signal::Signal::SIGTERM,
+        );
         Ok(())
     }
 
@@ -386,7 +478,7 @@ impl PluginSupervisor {
         }
 
         for entry in self.entries.iter() {
-            let pid = nix::unistd::Pid::from_raw(entry.value().pid as i32);
+            let pid = nix::unistd::Pid::from_raw(entry.value().signal_target());
             let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGTERM);
         }
 
@@ -394,7 +486,7 @@ impl PluginSupervisor {
             .entries
             .iter()
             .map(|entry| {
-                let pid = entry.value().pid;
+                let target = entry.value().signal_target();
                 let grace = entry.value().config.grace_seconds;
                 let grace = if grace > 0 {
                     grace
@@ -403,8 +495,10 @@ impl PluginSupervisor {
                 };
                 tokio::spawn(async move {
                     tokio::time::sleep(Duration::from_secs(grace as u64)).await;
-                    let pid = nix::unistd::Pid::from_raw(pid as i32);
-                    let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGKILL);
+                    let _ = nix::sys::signal::kill(
+                        nix::unistd::Pid::from_raw(target),
+                        nix::sys::signal::Signal::SIGKILL,
+                    );
                 })
             })
             .collect();
@@ -504,14 +598,15 @@ impl PluginSupervisor {
         loop {
             tokio::time::sleep(interval).await;
 
-            let supervised: Vec<(String, u32)> = self
+            let supervised: Vec<(String, u32, Option<u32>)> = self
                 .entries
                 .iter()
-                .map(|e| (e.key().clone(), e.value().pid))
+                .map(|e| (e.key().clone(), e.value().pid, e.value().shim_pid))
                 .collect();
 
-            for (plugin_id, pid) in supervised {
+            for (plugin_id, pid, shim_pid) in supervised {
                 // --- T-07: per-plugin resource metrics (Linux only) ---
+                // reads the plugin pid, not the shim's
                 #[cfg(target_os = "linux")]
                 if let Some((cpu, rss)) = proc_resource_usage(pid) {
                     gauge!("veyron_plugin_cpu_seconds_total", "plugin_id" => plugin_id.clone())
@@ -523,8 +618,11 @@ impl PluginSupervisor {
                 if let Some(last_pong) = registry.last_pong(&plugin_id) {
                     if last_pong.elapsed() > deadline {
                         warn!(plugin_id = %plugin_id, "watchdog: plugin unresponsive, sending SIGKILL");
-                        let nix_pid = nix::unistd::Pid::from_raw(pid as i32);
-                        let _ = nix::sys::signal::kill(nix_pid, nix::sys::signal::Signal::SIGKILL);
+                        let target = shim_pid.unwrap_or(pid) as i32;
+                        let _ = nix::sys::signal::kill(
+                            nix::unistd::Pid::from_raw(target),
+                            nix::sys::signal::Signal::SIGKILL,
+                        );
                         // Do NOT reset pong here (VULN-021): the deadline must keep
                         // running so the watchdog can escalate (another SIGKILL) if the
                         // process is stuck in D-state. If the process truly died, the
@@ -569,6 +667,32 @@ impl PluginSupervisor {
             .saturating_mul(1u64 << restart_count.min(8));
         Duration::from_millis(ms.min(self.backoff_max_ms))
     }
+}
+
+/// Binary the supervisor re-execs as the sandbox shim: our own executable
+/// (the hidden `__shim` subcommand), overridable via VEYRON_SHIM_BIN — the
+/// unit-test harness binary does not handle `__shim`.
+fn sandbox_shim_bin() -> PathBuf {
+    std::env::var_os("VEYRON_SHIM_BIN")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::current_exe().unwrap_or_else(|_| PathBuf::from("vyn")))
+}
+
+/// Drain a child stream into the plugin's ring log buffer.
+fn drain_to_log<S>(stream: S, buf: Arc<Mutex<VecDeque<String>>>, max_lines: usize)
+where
+    S: tokio::io::AsyncRead + Unpin + Send + 'static,
+{
+    tokio::spawn(async move {
+        let mut lines = BufReader::new(stream).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            let mut locked = buf.lock().await;
+            if locked.len() >= max_lines {
+                locked.pop_front();
+            }
+            locked.push_back(line);
+        }
+    });
 }
 
 /// Read CPU seconds (user+system) and RSS bytes for a given PID from `/proc`.

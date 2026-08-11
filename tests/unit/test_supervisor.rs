@@ -530,6 +530,11 @@ async fn sandboxed_plugin_still_joins_its_pids_cgroup() {
         return;
     };
 
+    // sandboxed plugins are spawned through `vyn __shim` — the test harness
+    // binary does not implement that subcommand, so point the supervisor at
+    // the real vyn binary instead of current_exe()
+    std::env::set_var("VEYRON_SHIM_BIN", env!("CARGO_BIN_EXE_vyn"));
+
     // The sandbox path needs unprivileged user namespaces; hosts that restrict
     // them (kernel.unprivileged_userns_clone=0) fail the spawn in pre_exec —
     // probe once and skip there so the test is green where sandbox can't work.
@@ -558,6 +563,10 @@ async fn sandboxed_plugin_still_joins_its_pids_cgroup() {
         restart_policy: RestartPolicy::Never,
         max_restarts: 0,
         sandbox: true,
+        // the storm script installs no SIGTERM handler, so the shim must
+        // escalate TERM→SIGKILL on this grace — keep it small so the scope
+        // is removed inside the 3s poll below
+        grace_seconds: 1,
         max_procs: Some(64),
         max_vmem_mb: None,
         ..Default::default()
