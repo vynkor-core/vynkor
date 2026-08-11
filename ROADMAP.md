@@ -216,7 +216,7 @@ visibility/file-system gaps.
     `sandboxed_plugin_still_joins_its_pids_cgroup` (join from inside the
     user namespace), `thread_storm_in_one_plugin_does_not_consume_another_budget`.
 
-- [ ] R9-02 — **PID-namespace isolation via shim supervisor:** the current
+- [x] R9-02 — **PID-namespace isolation via shim supervisor:** the current
       spawn path cannot combine `unshare(CLONE_NEWPID)` with threading —
       the exec'd plugin would inherit a pending `pid_for_children`
       namespace and every thread spawn fails with EINVAL (documented in
@@ -230,6 +230,34 @@ visibility/file-system gaps.
   - Acceptance: a plugin's `/proc` lists only its own tasks; `ps` inside
     the plugin shows one process; supervisor signal/exit forwarding still
     works (restart, SIGTERM shutdown).
+  - Done: `plugins::shim` — a single-threaded re-exec of our own binary
+    (hidden `vyn __shim`, dispatched in `main` before the tokio runtime
+    exists, since `unshare(CLONE_NEWUSER)` fails in a multithreaded
+    process). It nests a user namespace (works without CAP_SYS_ADMIN),
+    unshares `CLONE_NEWPID|CLONE_NEWNS`, makes `/` private (no proc
+    propagation onto the host), remounts a fresh `/proc` bound to the new
+    PID namespace, and forks the plugin as PID 1. A socketpair readiness
+    gate fail-closes the spawn: the supervisor only gets the plugin's host
+    pid after the plugin signalled from inside the sandbox, so a plugin
+    that could not enter the sandbox is killed and never runs unisolated.
+    The shim forwards TERM/INT/HUP and mirrors the exit status (restart and
+    graceful shutdown are unchanged). A handler-less plugin — PID 1 of its
+    namespace — silently drops unhandled signals (`SIGNAL_UNKILLABLE`), so
+    the shim escalates a forwarded TERM/INT/HUP to SIGKILL once the grace
+    period elapses (`VEYRON_SHIM_GRACE_SECS`, default 5s, taken from the
+    plugin's `grace_seconds`); the supervisor's `child.wait()` always
+    returns and the pids scope is reaped. `pdeathsig=SIGKILL` is set on
+    both shim and plugin. The supervisor's wait task runs the orphan-gap
+    sweep *before* `cleanup_pids_cgroup` — a shim killed outright (watchdog
+    SIGKILL, SIGKILL deadline) never reaps the plugin — and retries the
+    rmdir briefly so a just-SIGKILLed zombie cannot leak the scope. All
+    lifecycle signals target the shim (`PluginEntry::signal_target`);
+    watchdog SIGKILL goes to the shim too, which dies and takes the
+    namespace with it. The
+    shim binary is overridable via `VEYRON_SHIM_BIN` (tests). Covered by
+    `tests/integration/test_shim.rs`: `sandboxed_plugin_sees_only_its_own_pid_namespace`,
+    `shim_forwards_sigterm_to_sandboxed_plugin`,
+    `shim_reports_exit_status_for_supervision`.
 
 - [ ] R9-03 — **Filesystem isolation (Landlock LSM first, minimal rootfs
       later):** plugins currently read/write the host filesystem with the
@@ -257,7 +285,7 @@ visibility/file-system gaps.
   - Acceptance: a plugin calling a denied syscall gets `EPERM`/`SIGSYS`;
       all three SDK example plugins still pass their integration tests.
 
-- [ ] R9-05 — **Interim process-visibility hardening (until R9-02):** in a
+- [x] R9-05 — **Interim process-visibility hardening (until R9-02):** in a
       new mount namespace (`CLONE_NEWNS`, permitted inside the userns),
       remount `/proc` with `hidepid=2` so plugins cannot read other
       processes' cmdlines/environ while the shared-PID-space limitation is
@@ -265,8 +293,12 @@ visibility/file-system gaps.
   - Files: `src/plugins/runner.rs`.
   - Acceptance: `/proc/<other-pid>/` resolves to ENOENT for non-namespace
       processes; plugin functionality unaffected.
+  - Superseded by R9-02: sandboxed plugins now live in a private PID
+      namespace with a fresh `/proc` bound to it — host processes are not
+      enumerable at all, which is strictly stronger than `hidepid=2`. No
+      interim work landed; the item is closed with R9-02.
 
-- [ ] R9-06 — **Docs: fix stale isolation references + record exact rlimit
+- [x] R9-06 — **Docs: fix stale isolation references + record exact rlimit
       semantics:** README §5's "tracked in `AUDIT.md`" for the shim
       supervisor is stale — the item lives here (Phase 9), fix the pointer.
       Document that `max_procs` is a *shared real-uid* budget, not
@@ -279,6 +311,13 @@ visibility/file-system gaps.
     `config.yaml` (Veyron repo) `max_procs` comment.
   - Acceptance: no stale `AUDIT.md` pointers; README accurately states
     what the sandbox does and does not isolate today.
+  - Done: README §5 rewritten — the `AUDIT.md` pointer is gone, the
+    sandbox's isolation (user + network + PID + mount namespaces, fresh
+    `/proc`, `pids.max` accounting, RLIMIT caps) and its non-goals
+    (no file-access restriction — R9-03, no seccomp — R9-04) match the
+    code. `max_procs` semantics are documented on `PluginConfig` in
+    `src/plugins/supervisor.rs` (shared real-uid budget at clone time,
+    per-plugin when a `pids` cgroup scope is writable — R9-01).
 
 ---
 
