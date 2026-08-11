@@ -43,8 +43,12 @@ fn vendored_proto_copies_are_byte_identical() {
 fn generated_python_binding_is_not_stale() {
     let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let pb2_path = repo_root.join("sdk/python/veyron/veyron_protocol_pb2.py");
-    let source = fs::read_to_string(&pb2_path)
-        .unwrap_or_else(|e| panic!("failed to read generated binding {}: {e}", pb2_path.display()));
+    let source = fs::read_to_string(&pb2_path).unwrap_or_else(|e| {
+        panic!(
+            "failed to read generated binding {}: {e}",
+            pb2_path.display()
+        )
+    });
 
     // PERMISSION_STORAGE=14 and PERMISSION_EVENT_PUBLISH=13 must be present in
     // the enum; the proto stores them verbatim in the serialized descriptor.

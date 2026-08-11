@@ -1,5 +1,6 @@
 use serde::Deserialize;
 use std::path::PathBuf;
+use tracing::warn;
 
 /// One plugin entry in the `plugins:` list in config.yaml.
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -319,7 +320,35 @@ pub fn load_config(path: &str) -> anyhow::Result<Config> {
     let content = std::fs::read_to_string(path)?;
     let mut config: Config = serde_yaml::from_str(&content)?;
     config.config_file = Some(path.to_string());
+    clamp_invalid_numerics(&mut config);
     Ok(config)
+}
+
+/// Zero is never a valid value for these fields — a hand-edited config that
+/// ships `0` (or a legacy config that relied on "0 = default") would otherwise
+/// silently disable the IPC channel / watchdog. Clamp to the defaults with a
+/// warning instead of failing the whole load (N3).
+fn clamp_invalid_numerics(config: &mut Config) {
+    if config.router_channel_capacity == 0 {
+        let d = default_router_channel_capacity();
+        warn!("router_channel_capacity: 0 is invalid, clamping to default ({d})");
+        config.router_channel_capacity = d;
+    }
+    if config.max_connections == 0 {
+        let d = default_max_connections();
+        warn!("max_connections: 0 is invalid, clamping to default ({d})");
+        config.max_connections = d;
+    }
+    if config.watchdog_interval_secs == 0 {
+        let d = default_watchdog_interval();
+        warn!("watchdog_interval_secs: 0 is invalid, clamping to default ({d})");
+        config.watchdog_interval_secs = d;
+    }
+    if config.watchdog_timeout_secs == 0 {
+        let d = default_watchdog_timeout();
+        warn!("watchdog_timeout_secs: 0 is invalid, clamping to default ({d})");
+        config.watchdog_timeout_secs = d;
+    }
 }
 
 #[cfg(test)]
@@ -368,5 +397,52 @@ mod tests {
                 "log file must not default into /tmp (AUDIT M-09)"
             );
         });
+    }
+
+    fn write_minimal_config(dir: &tempfile::TempDir, extras: &str) -> String {
+        let path = dir.path().join("config.yaml");
+        let yaml = format!("port: 8000\nlog_level: info\ndata_dir: /tmp/veyron-test\n{extras}");
+        std::fs::write(&path, yaml).unwrap();
+        path.display().to_string()
+    }
+
+    // Zero would silently disable the IPC channel / watchdog — load_config must
+    // clamp it back to the documented defaults (N3).
+    #[test]
+    fn load_config_clamps_zero_numerics_to_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_minimal_config(
+            &dir,
+            "router_channel_capacity: 0\n\
+             max_connections: 0\n\
+             watchdog_interval_secs: 0\n\
+             watchdog_timeout_secs: 0\n",
+        );
+        let config = load_config(&path).unwrap();
+        assert_eq!(
+            config.router_channel_capacity,
+            default_router_channel_capacity()
+        );
+        assert_eq!(config.max_connections, default_max_connections());
+        assert_eq!(config.watchdog_interval_secs, default_watchdog_interval());
+        assert_eq!(config.watchdog_timeout_secs, default_watchdog_timeout());
+    }
+
+    // Sane non-zero values must pass through untouched.
+    #[test]
+    fn load_config_preserves_sane_numerics() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_minimal_config(
+            &dir,
+            "router_channel_capacity: 2048\n\
+             max_connections: 4096\n\
+             watchdog_interval_secs: 60\n\
+             watchdog_timeout_secs: 15\n",
+        );
+        let config = load_config(&path).unwrap();
+        assert_eq!(config.router_channel_capacity, 2048);
+        assert_eq!(config.max_connections, 4096);
+        assert_eq!(config.watchdog_interval_secs, 60);
+        assert_eq!(config.watchdog_timeout_secs, 15);
     }
 }

@@ -1,3 +1,4 @@
+use crate::auth::permissions::normalize_permission;
 use crate::events::bus::EventBus;
 use crate::marketplace::installer::{validate_manifest, InstallManifest};
 use crate::plugins::manager::PluginManager;
@@ -244,9 +245,15 @@ pub fn validate_plugin_def(def: &PluginDef) -> Result<Option<InstallManifest>, V
 
     // Cross-check manifest permissions against config-granted permissions.
     // An empty def.permissions list means the operator placed no restrictions.
+    // Normalize both sides (N2): config.yaml may list the lowercase form while
+    // plugin.json declares the PERMISSION_* proto name.
     if !def.permissions.is_empty() {
         for perm in &manifest.permissions {
-            if !def.permissions.contains(perm) {
+            if !def
+                .permissions
+                .iter()
+                .any(|g| normalize_permission(g) == normalize_permission(perm))
+            {
                 return Err(VeyronError::PermissionDenied(format!(
                     "Plugin '{}' requests permission '{}' which is not granted in config",
                     def.id, perm

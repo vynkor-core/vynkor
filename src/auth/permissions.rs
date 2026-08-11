@@ -17,8 +17,10 @@ pub fn required_permission_for_action(action: &str) -> Option<PermissionType> {
 }
 
 // lowercases and strips the PERMISSION_ prefix so manifests can declare either
-// the documented lowercase form (network) or the proto name (PERMISSION_NETWORK)
-fn normalize_permission(s: &str) -> String {
+// the documented lowercase form (network) or the proto name (PERMISSION_NETWORK).
+// pub(crate): config-time comparisons (T-04 clamp, validate_plugin_def) must
+// normalize the same way runtime check_permission does (N2).
+pub(crate) fn normalize_permission(s: &str) -> String {
     s.strip_prefix("PERMISSION_")
         .unwrap_or(s)
         .to_ascii_lowercase()

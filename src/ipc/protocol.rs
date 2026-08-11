@@ -1,6 +1,7 @@
 use crate::auth::jwt::JwtValidator;
 use crate::auth::permissions::{
-    check_ipc_send, check_ipc_target, check_permission, required_permission_for_action,
+    check_ipc_send, check_ipc_target, check_permission, normalize_permission,
+    required_permission_for_action,
 };
 use crate::events::bus::EventBus;
 use crate::events::store::EventStore;
@@ -17,7 +18,7 @@ use crate::proto::veyron::{
 use governor::{DefaultKeyedRateLimiter, Quota, RateLimiter};
 use metrics::{counter, histogram};
 use prost::Message;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -332,8 +333,14 @@ impl MessageRouter {
                 // same convention as `validate_plugin_def`.
                 if let Some(allowed) = config_permissions.and_then(|m| m.get(&plugin_id)) {
                     if !allowed.is_empty() {
+                        // normalize both sides (N2): config.yaml may list the
+                        // lowercase form while the token claims PERMISSION_* names
+                        let allowed_norm: HashSet<String> =
+                            allowed.iter().map(|a| normalize_permission(a)).collect();
                         let before = manifest.permissions.len();
-                        manifest.permissions.retain(|p| allowed.contains(p));
+                        manifest
+                            .permissions
+                            .retain(|p| allowed_norm.contains(&normalize_permission(p)));
                         if manifest.permissions.len() < before {
                             warn!(
                                 plugin_id = %plugin_id,
