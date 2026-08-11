@@ -4,26 +4,10 @@
 **/*.rs.bk
 fuzz/corpus/*
 fuzz/Cargo.lock
-examples/*/Cargo.lock
-# c++
-build/
-bin/
-obj/
-*.o
-*.a
-*.so
-*.dylib
-*.dll
-*.exe
-# cmake
-CMakeFiles/
-CMakeCache.txt
-cmake_install.cmake
-Makefile
-compile_commands.json
 
-#python
-__pycache__
+# python
+__pycache__/
+.pytest_cache/
 
 # ide
 .idea/
@@ -42,7 +26,7 @@ Thumbs.db
 .claudeignore
 .skills/
 skill/
-docs/superpowers/
+
 # env
 .env
 .env.*
@@ -58,7 +42,3 @@ data/tmp/
 *.socket
 .worktrees/
 .cargo/
-
-# native demo stack scratch (built/installed at demo/run.sh time)
-demo/.run/
-demo/

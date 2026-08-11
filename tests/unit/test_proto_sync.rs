@@ -1,8 +1,9 @@
 use std::fs;
 
 // R8-05: the vendored proto copies must stay byte-identical to the wire source
-// of truth. `wire/proto/veyron_protocol.proto` is the canonical message schema
-// for plugin<->kernel IPC; sdk/python/, sdk/cpp/ each vendor a copy so their
+// of truth. `../veyron-wire/proto/veyron_protocol.proto` (sibling repo
+// veyron-core/veyron-wire) is the canonical message schema for plugin<->kernel
+// IPC; ../veyron-sdk-python/, ../veyron-sdk-cpp/ each vendor a copy so their
 // build.rs can generate bindings offline. Drift here means the SDKs speak a
 // different protocol than the kernel — wire it into the test suite so a one-off
 // edit to a single copy fails loudly.
@@ -10,9 +11,9 @@ use std::fs;
 fn vendored_proto_copies_are_byte_identical() {
     let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let copies = [
-        "wire/proto/veyron_protocol.proto",
-        "sdk/python/proto/veyron_protocol.proto",
-        "sdk/cpp/proto/veyron_protocol.proto",
+        "../veyron-wire/proto/veyron_protocol.proto",
+        "../veyron-sdk-python/proto/veyron_protocol.proto",
+        "../veyron-sdk-cpp/proto/veyron_protocol.proto",
     ];
 
     let contents: Vec<(String, Vec<u8>)> = copies
@@ -33,16 +34,16 @@ fn vendored_proto_copies_are_byte_identical() {
     }
 }
 
-// R8-05 follow-up: the generated Python binding (sdk/python/veyron/
+// R8-05 follow-up: the generated Python binding (../veyron-sdk-python/veyron/
 // veyron_protocol_pb2.py) must reflect the same wire schema. It is produced by
-// scripts/gen_proto_python.py from wire/proto/veyron_protocol.proto and is
-// committed, but nothing guarded it against going stale when the proto grew
-// (PERMISSION_STORAGE, ActionRequest.caller_plugin_id were missing). Marker
+// scripts/gen_proto_python.py from ../veyron-wire/proto/veyron_protocol.proto
+// and is committed, but nothing guarded it against going stale when the proto
+// grew (PERMISSION_STORAGE, ActionRequest.caller_plugin_id were missing). Marker
 // check: when the proto adds a symbol, the regeneration step must run too.
 #[test]
 fn generated_python_binding_is_not_stale() {
     let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let pb2_path = repo_root.join("sdk/python/veyron/veyron_protocol_pb2.py");
+    let pb2_path = repo_root.join("../veyron-sdk-python/veyron/veyron_protocol_pb2.py");
     let source = fs::read_to_string(&pb2_path).unwrap_or_else(|e| {
         panic!(
             "failed to read generated binding {}: {e}",

@@ -6,7 +6,7 @@ import sys
 
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../sdk/python"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../../veyron-sdk-python"))
 
 from veyron.framing import (
     FLAG_MAC_PRESENT,
@@ -131,7 +131,7 @@ def test_async_read_frame_mac_verifies():
 def test_client_derive_session_key_after_mock_ack():
     """Client correctly derives session_key from a mock PluginRegisterAck."""
     import sys, os
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../sdk/python"))
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../../veyron-sdk-python"))
     from veyron.client import VeyronClient
     from veyron.veyron_protocol_pb2 import Envelope, PluginRegisterAck
 

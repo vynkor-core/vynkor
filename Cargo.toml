@@ -20,7 +20,7 @@ name = "integration"
 path = "tests/integration/mod.rs"
 
 [dependencies]
-veyron-wire = { path = "wire", version = "0.2.0" }
+veyron-wire = "0.2.0"
 tokio = { version = "1", features = ["full"] }
 
 axum = { version = "0.8", features = ["ws"] }
@@ -77,7 +77,7 @@ otel = ["tracing-opentelemetry", "opentelemetry", "opentelemetry_sdk", "opentele
 tokio = { version = "1", features = ["test-util"] }
 clap_complete = "4"
 crc32fast = "1"
-veyron-sdk = { path = "sdk/rust" }
+veyron-sdk = "0.1.2"
 tower = "0.5"
 tokio-tungstenite = "0.24"
 futures-util = "0.3"

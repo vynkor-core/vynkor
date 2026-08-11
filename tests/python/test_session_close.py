@@ -8,7 +8,7 @@ import sys
 
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../sdk/python"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../../veyron-sdk-python"))
 
 from veyron import VeyronClient
 from veyron.framing import pack_frame

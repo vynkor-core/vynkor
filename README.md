@@ -171,11 +171,11 @@ impl Plugin for MyPlugin {
 // MyPlugin.run().await connects via $VEYRON_SOCKET_PATH and registers.
 ```
 
-SDKs available: `sdk/rust/`, `sdk/cpp/`, `sdk/python/` — all three support
-`send_action`, streaming actions (`send_action_streaming` +
-request/response chunks), `close_session`, and `publish_event`. See
-`examples/echo_plugin_rs/`, `sdk/cpp/examples/echo_plugin.cpp`,
-`sdk/python/examples/echo_plugin.py`.
+SDKs available: [`veyron-sdk-rust`](https://github.com/veyron-core/veyron-sdk-rust),
+[`veyron-sdk-cpp`](https://github.com/veyron-core/veyron-sdk-cpp), and
+[`veyron-sdk-python`](https://github.com/veyron-core/veyron-sdk-python) — all
+three support `send_action`, streaming actions (`send_action_streaming` +
+request/response chunks), `close_session`, and `publish_event`.
 
 Published packages:
 
@@ -207,11 +207,6 @@ src/
 
 proto/
 └── veyron_protocol.proto   # Single source of truth for all IPC message types
-
-sdk/
-├── rust/           # veyron-sdk crate
-├── cpp/            # C++ SDK
-└── python/         # Python SDK
 ```
 
 ---

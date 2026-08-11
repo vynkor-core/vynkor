@@ -1,10 +1,13 @@
 /// C++ SDK integration tests.
 ///
-/// These tests spawn the real `echo_plugin` binary built from `sdk/cpp/examples/echo_plugin.cpp`
-/// against `sdk/cpp/src/*` (framing, MAC, client) via CMake, and verify the kernel routes
-/// messages to it over the actual C++ wire implementation. CI builds this binary before
-/// running `cargo test` (see `.github/workflows/ci.yml`, job `cpp-sdk`). Tests are skipped
-/// locally when the binary has not been built — see `sdk/cpp/README.md` for build steps.
+/// These tests spawn the real `echo_plugin` binary built from
+/// `../veyron-sdk-cpp/examples/echo_plugin.cpp` (sibling repo
+/// veyron-core/veyron-sdk-cpp, not a submodule) against `../veyron-sdk-cpp/src/*`
+/// (framing, MAC, client) via CMake, and verify the kernel routes
+/// messages to it over the actual C++ wire implementation. CI checks out the
+/// sibling repo before running `cargo test` (see `.github/workflows/ci.yml`).
+/// Tests are skipped locally when the binary has not been built — see
+/// `../veyron-sdk-cpp/README.md` for build steps.
 use std::collections::HashMap;
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -21,8 +24,8 @@ fn echo_plugin_binary() -> Option<std::path::PathBuf> {
     }
     let cwd = std::env::current_dir().ok()?;
     [
-        "sdk/cpp/build/echo_plugin",
-        "sdk/cpp/build/examples/echo_plugin",
+        "../veyron-sdk-cpp/build/echo_plugin",
+        "../veyron-sdk-cpp/build/examples/echo_plugin",
     ]
     .into_iter()
     .map(|rel| cwd.join(rel))
@@ -34,8 +37,8 @@ fn echo_plugin_binary() -> Option<std::path::PathBuf> {
 async fn cpp_sdk_echo_plugin_round_trip() {
     let Some(bin) = echo_plugin_binary() else {
         eprintln!(
-            "[SKIP] C++ echo_plugin binary not found — build via `cmake -B sdk/cpp/build -S sdk/cpp \
-             && cmake --build sdk/cpp/build --target echo_plugin` (see sdk/cpp/README.md), \
+            "[SKIP] C++ echo_plugin binary not found — build via `cmake -B ../veyron-sdk-cpp/build -S ../veyron-sdk-cpp \
+             && cmake --build ../veyron-sdk-cpp/build --target echo_plugin` (see ../veyron-sdk-cpp/README.md), \
              or set VEYRON_CPP_ECHO_PLUGIN to an existing binary path"
         );
         return;
@@ -116,8 +119,8 @@ async fn cpp_sdk_echo_plugin_round_trip() {
 async fn cpp_sdk_streaming_action_round_trip() {
     let Some(bin) = echo_plugin_binary() else {
         eprintln!(
-            "[SKIP] C++ echo_plugin binary not found — build via `cmake -B sdk/cpp/build -S sdk/cpp \
-             && cmake --build sdk/cpp/build --target echo_plugin` (see sdk/cpp/README.md), \
+            "[SKIP] C++ echo_plugin binary not found — build via `cmake -B ../veyron-sdk-cpp/build -S ../veyron-sdk-cpp \
+             && cmake --build ../veyron-sdk-cpp/build --target echo_plugin` (see ../veyron-sdk-cpp/README.md), \
              or set VEYRON_CPP_ECHO_PLUGIN to an existing binary path"
         );
         return;
@@ -216,8 +219,8 @@ async fn cpp_sdk_streaming_action_round_trip() {
 async fn cpp_sdk_publish_event_from_plugin() {
     let Some(bin) = echo_plugin_binary() else {
         eprintln!(
-            "[SKIP] C++ echo_plugin binary not found — build via `cmake -B sdk/cpp/build -S sdk/cpp \
-             && cmake --build sdk/cpp/build --target echo_plugin` (see sdk/cpp/README.md), \
+            "[SKIP] C++ echo_plugin binary not found — build via `cmake -B ../veyron-sdk-cpp/build -S ../veyron-sdk-cpp \
+             && cmake --build ../veyron-sdk-cpp/build --target echo_plugin` (see ../veyron-sdk-cpp/README.md), \
              or set VEYRON_CPP_ECHO_PLUGIN to an existing binary path"
         );
         return;
@@ -315,8 +318,8 @@ async fn cpp_sdk_publish_event_from_plugin() {
 async fn cpp_sdk_session_close_dispatch() {
     let Some(bin) = echo_plugin_binary() else {
         eprintln!(
-            "[SKIP] C++ echo_plugin binary not found — build via `cmake -B sdk/cpp/build -S sdk/cpp \
-             && cmake --build sdk/cpp/build --target echo_plugin` (see sdk/cpp/README.md), \
+            "[SKIP] C++ echo_plugin binary not found — build via `cmake -B ../veyron-sdk-cpp/build -S ../veyron-sdk-cpp \
+             && cmake --build ../veyron-sdk-cpp/build --target echo_plugin` (see ../veyron-sdk-cpp/README.md), \
              or set VEYRON_CPP_ECHO_PLUGIN to an existing binary path"
         );
         return;

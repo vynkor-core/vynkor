@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Generate Python protobuf bindings from wire/proto/veyron_protocol.proto."""
+"""Generate Python protobuf bindings from ../veyron-wire/proto/veyron_protocol.proto."""
 import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
-PROTO_DIR = ROOT / "wire" / "proto"
+PROTO_DIR = ROOT.parent / "veyron-wire" / "proto"
 PROTO = PROTO_DIR / "veyron_protocol.proto"
-OUT = ROOT / "sdk" / "python" / "veyron"
+OUT = ROOT.parent / "veyron-sdk-python" / "veyron"
 
 if __name__ == "__main__":
     OUT.mkdir(parents=True, exist_ok=True)
