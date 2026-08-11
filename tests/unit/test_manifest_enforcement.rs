@@ -212,3 +212,46 @@ async fn invalid_plugin_skipped_valid_loads() {
 
     manager.stop("good-plugin").await.ok();
 }
+
+// Unit test (N2): config.yaml lowercase form satisfies a manifest declaring the
+// PERMISSION_* proto name; a genuinely un-granted permission is still refused.
+#[test]
+fn config_lowercase_perm_matches_manifest_proto_form() {
+    let tmp = tempdir().unwrap();
+    write_manifest(
+        tmp.path(),
+        r#"{
+            "plugin_id": "cross-form-plugin",
+            "version": "1.0.0",
+            "permissions": ["PERMISSION_NETWORK"],
+            "binary": "cross-form-plugin",
+            "kernel_compatibility_range": {"min": "0.1.0", "max": "*"}
+        }"#,
+    );
+    let binary_path = tmp.path().join("cross-form-plugin").display().to_string();
+    let mut def = def_with_binary("cross-form-plugin", &binary_path);
+    // operator grants the documented lowercase form only
+    def.permissions = vec!["network".to_string()];
+    assert!(
+        validate_plugin_def(&def).is_ok(),
+        "lowercase config form must satisfy the PERMISSION_ prefix manifest form (N2)"
+    );
+
+    // negative control: a permission outside the grant is still refused
+    write_manifest(
+        tmp.path(),
+        r#"{
+            "plugin_id": "cross-form-plugin",
+            "version": "1.0.0",
+            "permissions": ["PERMISSION_KERNEL_ADMIN"],
+            "binary": "cross-form-plugin",
+            "kernel_compatibility_range": {"min": "0.1.0", "max": "*"}
+        }"#,
+    );
+    let err = validate_plugin_def(&def).unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("PERMISSION_KERNEL_ADMIN") && msg.contains("not granted in config"),
+        "expected permission denied, got: {msg}"
+    );
+}

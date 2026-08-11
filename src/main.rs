@@ -211,6 +211,18 @@ fn stop_kernel(pid_file: &std::path::Path) -> Result<()> {
 }
 
 fn daemonize_and_run(cfg: &Config, config_path: &str, debug: bool) -> Result<()> {
+    use std::io::Read;
+    use std::os::unix::io::AsRawFd;
+    use std::os::unix::net::UnixStream;
+    use std::os::unix::process::CommandExt;
+
+    // Readiness handshake (N4): the child signals over this pipe only after it
+    // holds the exclusive pid-file flock. Without it the parent published the
+    // PID before the child even started, so `vyn status` could report "running"
+    // for a kernel that then aborted on the lock.
+    let (mut ready_rx, ready_tx) = UnixStream::pair()?;
+    let ready_fd = ready_tx.as_raw_fd();
+
     let current_exe = std::env::current_exe()?;
     let mut command = Command::new(&current_exe);
     command
@@ -219,20 +231,91 @@ fn daemonize_and_run(cfg: &Config, config_path: &str, debug: bool) -> Result<()>
         .arg("--config")
         .arg(config_path)
         .arg("--port")
-        .arg(cfg.port.to_string());
+        .arg(cfg.port.to_string())
+        .env("VEYRON_READY_FD", ready_fd.to_string());
     if debug {
         command.arg("--debug");
+    }
+    unsafe {
+        // keep the ready pipe open across exec in the child
+        command.pre_exec(move || {
+            let fd = std::os::fd::BorrowedFd::borrow_raw(ready_fd);
+            let flags =
+                nix::fcntl::fcntl(fd, nix::fcntl::FcntlArg::F_GETFD).map_err(nix_err_to_io)?;
+            nix::fcntl::fcntl(
+                fd,
+                nix::fcntl::FcntlArg::F_SETFD(
+                    nix::fcntl::FdFlag::from_bits_truncate(flags) & !nix::fcntl::FdFlag::FD_CLOEXEC,
+                ),
+            )
+            .map_err(nix_err_to_io)?;
+            Ok(())
+        });
     }
     // One open file shared (dup) across stdout+stderr so the two streams share a
     // single write offset and interleave correctly. Two separate File::create
     // handles would each start at offset 0 and clobber each other's output.
     let log = std::fs::File::create(&cfg.log_file)?;
     let log_err = log.try_clone()?;
-    let child = command.stdout(log).stderr(log_err).spawn()?;
+    let mut child = command.stdout(log).stderr(log_err).spawn()?;
+    // parent no longer needs its copy; EOF on ready_rx now means the child is gone
+    drop(ready_tx);
+
+    // A healthy child reaches the pid-file write in well under a second.
+    ready_rx.set_read_timeout(Some(std::time::Duration::from_secs(10)))?;
+    let mut buf = [0u8; 64];
+    let mut line = String::new();
+    let pid_line = loop {
+        match ready_rx.read(&mut buf) {
+            Ok(0) => {
+                break Err(anyhow::anyhow!(
+                    "kernel child exited before signaling readiness"
+                ))
+            }
+            Ok(n) => {
+                line.push_str(&String::from_utf8_lossy(&buf[..n]));
+                if line.contains('\n') {
+                    break Ok(line);
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                break Err(anyhow::anyhow!(
+                    "kernel child did not signal readiness within 10s"
+                ))
+            }
+            Err(e) => break Err(anyhow::anyhow!("readiness pipe error: {e}")),
+        }
+    };
+
     let pid = child.id() as i32;
-    write_pid(&cfg.pid_file, pid)?;
-    info!("kernel started in background with PID {}", pid);
-    Ok(())
+    match pid_line {
+        Ok(line) => {
+            let child_pid = line.trim().parse::<i32>().map_err(|_| {
+                anyhow::anyhow!("corrupt readiness line from kernel child: {line:?}")
+            })?;
+            if child_pid != pid {
+                anyhow::bail!("readiness pid {child_pid} does not match child pid {pid}");
+            }
+            write_pid(&cfg.pid_file, pid)?;
+            info!("kernel started in background with PID {}", pid);
+            Ok(())
+        }
+        Err(e) => {
+            // reap the failed child so it does not linger as a zombie, and drop
+            // any pid file it managed to write before dying
+            let _ = nix::sys::signal::kill(
+                nix::unistd::Pid::from_raw(pid),
+                nix::sys::signal::Signal::SIGKILL,
+            );
+            let _ = child.wait();
+            let _ = fs::remove_file(&cfg.pid_file);
+            Err(anyhow::anyhow!("kernel failed to start in background: {e}"))
+        }
+    }
+}
+
+fn nix_err_to_io(e: nix::errno::Errno) -> std::io::Error {
+    std::io::Error::from_raw_os_error(e as i32)
 }
 
 async fn run_foreground(cfg: Config) -> Result<()> {
@@ -255,6 +338,18 @@ async fn run_foreground(cfg: Config) -> Result<()> {
 
     let pid = std::process::id() as i32;
     fs::write(&cfg.pid_file, pid.to_string())?;
+    // N4: the daemon parent waits on this line before publishing the pid file,
+    // so it must come only after the flock + pid write above are done. Unset in
+    // plain foreground runs (vyn start --foreground in a shell) — no-op there.
+    if let Ok(fd) = std::env::var("VEYRON_READY_FD") {
+        if let Ok(fd) = fd.parse::<std::os::unix::io::RawFd>() {
+            use std::io::Write;
+            use std::os::unix::io::FromRawFd;
+            let mut pipe = unsafe { std::fs::File::from_raw_fd(fd) };
+            let _ = pipe.write_all(format!("{pid}\n").as_bytes());
+            // drop closes the fd; the parent sees EOF only after the line
+        }
+    }
     info!("veyron starting in foreground (port {})", cfg.port);
     let pid_file = cfg.pid_file.clone();
     kernel::Kernel::run(cfg).await?;

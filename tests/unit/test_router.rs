@@ -949,17 +949,33 @@ async fn registration_clamps_jwt_permissions_to_config_allowlist() {
     let reg = Arc::new(PluginRegistry::new());
     let bus = Arc::new(EventBus::new());
     let mut config_permissions = std::collections::HashMap::new();
+    // N2: both the exact proto form and the lowercase documented form must
+    // match a token claiming PERMISSION_NETWORK.
     config_permissions.insert(
         "net-plugin".to_string(),
         vec!["PERMISSION_NETWORK".to_string()],
     );
+    config_permissions.insert("net-plugin-lower".to_string(), vec!["network".to_string()]);
     let router_tx =
         spawn_router_with_jwt_and_config_perms(Arc::clone(&reg), bus, config_permissions);
 
-    let (write_tx, mut write_rx) = make_write_pair();
     // Token claims kernel_admin too, but config.yaml only grants network.
+    register_and_assert_clamped(&router_tx, 1, "net-plugin").await;
+    // lowercase config form clamps the same way (failed before N2)
+    register_and_assert_clamped(&router_tx, 2, "net-plugin-lower").await;
+}
+
+/// Register `plugin_id` on `conn_id` with a token claiming
+/// PERMISSION_NETWORK + PERMISSION_KERNEL_ADMIN and assert the ack clamps the
+/// grant to PERMISSION_NETWORK.
+async fn register_and_assert_clamped(
+    router_tx: &mpsc::Sender<IncomingMessage>,
+    conn_id: u64,
+    plugin_id: &str,
+) {
+    let (write_tx, mut write_rx) = make_write_pair();
     let token = crate::jwt_helper::create_test_token(
-        "net-plugin",
+        plugin_id,
         vec![
             "PERMISSION_NETWORK".to_string(),
             "PERMISSION_KERNEL_ADMIN".to_string(),
@@ -969,7 +985,7 @@ async fn registration_clamps_jwt_permissions_to_config_allowlist() {
     );
     let env = Envelope {
         payload: Some(envelope::Payload::PluginRegister(PluginRegister {
-            plugin_id: "net-plugin".to_string(),
+            plugin_id: plugin_id.to_string(),
             jwt_token: token,
             manifest: Some(dummy_manifest()),
             ..Default::default()
@@ -978,7 +994,7 @@ async fn registration_clamps_jwt_permissions_to_config_allowlist() {
     };
 
     router_tx
-        .send(incoming(1, kernel_frame(env), write_tx))
+        .send(incoming(conn_id, kernel_frame(env), write_tx))
         .await
         .unwrap();
 
@@ -1210,4 +1226,89 @@ async fn broadcast_to_many_stuck_targets_does_not_multiply_delay() {
         "broadcast to 5 stuck subscribers must not cost 5 * 50ms, took {:?}",
         elapsed
     );
+}
+
+// N1 regression: forward() must share the payload allocation, not deep-copy it.
+// Frame.payload is Arc<[u8]> (wire v0.2.0); a per-hop Vec copy would make large
+// plugin-to-plugin messages O(n) at every hop.
+#[tokio::test]
+async fn forward_shares_payload_without_copy() {
+    let reg = Arc::new(PluginRegistry::new());
+    let bus = Arc::new(EventBus::new());
+
+    let (b_write_tx, mut b_write_rx) = make_write_pair();
+    reg.register("plugin_b".to_string(), 2, dummy_manifest(), b_write_tx)
+        .unwrap();
+
+    let (a_write_tx, _a_write_rx) = make_write_pair();
+    reg.register(
+        "plugin_a".to_string(),
+        1,
+        ipc_manifest_with_targets(vec!["plugin_b"]),
+        a_write_tx.clone(),
+    )
+    .unwrap();
+
+    let router_tx = spawn_router(Arc::clone(&reg), bus);
+
+    // 64 KiB — large enough that a deep copy would dominate the routing cost
+    let original: Arc<[u8]> = vec![0xABu8; 64 * 1024].into();
+    let mut frame = make_frame("plugin_b", Vec::new());
+    frame.payload = original.clone();
+    frame.length = original.len() as u32;
+    frame.crc32 = crc32fast::hash(&original);
+
+    router_tx
+        .send(incoming(1, frame, a_write_tx))
+        .await
+        .unwrap();
+
+    let received = recv_frame(&mut b_write_rx).await;
+    assert!(
+        Arc::ptr_eq(&original, &received.payload),
+        "forward() must share the payload Arc, not deep-copy it (N1)"
+    );
+    assert_eq!(&*received.payload, &*original);
+}
+
+// N1 regression (broadcast side): every recipient's frame must reference the
+// sender's payload allocation — fan-out must be O(1) per recipient, not O(n).
+#[tokio::test]
+async fn broadcast_shares_payload_without_copy() {
+    let reg = Arc::new(PluginRegistry::new());
+    let bus = Arc::new(EventBus::new());
+
+    let (a_tx, _a_rx) = make_write_pair();
+    let (b_tx, mut b_rx) = make_write_pair();
+    let (c_tx, mut c_rx) = make_write_pair();
+
+    reg.register(
+        "plugin_a".to_string(),
+        1,
+        ipc_manifest_with_targets(vec!["plugin_b", "plugin_c"]),
+        a_tx.clone(),
+    )
+    .unwrap();
+    reg.register("plugin_b".to_string(), 2, dummy_manifest(), b_tx)
+        .unwrap();
+    reg.register("plugin_c".to_string(), 3, dummy_manifest(), c_tx)
+        .unwrap();
+
+    let router_tx = spawn_router(Arc::clone(&reg), bus);
+
+    let original: Arc<[u8]> = vec![0xCDu8; 64 * 1024].into();
+    let mut frame = make_frame("*", Vec::new());
+    frame.payload = original.clone();
+    frame.length = original.len() as u32;
+    frame.crc32 = crc32fast::hash(&original);
+
+    router_tx.send(incoming(1, frame, a_tx)).await.unwrap();
+
+    let fb = recv_frame(&mut b_rx).await;
+    let fc = recv_frame(&mut c_rx).await;
+    assert!(
+        Arc::ptr_eq(&original, &fb.payload) && Arc::ptr_eq(&original, &fc.payload),
+        "broadcast() must share the payload Arc with every recipient, not deep-copy it (N1)"
+    );
+    assert_eq!(&*fb.payload, &*fc.payload);
 }

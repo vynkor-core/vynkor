@@ -97,6 +97,92 @@ generated enum, adds drift-detection tests, and lands the follow-ups the
 
 ---
 
+## Immediate — Audit findings (nearest)
+
+Findings from the 2026-08-11 audit reconciliation (see `AUDIT.md`). All are
+kernel-local, independent of the cross-repo R8 items, and land before any
+Phase 9 work. N5 restores the DoD gates; N2 closes the last
+permission-surface inconsistency; N1 is the largest single hot-path win.
+
+> **STATUS (2026-08-11): N1–N5 all shipped on `develop`.** N1 closed as
+> non-issue — wire v0.2.0 already shares the payload via `Arc<[u8]>`; sharing
+> locked in by regression tests. N2–N5 fixed with regression coverage (see
+> each item). N5 restores the DoD `fmt` gate.
+
+- [x] N1 — **Router hot path clones every forwarded payload (Moderate):**
+  `forward` (`protocol.rs:995`) does `payload: msg.frame.payload.clone()`
+  — a full `Vec<u8>` heap copy per frame (up to 1 MiB); `broadcast` has the
+  same pattern. The event path already shares bytes via `Arc<[u8]>`
+  (`events/bus.rs:121`). Contradicts the README "zero copies" claim and is
+  the dominant router cost at high throughput.
+  - Files: `src/ipc/protocol.rs`.
+  - Acceptance: `forward`/`broadcast` route a payload-sharing frame
+    (`Arc<[u8]>`) without per-hop clone, mirroring `EventBus::deliver`;
+    README §3 updated only if the sharing semantics change.
+  - **Status (2026-08-11): CLOSED — non-issue.** `Frame.payload` is already
+    `Arc<[u8]>` in wire v0.2.0 (`wire/src/framing.rs:69-81`), so the clone is
+    a refcount bump. Regression tests `forward_shares_payload_without_copy`
+    / `broadcast_shares_payload_without_copy` (`tests/unit/test_router.rs`)
+    assert `Arc::ptr_eq` on a 64 KiB payload.
+
+- [x] N2 — **Permission comparison is form-sensitive in the clamp + config
+      cross-check (Low, fails-closed):** the T-04 registration clamp
+      (`protocol.rs:336`) and `validate_plugin_def` (`loader.rs:249`)
+      compare permission strings with exact equality, while runtime
+      `check_permission` normalizes (`permissions.rs:21-25,36`). A config
+      `permissions: [network]` with a token claiming `PERMISSION_NETWORK`
+      silently strips the permission at registration (warn only) or
+      refuses boot.
+  - Files: `src/ipc/protocol.rs`, `src/plugins/loader.rs`, `src/auth/permissions.rs`.
+  - Acceptance: normalize both sides; extend
+    `registration_clamps_jwt_permissions_to_config_allowlist`
+    (`tests/unit/test_router.rs:948`) to cover both forms.
+  - **Status (2026-08-11): FIXED** — `normalize_permission` is `pub(crate)`;
+    the clamp builds a normalized `HashSet` (`protocol.rs:336-343`);
+    `validate_plugin_def` uses a normalized `any` match (`loader.rs:250-260`).
+    Covered by the parametrized clamp test (both forms) and
+    `config_lowercase_perm_matches_manifest_proto_form` (with negative control).
+
+- [x] N3 — **`load_config` performs no numeric bounds validation (Low):**
+  `config.rs:318` accepts `router_channel_capacity: 0`, `max_connections: 0`,
+  and negative watchdogs silently.
+  - Files: `src/utils/config.rs`.
+  - Acceptance: out-of-range numerics clamp to defaults or error loudly.
+  - **Status (2026-08-11): FIXED** — `clamp_invalid_numerics` clamps the four
+    zero-invalid fields to defaults with `warn!` (fields are unsigned, so
+    negatives already fail serde). Covered by
+    `load_config_clamps_zero_numerics_to_defaults` /
+    `load_config_preserves_sane_numerics`.
+
+- [x] N4 — **Daemon start reports success before the child holds the
+      pid-file lock (Low, TOCTOU):** `daemonize_and_run` (`main.rs:213-236`)
+      writes the pid and returns success; the re-exec'd child acquires the
+      exclusive flock only later in `run_foreground` (`main.rs:238-264`) —
+      a competing instance winning the lock first aborts the child after
+      the parent already reported "started".
+  - Files: `src/main.rs`.
+  - Acceptance: readiness handshake — the child reports success (exit
+    status or explicit ready line) before the parent confirms.
+  - **Status (2026-08-11): FIXED** — `UnixStream::pair()` handshake via
+    `VEYRON_READY_FD` (CLOEXEC cleared in `pre_exec`): the child emits
+    `"{pid}\n"` only after flock + pid write; the parent publishes the pid
+    file and reports success only after the matching line, else SIGKILLs +
+    reaps + cleans up and errors out. Smoke-verified happy and failure paths.
+
+- [x] N5 — **`cargo fmt --check` fails on `tests/unit/test_proto_sync.rs:43`
+      (Low, DoD violation):** unformatted closure (introduced `61aec96`);
+      the only offender against the Definition of Done gate.
+  - Files: `tests/unit/test_proto_sync.rs`.
+  - Acceptance: `cargo fmt --check` exits 0.
+  - **Status (2026-08-11): FIXED** — `cargo fmt` run tree-wide; `fmt --check` exits 0.
+
+> Deferred audit items M7 (C++/Python fuzz harness) and M9 (zero-value enum
+> renumber, wire-breaking) remain open — tracked in the Task Summary below
+> and in `AUDIT.md`. M7 is the last substantive coverage gap; M9 ships with
+> the next protocol version bump.
+
+---
+
 ## Phase 9 — Hard isolation (deferred)
 
 Deferred until the R8 cross-repo items ship. The current sandbox (`sandbox:
@@ -212,18 +298,27 @@ visibility/file-system gaps.
 | R8-05 | proto-copy byte-identity test | none |
 | R8-06 | `database` plugin landing (veyron-plugins) | R8-01, R8-02 |
 | R8-07 | `veyron-wire` 0.2.0 publish + patch removal | none |
-| R9-01 | cgroup v2 `pids.max` per-plugin accounting (replaces shared-uid RLIMIT_NPROC) | R8 ship gate |
+| N1 | router payload-sharing (`Arc<[u8]>`) in `forward`/`broadcast` — closed as non-issue; `Arc::ptr_eq` regression tests | none |
+| N2 | permission form normalization in clamp + config cross-check — shipped, tests for both forms | none |
+| N3 | config numeric bounds validation — shipped, zero-clamp + warn + tests | none |
+| N4 | daemon-start readiness handshake (pid-file TOCTOU) — shipped, smoke-verified | none |
+| N5 | `cargo fmt` fix for `test_proto_sync.rs` (DoD gate) — shipped, gate green | none |
+| M7 | C++/Python framing fuzz harness (deferred) | none |
+| M9 | zero-value enum renumber (deferred) | next protocol bump |
+| R9-01 | cgroup v2 `pids.max` per-plugin accounting (replaces shared-uid RLIMIT_NPROC) | R8 + N ship gate |
 | R9-02 | PID namespace via shim supervisor | R9-01 |
 | R9-03 | filesystem isolation (Landlock / minimal rootfs) | R9-02 |
 | R9-04 | seccomp syscall filter | R9-03 |
-| R9-05 | `/proc` `hidepid=2` interim visibility hardening | R8 ship gate |
+| R9-05 | `/proc` `hidepid=2` interim visibility hardening | R8 + N ship gate |
 | R9-06 | docs: fix stale `AUDIT.md` pointer, record exact rlimit semantics | none |
 
 **Ship gate:** R8-01..R8-05 are kernel-local and land together on `develop`;
 R8-06/R8-07 are cross-repo coordination items shipped from their own repos.
-Phase 9 is explicitly deferred — no R9 item is scheduled until the R8 items
-ship. R9-01/R9-05 are Linux-cgroup/mount-namespace work and require a
-delegated cgroup v2 subtree or root.
+The Immediate N1–N5 items shipped (2026-08-11) — all kernel-local, independent
+of the cross-repo items; N5 restored the DoD `fmt` gate. Phase 9 is explicitly
+deferred — no R9 item is scheduled until R8 ships. M7/M9 remain
+deferred by decision. R9-01/R9-05 are Linux-cgroup/mount-namespace work and
+require a delegated cgroup v2 subtree or root.
 
 ## Definition of Done
 
