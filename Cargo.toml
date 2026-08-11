@@ -46,7 +46,9 @@ hkdf = "0.12"
 rand = "0.8"
 ed25519-dalek = "2"
 
-nix = { version = "0.31", features = ["signal", "process", "fs", "sched", "resource", "user"] }
+# extra features: sandbox shim (plugins/shim.rs) — pdeathsig (prctl module,
+# gated by "process"), proc mount, readiness poll, socketpair
+nix = { version = "0.31", features = ["signal", "process", "fs", "sched", "resource", "user", "mount", "poll", "socket"] }
 
 clap = { version = "4.6", features = ["derive"] }
 clap_complete = "4"
