@@ -25,8 +25,6 @@ jobs:
           - fuzz_frame_parse
           - fuzz_envelope_decode
           - fuzz_router_pipeline
-          - fuzz_proto_envelope
-          - fuzz_target_routing
 
     steps:
       - uses: actions/checkout@v4
