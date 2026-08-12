@@ -183,6 +183,80 @@ permission-surface inconsistency; N1 is the largest single hot-path win.
 
 ---
 
+## Immediate — Verification bugs: R9-02 supervisor stop/start race (found 2026-08-12)
+
+Found live-testing the R9-02 shim on `develop` (`testing` ≡ `develop` @
+`8c6a86b`): a stop/start race in the supervisor rework. `stop` returns
+success before the shim actually exits (the grace escalation delays the real
+exit by up to 5s), and `ExitEvent` carries no PID/epoch — so a stale exit of
+the old instance lands on the *new* entry and triggers an unwanted restart →
+duplicate registration.
+
+- [x] B1 — **Stop/start race: stale `ExitEvent` (no PID/epoch) restarts the
+      wrong instance → duplicate registration:** `stop_plugin` removes the
+      entry and SIGTERMs the shim but does not wait for the exit; the shim's
+      grace escalation delays the real exit by up to 5s. `ExitEvent` carries
+      only `{plugin_id, success}` — a `start` inside that window attributes
+      the old instance's exit to the new entry → `OnFailure` → auto-restart →
+      duplicate spawn → `registration rejected: plugin already registered`
+      (observed twice in the kernel log: pids 112747, 114277).
+  - Files: `src/plugins/supervisor.rs`.
+  - Acceptance: `stop` + immediate `start` never produces a duplicate
+    registration; a stale exit of the old instance is ignored.
+  - **Status (2026-08-12): FIXED** — `ExitEvent` now carries the spawn's
+    `epoch` (plus `pid`); `monitor_loop` drops any exit whose epoch ≠ the
+    registered entry's (stale) or that matches `stopped_epochs` (explicitly
+    stopped instance).
+
+- [x] B2 — **`stop` swallows ESRCH and can orphan the live instance:**
+      `let _ = kill(pid, SIGTERM)` targets the entry pid, which may already
+      be dead, while the actually-registered instance keeps running —
+      observed unsupervised for minutes after `stop` reported "stopped"
+      (pids 112505/112506).
+  - Files: `src/plugins/supervisor.rs`.
+  - Acceptance: `stop` always terminates the live registered instance and
+    waits for it to exit; ESRCH is handled explicitly, not swallowed.
+  - **Status (2026-08-12): FIXED** — `stop_plugin` records the stopped
+    epoch, SIGTERMs `signal_target()` (the shim when sandboxed — always the
+    live instance), then blocks on `wait_for_exit` (watch channel fired by
+    the wait task after reap) with a SIGKILL deadline of `grace_seconds` and
+    a final 10s bound — "stopped" now means the tree actually exited.
+
+- [x] B3 — **`spawn_internal` overwrites the manual-start entry on a
+      rejected duplicate restart:** the auto-restart path's `entries.insert`
+      replaces the operator's freshly-started entry with the duplicate's.
+  - Files: `src/plugins/supervisor.rs`.
+  - Acceptance: a duplicate-registration restart never clobbers the
+    currently-registered entry.
+  - **Status (2026-08-12): FIXED** — `spawn_internal` takes
+    `replace_epoch: Option<u64>`; manual start (`None`) refuses with
+    `VeyronError::PluginAlreadyRunning` while an entry is registered;
+    supervised restarts pass `Some(event.epoch)` and only replace the
+    instance they were decided for. A stop landing during the backoff
+    window (`stopped_during_backoff`) cancels the restart outright.
+
+- [x] B4 — **cgroup scope reap loops on `Device or resource busy`:** when a
+      new instance joins the same `veyron/<id>.scope` before the old one
+      exits, the rmdir keeps failing EBUSY and is retried indefinitely.
+  - Files: `src/plugins/supervisor.rs`.
+  - Acceptance: the old scope is always reaped once its last task exits; no
+    unbounded retry loop in the log.
+  - **Status (2026-08-12): FIXED** — the wait task fires the `exited`
+    signal only after the reap (bounded 10×50ms retry) completes, and
+    `stop_plugin` blocks on that signal — a `start` reusing the scope can no
+    longer interleave with the old instance's rmdir.
+
+> Environment artifacts (not kernel bugs, 2026-08-12): installed plugins in
+> `~/.local/lib/veyron/plugins/` are pre-wire-0.2.0 builds — their registered
+> manifest has empty `actions` (→ `ActionNotFound`) and the watchdog SIGKILLs
+> them as unresponsive (Ping proto drift) until `max_restarts` is exhausted.
+> Reinstall/rebuild them. Also: the local `veyron-sdk` (0.1.0) requires
+> `veyron-wire ^0.1.0`, which is yanked on crates.io, so path consumers cannot
+> resolve; the kernel itself uses the published `veyron-sdk 0.1.2` (wire
+> 0.2.0). Recorded here so the next session doesn't re-derive it.
+
+---
+
 ## Phase 9 — Hard isolation (deferred)
 
 Deferred until the R8 cross-repo items ship. The current sandbox (`sandbox:
@@ -482,6 +556,10 @@ surfaces cover every planned plugin).
 | M9 | zero-value enum renumber (deferred) | next protocol bump |
 | R9-01 | cgroup v2 `pids.max` per-plugin accounting (replaces shared-uid RLIMIT_NPROC) | R8 + N ship gate |
 | R9-02 | PID namespace via shim supervisor | R9-01 |
+| B1 | stop/start race — stale `ExitEvent` (no PID/epoch) → wrong-instance restart → duplicate registration — shipped: epoch-gated `ExitEvent`, stale exits dropped | R9-02 |
+| B2 | `stop` swallows ESRCH, can orphan the live registered instance — shipped: stop blocks until exit (SIGKILL deadline) | R9-02 |
+| B3 | `spawn_internal` overwrites the manual-start entry on duplicate restart — shipped: `PluginAlreadyRunning` guard + restart-cancel on stop | R9-02 |
+| B4 | cgroup scope reap loops on `Device or resource busy` — shipped: stop waits for reap completion | R9-02 |
 | R9-03 | filesystem isolation (Landlock / minimal rootfs) | R9-02 |
 | R9-04 | seccomp syscall filter | R9-03 |
 | R9-05 | `/proc` `hidepid=2` interim visibility hardening | R8 + N ship gate |

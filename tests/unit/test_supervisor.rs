@@ -96,6 +96,51 @@ async fn restart_policy_always_triggers_restart_after_exit() {
 }
 
 #[tokio::test]
+async fn stop_cancels_in_flight_backoff_restart() {
+    let sup = Arc::new(PluginSupervisor::new("/tmp/veyron_test.sock"));
+
+    // long-lived process with Always policy: the only exit comes from the
+    // SIGKILL below, and the monitor then schedules a restart (B3 window).
+    let proc = sup
+        .spawn_plugin(PluginConfig {
+            plugin_id: "cancel_backoff".to_string(),
+            binary_path: PathBuf::from("/bin/sleep"),
+            args: vec!["60".to_string()],
+            env: vec![],
+            restart_policy: RestartPolicy::Always,
+            max_restarts: 5,
+            sandbox: false,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(sup.is_running("cancel_backoff"));
+
+    let sup_clone = Arc::clone(&sup);
+    tokio::spawn(async move {
+        sup_clone.monitor_loop().await;
+    });
+    sleep(Duration::from_millis(50)).await;
+
+    // hard-kill the process; the monitor sees the exit and sleeps backoff
+    // (base 100ms) before respawning
+    let _ = nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(proc.pid as i32),
+        nix::sys::signal::Signal::SIGKILL,
+    );
+
+    // explicit stop inside the backoff window must cancel the restart
+    sup.stop_plugin("cancel_backoff").await.unwrap();
+
+    // well past backoff(1)=200ms — the plugin must not come back
+    sleep(Duration::from_millis(400)).await;
+    assert!(
+        !sup.is_running("cancel_backoff"),
+        "stopped plugin must not be resurrected by an in-flight restart"
+    );
+}
+
+#[tokio::test]
 async fn restart_policy_never_does_not_restart() {
     let sup = Arc::new(PluginSupervisor::new("/tmp/veyron_test.sock"));
 
