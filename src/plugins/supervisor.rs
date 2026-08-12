@@ -10,11 +10,12 @@ use prost::Message;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, watch, Mutex};
 use tracing::{info, warn};
 
 #[derive(Clone, Default)]
@@ -69,16 +70,34 @@ struct PluginEntry {
     /// stays alive to reap — signalling the plugin directly would break the
     /// shim's waitpid and orphan it inside the namespace.
     shim_pid: Option<u32>,
+    /// Monotonic spawn-instance id. `ExitEvent`s carry it so a stale exit of
+    /// an older spawn can never be attributed to a newer one (B1) and an
+    /// explicit stop is never undone by an in-flight restart (B3).
+    epoch: u64,
+    /// Fired once the wait task has reaped the process tree. `stop_plugin`
+    /// awaits it so "stopped" means actually exited, not just signalled (B2).
+    exited: watch::Receiver<bool>,
 }
 
 impl PluginEntry {
     fn signal_target(&self) -> i32 {
         self.shim_pid.unwrap_or(self.pid) as i32
     }
+
+    /// Await the wait task reaping the process tree. `changed()` resolves once
+    /// a value newer than the initial `false` is published, even if that
+    /// happened before this call — a fast exit never hangs the awaiter.
+    async fn wait_for_exit(&mut self) {
+        let _ = self.exited.changed().await;
+    }
 }
 
 struct ExitEvent {
     plugin_id: String,
+    /// Instance id of the spawn that exited. A mismatch against the registered
+    /// entry identifies a stale event (B1).
+    epoch: u64,
+    pid: u32,
     success: bool,
 }
 
@@ -97,6 +116,13 @@ pub struct PluginSupervisor {
     /// Final restart_count for plugins that have been removed from `entries` after
     /// exhausting their restart budget (VULN-018). Preserved for historical lookup.
     stopped_counts: Arc<DashMap<String, u32>>,
+    /// Monotonic spawn-instance counter. Every spawn takes one id; `ExitEvent`s
+    /// carry it so a stale exit can never be attributed to a newer instance (B1)
+    /// and a manual stop can't be undone by an in-flight restart (B3).
+    next_epoch: AtomicU64,
+    /// plugin_id → epoch of its last explicit stop. An auto-restart decision
+    /// still in flight for a stopped instance is dropped (B3).
+    stopped_epochs: Arc<DashMap<String, u64>>,
     /// Base delay (ms) for exponential restart backoff: `base * 2^restart_count`.
     backoff_base_ms: u64,
     /// Ceiling (ms) for exponential restart backoff.
@@ -135,6 +161,8 @@ impl PluginSupervisor {
             plugin_registry,
             forced_restarts: Arc::new(DashMap::new()),
             stopped_counts: Arc::new(DashMap::new()),
+            next_epoch: AtomicU64::new(0),
+            stopped_epochs: Arc::new(DashMap::new()),
         }
     }
 
@@ -149,14 +177,24 @@ impl PluginSupervisor {
     }
 
     pub async fn spawn_plugin(&self, config: PluginConfig) -> Result<PluginProcess, VeyronError> {
-        self.spawn_internal(config, 0).await
+        self.spawn_internal(config, 0, None).await
     }
 
     async fn spawn_internal(
         &self,
         config: PluginConfig,
         restart_count: u32,
+        replace_epoch: Option<u64>,
     ) -> Result<PluginProcess, VeyronError> {
+        // B3: a manual start must never clobber a live entry. A supervised
+        // restart carries a token (Some) — it replaces its own dead entry;
+        // a route-level start has none and refuses while one is registered.
+        if replace_epoch.is_none() && self.entries.contains_key(&config.plugin_id) {
+            return Err(VeyronError::PluginAlreadyRunning(config.plugin_id.clone()));
+        }
+
+        let epoch = self.next_epoch.fetch_add(1, Ordering::Relaxed) + 1;
+
         #[cfg(target_os = "linux")]
         let use_shim = config.sandbox;
         #[cfg(not(target_os = "linux"))]
@@ -365,6 +403,7 @@ impl PluginSupervisor {
         }
 
         info!(plugin_id = %plugin_id, pid = pid, restart_count = restart_count, "plugin spawned");
+        let (exited_tx, exited_rx) = watch::channel(false);
         self.entries.insert(
             plugin_id.clone(),
             PluginEntry {
@@ -372,6 +411,8 @@ impl PluginSupervisor {
                 restart_count,
                 pid,
                 shim_pid,
+                epoch,
+                exited: exited_rx,
             },
         );
 
@@ -406,9 +447,15 @@ impl PluginSupervisor {
                 }
             }
             let success = status.map(|s| s.success()).unwrap_or(false);
+            // B2: the tree is reaped and the scope is gone — publish the exit
+            // so a stop awaiting `exited` resolves (a fast exit must not hang
+            // the awaiter: changed() resolves on the already-published value).
+            let _ = exited_tx.send(true);
             let _ = tx
                 .send(ExitEvent {
                     plugin_id: id,
+                    epoch,
+                    pid,
                     success,
                 })
                 .await;
@@ -423,10 +470,37 @@ impl PluginSupervisor {
             .remove(plugin_id)
             .ok_or_else(|| VeyronError::PluginNotFound(plugin_id.to_string()))?;
 
+        // B3: an explicit stop is terminal — record the instance so an
+        // in-flight backoff restart can't resurrect the plugin.
+        self.stopped_epochs
+            .insert(plugin_id.to_string(), entry.1.epoch);
         // Explicit stop overrides any pending manual restart.
         self.forced_restarts.remove(plugin_id);
-        let pid = nix::unistd::Pid::from_raw(entry.1.signal_target());
-        let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGTERM);
+        let target = entry.1.signal_target();
+        let _ = nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(target),
+            nix::sys::signal::Signal::SIGTERM,
+        );
+        // B2: "stopped" means the process tree actually exited, not just
+        // signalled. Escalate to SIGKILL on the configured deadline so a
+        // SIGTERM-ignoring plugin can't hold the stop; the final bound keeps
+        // even an unkillable process from hanging the caller forever.
+        let mut entry = entry.1;
+        let grace = if entry.config.grace_seconds > 0 {
+            entry.config.grace_seconds
+        } else {
+            5
+        };
+        if tokio::time::timeout(Duration::from_secs(grace as u64), entry.wait_for_exit())
+            .await
+            .is_err()
+        {
+            let _ = nix::sys::signal::kill(
+                nix::unistd::Pid::from_raw(target),
+                nix::sys::signal::Signal::SIGKILL,
+            );
+            let _ = tokio::time::timeout(Duration::from_secs(10), entry.wait_for_exit()).await;
+        }
         Ok(())
     }
 
@@ -513,6 +587,32 @@ impl PluginSupervisor {
         while let Some(event) = rx.recv().await {
             // A manual restart (POST /restart) forces respawn regardless of policy.
             let forced = self.forced_restarts.remove(&event.plugin_id).is_some();
+
+            // B1: an exit is only actionable for the currently registered
+            // instance — a stale event from an older spawn must not be
+            // attributed to a newer one. B3: an exit after an explicit stop
+            // must not restart anything.
+            let is_current = self
+                .entries
+                .get(&event.plugin_id)
+                .map(|e| e.epoch == event.epoch)
+                .unwrap_or(false);
+            let was_stopped = self
+                .stopped_epochs
+                .get(&event.plugin_id)
+                .map(|s| *s == event.epoch)
+                .unwrap_or(false);
+            if !is_current || was_stopped {
+                info!(
+                    plugin_id = %event.plugin_id,
+                    epoch = event.epoch,
+                    is_current,
+                    was_stopped,
+                    "ignoring stale or stopped exit event"
+                );
+                continue;
+            }
+
             let decision = self.entries.get(&event.plugin_id).and_then(|entry| {
                 let should = forced
                     || match entry.config.restart_policy {
@@ -537,6 +637,7 @@ impl PluginSupervisor {
                 .unwrap_or(0);
             info!(
                 plugin_id = %event.plugin_id,
+                pid = event.pid,
                 success = event.success,
                 will_restart = will_restart,
                 restart_count = restart_count,
@@ -571,7 +672,24 @@ impl PluginSupervisor {
                     counter!("plugin_restarts_total", "plugin_id" => config.plugin_id.clone())
                         .increment(1);
                     tokio::time::sleep(self.backoff_delay(new_count)).await;
-                    let _ = self.spawn_internal(config, new_count).await;
+                    // B3: an explicit stop during the backoff window cancels
+                    // the restart — stop is terminal.
+                    let stopped_during_backoff = self
+                        .stopped_epochs
+                        .get(&config.plugin_id)
+                        .map(|s| *s == event.epoch)
+                        .unwrap_or(false);
+                    if stopped_during_backoff {
+                        info!(
+                            plugin_id = %config.plugin_id,
+                            epoch = event.epoch,
+                            "restart cancelled — plugin stopped during backoff"
+                        );
+                        continue;
+                    }
+                    let _ = self
+                        .spawn_internal(config, new_count, Some(event.epoch))
+                        .await;
                 }
                 None => {
                     // max restarts reached or Never policy — remove dead entry so

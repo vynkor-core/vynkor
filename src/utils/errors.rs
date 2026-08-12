@@ -10,6 +10,7 @@ pub enum VeyronError {
     FrameReadTimeout,
     PayloadTooLarge(usize),
     PluginNotFound(String),
+    PluginAlreadyRunning(String),
     PluginAlreadyRegistered(String),
     InvalidPluginId(String),
     PermissionDenied(String),
@@ -30,6 +31,7 @@ impl fmt::Display for VeyronError {
             VeyronError::FrameReadTimeout => write!(f, "timed out reading frame body"),
             VeyronError::PayloadTooLarge(n) => write!(f, "payload too large: {} bytes", n),
             VeyronError::PluginNotFound(id) => write!(f, "plugin not found: {}", id),
+            VeyronError::PluginAlreadyRunning(id) => write!(f, "plugin already running: {}", id),
             VeyronError::PluginAlreadyRegistered(id) => {
                 write!(f, "plugin already registered: {}", id)
             }
