@@ -51,7 +51,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             protobuf-compiler libprotobuf-dev libabsl-dev libssl-dev libzstd-dev libgtest-dev
 
-      - name: Build C++ SDK echo_plugin (T-02: real C++ binary for cpp integration test)
+      - name: "Build C++ SDK echo_plugin (T-02: real C++ binary for cpp integration test)"
         run: |
           cmake -B ../veyron-sdk-cpp/build -S ../veyron-sdk-cpp -DCMAKE_BUILD_TYPE=Release
           cmake --build ../veyron-sdk-cpp/build --target echo_plugin -j"$(nproc)"
