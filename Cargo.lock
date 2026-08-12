@@ -2416,6 +2416,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
+name = "seccompiler"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4ae55de56877481d112a559bbc12667635fdaf5e005712fd4e2b2fa50ffc884"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "security-framework"
 version = "3.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3306,6 +3315,7 @@ dependencies = [
  "indicatif",
  "jsonwebtoken",
  "landlock",
+ "libc",
  "metrics",
  "metrics-exporter-prometheus",
  "mockito",
@@ -3317,6 +3327,7 @@ dependencies = [
  "rand 0.8.6",
  "reqwest 0.12.28",
  "rusqlite",
+ "seccompiler",
  "semver",
  "serde",
  "serde_json",

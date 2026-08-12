@@ -53,6 +53,10 @@ nix = { version = "0.31", features = ["signal", "process", "fs", "sched", "resou
 # R9-03: filesystem isolation (plugins/fsaccess.rs) — Landlock LSM, linux-only
 [target.'cfg(target_os = "linux")'.dependencies]
 landlock = "0.4.7"
+# R9-04: seccomp syscall filter (plugins/seccomp.rs) — pure-Rust BPF compiler,
+# no system libseccomp dependency; libc for SYS_* constants
+libc = "0.2"
+seccompiler = "0.5"
 
 clap = { version = "4.6", features = ["derive"] }
 clap_complete = "4"

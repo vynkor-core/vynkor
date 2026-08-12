@@ -377,7 +377,7 @@ visibility/file-system gaps.
     `sandboxed_plugin_full_mode_is_unrestricted`,
     `sandboxed_plugin_reaches_kernel_socket`).
 
-- [ ] R9-04 — **seccomp syscall filter in `pre_exec`:** default-deny
+- [x] R9-04 — **seccomp syscall filter in `pre_exec`:** default-deny
       allowlist (or a tight denylist of kernel-escape-capable syscalls —
       `ptrace`, `bpf`, `keyctl`, `reboot`, `kexec_load`, `mount`/`umount`
       while R9-03 is unlanded) applied before exec, so a compromised
@@ -387,6 +387,31 @@ visibility/file-system gaps.
   - Files: `src/plugins/runner.rs`.
   - Acceptance: a plugin calling a denied syscall gets `EPERM`/`SIGSYS`;
       all three SDK example plugins still pass their integration tests.
+  - Done: `plugins::seccomp` — a **tight denylist** of kernel-escape-
+    capable syscalls enforced via the `seccompiler` crate (pure-Rust BPF
+    compiler, no system libseccomp) in the shim's plugin `pre_exec`,
+    after Landlock and before the readiness byte (fail-closed: a plugin
+    that cannot be filtered is killed and never runs unfiltered).
+    Denied: `ptrace`, `bpf`, `keyctl`/`add_key`/`request_key`, module
+    loading (`init_module`/`finit_module`/`delete_module`), `reboot`,
+    `kexec_load`/`kexec_file_load`, mount-namespace escape (`mount`,
+    `umount2`, `pivot_root`, `chroot`, `setns`, `open_tree`,
+    `move_mount`, `fsopen`, `fsconfig`, `fspick`, `mount_setattr`),
+    file-handle Landlock bypass (`open_by_handle_at`/`name_to_handle_at`),
+    cross-process memory (`process_vm_readv`/`process_vm_writev`),
+    `perf_event_open`, `userfaultfd`, `io_uring_*`, `kcmp`,
+    `swapon`/`swapoff`, `acct`, `syslog`, `sethostname`/`setdomainname`,
+    `modify_ldt`, `quotactl`, `lookup_dcookie`, `vhangup`,
+    `fanotify_init`. Everything else stays allowed (a default-deny
+    allowlist would need per-SDK maintenance that rots when runtimes
+    change; the deny set is stable by construction). Action is
+    `SIGSYS` (`KillProcess`) — the plugin dies instead of retrying.
+    Baselines from a ptrace-based tracer across Rust/tokio, CPython and
+    the C++ SDK confirm no legitimate syscall is denied; a sandboxed
+    plugin calling `ptrace` dies with SIGSYS (smoke + integration
+    tests: `sandboxed_plugin_denied_ptrace_dies_with_sigsys`,
+    `sandboxed_plugin_runs_normally_under_seccomp`, unit tests for the
+    deny-set coverage).
 
 - [x] R9-05 — **Interim process-visibility hardening (until R9-02):** in a
       new mount namespace (`CLONE_NEWNS`, permitted inside the userns),
@@ -590,7 +615,7 @@ surfaces cover every planned plugin).
 | B3 | `spawn_internal` overwrites the manual-start entry on duplicate restart — shipped: `PluginAlreadyRunning` guard + restart-cancel on stop | R9-02 |
 | B4 | cgroup scope reap loops on `Device or resource busy` — shipped: stop waits for reap completion | R9-02 |
 | R9-03 | filesystem isolation (Landlock / minimal rootfs) — shipped: Landlock ruleset in shim pre_exec, `max_fs_access`/`readonly_paths`/`writable_paths` config, fail-closed, integration-tested | R9-02 |
-| R9-04 | seccomp syscall filter | R9-03 |
+| R9-04 | seccomp syscall filter — shipped: tight kernel-escape denylist via `seccompiler` in shim pre_exec, fail-closed, SIGSYS on denied syscalls, SDK baselines profiled, regression tests | R9-03 |
 | R9-05 | `/proc` `hidepid=2` interim visibility hardening | R8 + N ship gate |
 | R9-06 | docs: fix stale `AUDIT.md` pointer, record exact rlimit semantics | none |
 | R10-01 | plugin settings out of `config.yaml` → `plugins.d/` drop-in dir | R8 + N ship gate |
@@ -607,8 +632,9 @@ The Immediate N1–N5 items shipped (2026-08-11) — all kernel-local, independe
 of the cross-repo items; N5 restored the DoD `fmt` gate. Phase 9 was explicitly
 deferred until R8 shipped; with that gate lifted, R9-01 (cgroup pids), R9-02
 (shim PID namespace), R9-05 (closed with R9-02), R9-06 (docs), and R9-03
-(Landlock filesystem isolation) have shipped on `develop`. R9-04 (seccomp) is
-the remaining Phase 9 item. M7/M9 remain deferred by decision. R9-01/R9-05 are
+(Landlock filesystem isolation) have shipped on `develop`. R9-04 (seccomp)
+shipped with the tight kernel-escape denylist (2026-08-12) — Phase 9 is now
+complete. M7/M9 remain deferred by decision. R9-01/R9-05 are
 Linux-cgroup/mount-namespace work and require a delegated cgroup v2 subtree or
 root. Phase 10 (plugin config + marketplace state) is likewise deferred and
 independent of Phase 9 — it can land before or after hard isolation.
