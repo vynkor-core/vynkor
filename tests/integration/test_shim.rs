@@ -10,11 +10,16 @@
 //!
 //! All three need Linux + unprivileged user namespaces; each test probes once
 //! with a `/bin/true` sandbox spawn and skips where the host cannot sandbox.
+//!
+//! R9-03 (same shim): the filesystem-restriction tests below verify Landlock
+//! is actually enforced for a sandboxed plugin — undeclared reads/writes fail
+//! with EACCES while declared paths and the kernel UDS stay reachable.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
+use veyron::plugins::fsaccess::FsAccessMode;
 use veyron::plugins::supervisor::{PluginConfig, PluginSupervisor, RestartPolicy};
 
 const VYN: &str = env!("CARGO_BIN_EXE_vyn");
@@ -243,4 +248,365 @@ async fn shim_reports_exit_status_for_supervision() {
     );
 
     let _ = sup.stop_plugin("shim_exit").await;
+}
+
+// ---- R9-03: Landlock filesystem isolation ----
+
+fn temp_subdir(tag: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("veyron-fsacc-{tag}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// Probe that Landlock is actually enforced for a sandboxed plugin: a
+/// `max_fs_access: none` spawn whose interpreter succeeds (exec requirements
+/// granted) but whose `open("/etc/passwd")` is denied by the ruleset. A failed
+/// spawn or a successful read means the host cannot enforce Landlock.
+async fn fs_restriction_available(sup: &PluginSupervisor, python: &str) -> bool {
+    let probe = PluginConfig {
+        plugin_id: "fsacc_probe".to_string(),
+        binary_path: PathBuf::from(python),
+        args: vec![
+            "-c".to_string(),
+            "import sys; \
+             try: open('/etc/passwd').read(); print('LANDLOCK_FAIL'); \
+             except PermissionError: print('LANDLOCK_OK'); \
+             except OSError as e: print('LANDLOCK_ERR', e.errno)"
+                .to_string(),
+        ],
+        env: vec![
+            "PYTHONNOUSERSITE=1".to_string(),
+            "PYTHONDONTWRITEBYTECODE=1".to_string(),
+        ],
+        restart_policy: RestartPolicy::Never,
+        max_restarts: 0,
+        sandbox: true,
+        max_fs_access: FsAccessMode::None,
+        grace_seconds: 1,
+        ..Default::default()
+    };
+    if sup.spawn_plugin(probe).await.is_err() {
+        return false;
+    }
+    let logs = wait_for_log(sup, "fsacc_probe", "LANDLOCK_").await;
+    let _ = sup.stop_plugin("fsacc_probe").await;
+    logs.iter().any(|l| l.contains("LANDLOCK_OK"))
+}
+
+/// A restricted plugin may read nothing it did not declare: its own binary
+/// dir and system libs (for exec) plus `writable_paths`. `~` and `/etc` are
+/// outside the ruleset, so both reads must fail with EACCES.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn sandboxed_plugin_denied_undeclared_reads() {
+    let Some(python) = python3_bin() else {
+        eprintln!("skipping: python3 not found");
+        return;
+    };
+    set_shim_bin();
+    let sup = Arc::new(PluginSupervisor::new("/tmp/veyron_shim_fsacc_read.sock"));
+    if !fs_restriction_available(&sup, &python).await {
+        eprintln!("skipping: Landlock filesystem restriction unavailable");
+        return;
+    }
+
+    let config = PluginConfig {
+        plugin_id: "fsacc_read".to_string(),
+        binary_path: PathBuf::from(&python),
+        args: vec![
+            "-c".to_string(),
+            "import os
+home = os.path.expanduser('~/.bashrc')
+home_readable = True
+try:
+    open(home, 'rb').read(1)
+except (PermissionError, OSError):
+    home_readable = False
+etc_readable = True
+try:
+    open('/etc/passwd').read()
+except (PermissionError, OSError):
+    etc_readable = False
+print('RESULT_HOME=' + ('READABLE' if home_readable else 'DENIED'))
+print('RESULT_ETC=' + ('READABLE' if etc_readable else 'DENIED'))"
+                .to_string(),
+        ],
+        env: vec![
+            "PYTHONNOUSERSITE=1".to_string(),
+            "PYTHONDONTWRITEBYTECODE=1".to_string(),
+        ],
+        restart_policy: RestartPolicy::Never,
+        max_restarts: 0,
+        sandbox: true,
+        max_fs_access: FsAccessMode::None,
+        grace_seconds: 1,
+        ..Default::default()
+    };
+    sup.spawn_plugin(config)
+        .await
+        .expect("sandbox spawn must succeed");
+    let logs = wait_for_log(&sup, "fsacc_read", "RESULT_HOME=").await;
+    let _ = sup.stop_plugin("fsacc_read").await;
+
+    assert!(
+        logs.iter().any(|l| l.contains("RESULT_HOME=DENIED")),
+        "~ must not be readable under max_fs_access: none, logs: {logs:?}"
+    );
+    assert!(
+        logs.iter().any(|l| l.contains("RESULT_ETC=DENIED")),
+        "/etc/passwd must not be readable under max_fs_access: none, logs: {logs:?}"
+    );
+}
+
+/// `writable_paths` are the only places a restricted plugin may create files;
+/// an undeclared sibling dir must deny the write with EACCES.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn sandboxed_plugin_writes_only_declared_writable_paths() {
+    let Some(python) = python3_bin() else {
+        eprintln!("skipping: python3 not found");
+        return;
+    };
+    set_shim_bin();
+    let sup = Arc::new(PluginSupervisor::new("/tmp/veyron_shim_fsacc_write.sock"));
+    if !fs_restriction_available(&sup, &python).await {
+        eprintln!("skipping: Landlock filesystem restriction unavailable");
+        return;
+    }
+
+    let allowed = temp_subdir("write-ok");
+    let denied = temp_subdir("write-denied");
+    let script = format!(
+        "import os
+try:
+    open('{0}', 'w').write('x')
+    allowed = 'OK'
+except (PermissionError, OSError):
+    allowed = 'DENIED'
+try:
+    open('{1}', 'w').write('x')
+    denied = 'OK'
+except (PermissionError, OSError):
+    denied = 'DENIED'
+print('RESULT_ALLOWED=' + allowed)
+print('RESULT_DENIED=' + denied)",
+        allowed.join("ok.txt").display(),
+        denied.join("x.txt").display()
+    );
+
+    let config = PluginConfig {
+        plugin_id: "fsacc_write".to_string(),
+        binary_path: PathBuf::from(&python),
+        args: vec!["-c".to_string(), script],
+        env: vec![
+            "PYTHONNOUSERSITE=1".to_string(),
+            "PYTHONDONTWRITEBYTECODE=1".to_string(),
+        ],
+        restart_policy: RestartPolicy::Never,
+        max_restarts: 0,
+        sandbox: true,
+        max_fs_access: FsAccessMode::None,
+        writable_paths: vec![allowed.clone()],
+        grace_seconds: 1,
+        ..Default::default()
+    };
+    sup.spawn_plugin(config)
+        .await
+        .expect("sandbox spawn must succeed");
+    let logs = wait_for_log(&sup, "fsacc_write", "RESULT_ALLOWED=").await;
+    let _ = sup.stop_plugin("fsacc_write").await;
+    let _ = std::fs::remove_dir_all(&allowed);
+    let _ = std::fs::remove_dir_all(&denied);
+
+    assert!(
+        logs.iter().any(|l| l.contains("RESULT_ALLOWED=OK")),
+        "writable_paths must accept writes, logs: {logs:?}"
+    );
+    assert!(
+        logs.iter().any(|l| l.contains("RESULT_DENIED=DENIED")),
+        "an undeclared dir must deny writes, logs: {logs:?}"
+    );
+}
+
+/// `readonly_paths` grant reads but not writes; a restricted plugin must be
+/// able to read its declared data yet still fail to modify it.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn sandboxed_plugin_reads_declared_readonly_paths() {
+    let Some(python) = python3_bin() else {
+        eprintln!("skipping: python3 not found");
+        return;
+    };
+    set_shim_bin();
+    let sup = Arc::new(PluginSupervisor::new("/tmp/veyron_shim_fsacc_ro.sock"));
+    if !fs_restriction_available(&sup, &python).await {
+        eprintln!("skipping: Landlock filesystem restriction unavailable");
+        return;
+    }
+
+    let ro = temp_subdir("readonly");
+    let ro_file = ro.join("data.txt");
+    std::fs::write(&ro_file, "secret").unwrap();
+    let script = format!(
+        "try:
+    data = open('{0}').read()
+    read = 'OK:' + data.strip()
+except (PermissionError, OSError):
+    read = 'DENIED'
+try:
+    open('{0}', 'w').write('x')
+    wrote = 'OK'
+except (PermissionError, OSError):
+    wrote = 'DENIED'
+print('RESULT_READ=' + read)
+print('RESULT_WRITE=' + wrote)",
+        ro_file.display()
+    );
+
+    let config = PluginConfig {
+        plugin_id: "fsacc_ro".to_string(),
+        binary_path: PathBuf::from(&python),
+        args: vec!["-c".to_string(), script],
+        env: vec![
+            "PYTHONNOUSERSITE=1".to_string(),
+            "PYTHONDONTWRITEBYTECODE=1".to_string(),
+        ],
+        restart_policy: RestartPolicy::Never,
+        max_restarts: 0,
+        sandbox: true,
+        max_fs_access: FsAccessMode::ReadOnly,
+        readonly_paths: vec![ro.clone()],
+        grace_seconds: 1,
+        ..Default::default()
+    };
+    sup.spawn_plugin(config)
+        .await
+        .expect("sandbox spawn must succeed");
+    let logs = wait_for_log(&sup, "fsacc_ro", "RESULT_READ=").await;
+    let _ = sup.stop_plugin("fsacc_ro").await;
+    let _ = std::fs::remove_dir_all(&ro);
+
+    assert!(
+        logs.iter().any(|l| l.contains("RESULT_READ=OK:secret")),
+        "declared readonly_paths must be readable, logs: {logs:?}"
+    );
+    assert!(
+        logs.iter().any(|l| l.contains("RESULT_WRITE=DENIED")),
+        "readonly_paths must deny writes, logs: {logs:?}"
+    );
+}
+
+/// `max_fs_access: full` (the default) must leave the filesystem unrestricted
+/// — a regression guard for the existing sandbox contract.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn sandboxed_plugin_full_mode_is_unrestricted() {
+    let Some(python) = python3_bin() else {
+        eprintln!("skipping: python3 not found");
+        return;
+    };
+    set_shim_bin();
+    let sup = Arc::new(PluginSupervisor::new("/tmp/veyron_shim_fsacc_full.sock"));
+    if !sandbox_available(&sup).await {
+        eprintln!("skipping: unprivileged user namespaces unavailable");
+        return;
+    }
+
+    let config = PluginConfig {
+        plugin_id: "fsacc_full".to_string(),
+        binary_path: PathBuf::from(&python),
+        args: vec![
+            "-c".to_string(),
+            "try:
+    line = open('/etc/passwd').readline().strip()
+    print('RESULT=FULL_READ_OK:' + line)
+except (PermissionError, OSError) as e:
+    print('RESULT=FULL_READ_FAIL:' + repr(e))"
+                .to_string(),
+        ],
+        env: vec![],
+        restart_policy: RestartPolicy::Never,
+        max_restarts: 0,
+        sandbox: true,
+        grace_seconds: 1,
+        ..Default::default()
+    };
+    sup.spawn_plugin(config)
+        .await
+        .expect("sandbox spawn must succeed");
+    let logs = wait_for_log(&sup, "fsacc_full", "RESULT=FULL_READ_OK").await;
+    let _ = sup.stop_plugin("fsacc_full").await;
+
+    assert!(
+        logs.iter().any(|l| l.contains("RESULT=FULL_READ_OK")),
+        "full mode must not restrict filesystem access, logs: {logs:?}"
+    );
+}
+
+/// A restricted plugin must still reach the kernel's UDS: the socket path is
+/// granted `ResolveUnix` (ABI v9), otherwise every sandboxed+restricted plugin
+/// would fail to register. The test binds a listener so a successful connect
+/// proves the resolve was not denied — EACCES here means the rule is missing.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn sandboxed_plugin_reaches_kernel_socket() {
+    let Some(python) = python3_bin() else {
+        eprintln!("skipping: python3 not found");
+        return;
+    };
+    set_shim_bin();
+    let sock_path = "/tmp/veyron_shim_fsacc_sock.sock";
+    let _ = std::fs::remove_file(sock_path);
+    let _listener = std::os::unix::net::UnixListener::bind(sock_path)
+        .expect("bind test listener for the kernel socket");
+    let sup = Arc::new(PluginSupervisor::new(sock_path));
+    if !fs_restriction_available(&sup, &python).await {
+        eprintln!("skipping: Landlock filesystem restriction unavailable");
+        return;
+    }
+
+    let config = PluginConfig {
+        plugin_id: "fsacc_sock".to_string(),
+        binary_path: PathBuf::from(&python),
+        args: vec![
+            "-c".to_string(),
+            "import os, socket
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.settimeout(2)
+try:
+    s.connect(os.environ['VEYRON_SOCKET_PATH'])
+    result = 'CONNECT_OK'
+except PermissionError:
+    result = 'CONNECT_EACCES'
+except OSError:
+    result = 'CONNECT_ERR'
+print('RESULT=' + result)"
+                .to_string(),
+        ],
+        env: vec![
+            "PYTHONNOUSERSITE=1".to_string(),
+            "PYTHONDONTWRITEBYTECODE=1".to_string(),
+        ],
+        restart_policy: RestartPolicy::Never,
+        max_restarts: 0,
+        sandbox: true,
+        max_fs_access: FsAccessMode::None,
+        grace_seconds: 1,
+        ..Default::default()
+    };
+    sup.spawn_plugin(config)
+        .await
+        .expect("sandbox spawn must succeed");
+    let logs = wait_for_log(&sup, "fsacc_sock", "RESULT=").await;
+    let _ = sup.stop_plugin("fsacc_sock").await;
+    let _ = std::fs::remove_file(sock_path);
+
+    assert!(
+        logs.iter().any(|l| l.contains("RESULT=CONNECT_OK")),
+        "restricted plugin must reach the kernel UDS, logs: {logs:?}"
+    );
+    assert!(
+        !logs.iter().any(|l| l.contains("RESULT=CONNECT_EACCES")),
+        "socket resolve must not be denied by the ruleset, logs: {logs:?}"
+    );
 }
