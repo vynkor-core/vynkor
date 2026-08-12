@@ -27,6 +27,7 @@ fn sleep_def(id: &str) -> PluginDef {
         max_procs: None,
         max_vmem_mb: None,
         permissions: vec![],
+        ..Default::default()
     }
 }
 
@@ -43,6 +44,7 @@ fn bad_binary_def(id: &str) -> PluginDef {
         max_procs: None,
         max_vmem_mb: None,
         permissions: vec![],
+        ..Default::default()
     }
 }
 
@@ -197,6 +199,7 @@ fn mk_def(id: &str) -> PluginDef {
         max_procs: None,
         max_vmem_mb: None,
         permissions: vec![],
+        ..Default::default()
     }
 }
 

@@ -33,6 +33,19 @@ pub struct PluginDef {
     /// Empty list means "allow all declared permissions" (no restriction).
     #[serde(default)]
     pub permissions: Vec<String>,
+    /// Landlock filesystem ceiling for sandboxed plugins (R9-03): `full`
+    /// (no restriction, default), `read-only`, or `none`. Only enforced when
+    /// `sandbox: true` and the kernel supports Landlock.
+    #[serde(default)]
+    pub max_fs_access: Option<String>,
+    /// Read-only paths granted to a restricted plugin (besides its own binary
+    /// dir and system library dirs). Honored when `max_fs_access: read-only`.
+    #[serde(default)]
+    pub readonly_paths: Vec<PathBuf>,
+    /// Writable paths granted to a restricted plugin. Honored when
+    /// `max_fs_access` is `read-only` or `none`.
+    #[serde(default)]
+    pub writable_paths: Vec<PathBuf>,
 }
 
 fn default_restart_policy() -> String {

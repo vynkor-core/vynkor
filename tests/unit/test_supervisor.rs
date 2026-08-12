@@ -339,6 +339,7 @@ fn ignores_sigterm_config(plugin_id: &str, grace_seconds: u32) -> PluginConfig {
         sandbox: false,
         max_procs: None,
         max_vmem_mb: None,
+        ..Default::default()
     }
 }
 

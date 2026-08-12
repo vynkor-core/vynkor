@@ -54,6 +54,16 @@ pub struct PluginConfig {
     /// RLIMIT_AS cap in MiB. None = `runner::DEFAULT_MAX_VMEM_MB`. Applied
     /// unconditionally (not gated by `sandbox`).
     pub max_vmem_mb: Option<u64>,
+    /// Landlock filesystem ceiling for sandboxed plugins (R9-03):
+    /// `full` (no restriction), `read-only`, or `none`. Only enforced when
+    /// `sandbox: true` on a Landlock-capable kernel.
+    pub max_fs_access: crate::plugins::fsaccess::FsAccessMode,
+    /// Read-only dirs/files granted to a restricted plugin (besides its own
+    /// binary dir and system libs). Honored when `max_fs_access: read-only`.
+    pub readonly_paths: Vec<PathBuf>,
+    /// Writable dirs/files granted to a restricted plugin. Honored when
+    /// `max_fs_access` is `read-only` or `none`.
+    pub writable_paths: Vec<PathBuf>,
 }
 
 pub struct PluginProcess {
@@ -219,8 +229,29 @@ impl PluginSupervisor {
             if config.grace_seconds > 0 {
                 c.env("VEYRON_SHIM_GRACE_SECS", config.grace_seconds.to_string());
             }
+            // R9-03: pass the Landlock filesystem restriction down to the
+            // shim, which applies it in the plugin's pre_exec (fail-closed).
+            // `full` sends no vars — the shim then builds no ruleset.
+            if config.max_fs_access != crate::plugins::fsaccess::FsAccessMode::Full {
+                use crate::plugins::fsaccess;
+                c.env("VEYRON_MAX_FS_ACCESS", config.max_fs_access.as_str())
+                    .env(
+                        "VEYRON_RO_PATHS",
+                        fsaccess::join_paths_env(&config.readonly_paths),
+                    )
+                    .env(
+                        "VEYRON_RW_PATHS",
+                        fsaccess::join_paths_env(&config.writable_paths),
+                    );
+            }
             c
         } else {
+            if config.max_fs_access != crate::plugins::fsaccess::FsAccessMode::Full {
+                warn!(
+                    plugin_id = %config.plugin_id,
+                    "max_fs_access is only enforced for sandboxed plugins (sandbox: true) — running without filesystem restriction",
+                );
+            }
             Command::new(&config.binary_path)
         };
         cmd.args(&config.args)
