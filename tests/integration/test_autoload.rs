@@ -53,6 +53,7 @@ async fn kernel_auto_spawns_plugins_from_config() {
         max_procs: None,
         max_vmem_mb: None,
         permissions: vec![],
+        ..Default::default()
     };
 
     let (shutdown, _registry) =

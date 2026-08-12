@@ -31,6 +31,7 @@ fn def_with_binary(id: &str, binary: &str) -> PluginDef {
         max_procs: None,
         max_vmem_mb: None,
         permissions: vec![],
+        ..Default::default()
     }
 }
 
@@ -181,6 +182,7 @@ async fn invalid_plugin_skipped_valid_loads() {
             max_procs: None,
             max_vmem_mb: None,
             permissions: vec![],
+            ..Default::default()
         },
         PluginDef {
             id: "good-plugin".to_string(),
@@ -194,6 +196,7 @@ async fn invalid_plugin_skipped_valid_loads() {
             max_procs: None,
             max_vmem_mb: None,
             permissions: vec![],
+            ..Default::default()
         },
     ];
 

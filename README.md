@@ -91,6 +91,8 @@ Every message on UDS is wrapped in a strict 44-byte header:
 
 Every plugin runs in a separate OS process. The kernel spawns it, injects `VEYRON_SOCKET_PATH`, and supervises it. On Linux with `sandbox: true`, the plugin runs in private **user + network + PID + mount namespaces**: `pre_exec` switches into a private user namespace (so it works without CAP_SYS_ADMIN) and a private network namespace, while a shim process (`vyn __shim`) creates a fresh PID namespace and private `/proc` and forks the plugin into it as PID 1. Resource caps `RLIMIT_NPROC=1024` and `RLIMIT_AS=512MiB` apply by default, with per-plugin `pids.max` accounting when cgroup v2 is available. A shim is required because the kernel cannot move the exec'd plugin into a PID namespace from its own spawn path: a process with a pending `pid_for_children` namespace cannot create threads, which kills every multithreaded plugin with EINVAL. The shim forwards lifecycle signals to the plugin and mirrors its exit status, so supervision (restart, SIGTERM shutdown, watchdog) is unchanged — inside the sandbox the plugin sees only its own processes and can no longer enumerate or signal host/other-plugin processes. A plugin crash does not affect other plugins or the kernel.
 
+Optionally, a sandboxed plugin's filesystem access is restricted with the Landlock LSM (R9-03): `max_fs_access: none` (exec requirements + `writable_paths` only) or `read-only` (+ `readonly_paths`) denies reads/writes of everything else with `EACCES`, enforced by the shim in the plugin's `pre_exec` before it runs — a plugin that cannot be restricted is killed, never run unrestricted. `max_fs_access` is only honored when `sandbox: true`.
+
 ---
 
 ## Getting Started

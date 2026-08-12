@@ -37,7 +37,7 @@ use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{getgid, getuid, read, write, Pid};
 use std::os::fd::{AsFd, AsRawFd};
 use std::os::unix::process::CommandExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::time::{Duration, Instant};
@@ -108,6 +108,12 @@ pub fn run(plugin_binary: &Path, args: &[String]) -> anyhow::Result<i32> {
     // die with the supervisor so a kernel crash cannot orphan the plugin
     set_pdeathsig(Some(Signal::SIGKILL)).context("set_pdeathsig")?;
 
+    // R9-03: Landlock filesystem restriction the supervisor requested (None for
+    // `max_fs_access: full`). Read here, applied in the plugin's pre_exec so
+    // only the plugin is restricted — the shim keeps unrestricted access.
+    let fs_restriction = crate::plugins::fsaccess::from_env();
+    let socket_path = std::env::var("VEYRON_SOCKET_PATH").ok().map(PathBuf::from);
+
     // outer uid/gid must be captured before unshare — afterwards the process
     // is already root inside the new user namespace
     let (uid, gid) = (getuid().as_raw(), getgid().as_raw());
@@ -134,6 +140,10 @@ pub fn run(plugin_binary: &Path, args: &[String]) -> anyhow::Result<i32> {
     )
     .context("make / rprivate")?;
 
+    // owned copy so the pre_exec closure (required 'static) can reference the
+    // plugin binary while Command::new borrows the caller's path
+    let plugin_binary_owned = plugin_binary.to_path_buf();
+
     let child = unsafe {
         Command::new(plugin_binary)
             .args(args)
@@ -157,6 +167,17 @@ pub fn run(plugin_binary: &Path, args: &[String]) -> anyhow::Result<i32> {
                 // the shim's own stdout is the pid channel
                 if libc::dup2(2, 1) < 0 {
                     return Err(std::io::Error::last_os_error());
+                }
+                // R9-03: enforce the Landlock filesystem restriction before the
+                // plugin starts. On failure this errors the spawn and the
+                // supervisor sees no pid line — the plugin never runs
+                // unrestricted (the readiness byte is written only below).
+                if let Some(restriction) = &fs_restriction {
+                    crate::plugins::fsaccess::apply(
+                        restriction,
+                        &plugin_binary_owned,
+                        socket_path.as_deref(),
+                    )?;
                 }
                 // the readiness byte; the supervisor treats a missing pid line as
                 // a failed spawn, so this is the sandbox admission gate

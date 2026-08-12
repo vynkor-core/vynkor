@@ -32,6 +32,20 @@ impl PluginLoader {
             grace_seconds: def.grace_seconds,
             max_procs: def.max_procs,
             max_vmem_mb: def.max_vmem_mb,
+            max_fs_access: def
+                .max_fs_access
+                .as_deref()
+                .and_then(crate::plugins::fsaccess::FsAccessMode::parse)
+                .unwrap_or_else(|| {
+                    if let Some(value) = def.max_fs_access.as_deref() {
+                        if !value.is_empty() && value != "full" {
+                            warn!(id = %def.id, value, "unknown max_fs_access — falling back to full (no filesystem restriction)");
+                        }
+                    }
+                    crate::plugins::fsaccess::FsAccessMode::Full
+                }),
+            readonly_paths: def.readonly_paths.clone(),
+            writable_paths: def.writable_paths.clone(),
         }
     }
 
