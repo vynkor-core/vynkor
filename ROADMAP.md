@@ -254,6 +254,15 @@ duplicate registration.
 > `veyron-wire ^0.1.0`, which is yanked on crates.io, so path consumers cannot
 > resolve; the kernel itself uses the published `veyron-sdk 0.1.2` (wire
 > 0.2.0). Recorded here so the next session doesn't re-derive it.
+>
+> **RESOLVED (2026-08-12):** `veyron-sdk-rust` bumped to 0.1.2 + wire 0.2.0
+> (commit `0742bd2`); `ping-pong-rs` migrated off the stale git deps /
+> `veyron::` monolith imports to crates.io `veyron-sdk 0.1`; `ping-pong-rs`,
+> `network`, `ai` rebuilt against wire 0.2.0 and reinstalled into
+> `~/.local/lib/veyron/plugins/`. Live check: all three register with populated
+> `actions`, `ping → pong` returns `ACTION_OK`, zero watchdog SIGKILLs,
+> `restart_count=0`. (Veyron-plugins repo: `plugins/ping-pong-rs/{Cargo.toml,
+> src/main.rs}` fixed — commit pending there.)
 
 ---
 
@@ -333,7 +342,7 @@ visibility/file-system gaps.
     `shim_forwards_sigterm_to_sandboxed_plugin`,
     `shim_reports_exit_status_for_supervision`.
 
-- [ ] R9-03 — **Filesystem isolation (Landlock LSM first, minimal rootfs
+- [x] R9-03 — **Filesystem isolation (Landlock LSM first, minimal rootfs
       later):** plugins currently read/write the host filesystem with the
       real uid's credentials. Landlock (Linux 5.13+, unprivileged,
       `no_new_privs`-compatible) lets `pre_exec` restrict file access
@@ -347,6 +356,26 @@ visibility/file-system gaps.
     `readonly_paths` / `writable_paths`).
   - Acceptance: a plugin denied read access to `~` gets EACCES on open;
     plugin writes are confined to its declared writable dirs.
+  - Done: `plugins::fsaccess` builds and enforces the Landlock ruleset via
+    the `landlock` crate (`landlock = "0.4.7"`, linux-gated) in the shim's
+    plugin `pre_exec` — before the readiness byte, so a plugin that cannot
+    be restricted is killed and never runs unrestricted (fail-closed).
+    Config: `max_fs_access: full|read-only|none` (default `full`), with
+    `readonly_paths` (granted read+execute on dirs) and `writable_paths`
+    (full read/write). The ruleset always grants: the plugin binary's own
+    dir (resolved execvp-style, `resolve_binary_path`), system lib dirs
+    (`/usr/lib`, `/usr/lib64`, `/lib`, `/lib64`), `/etc/ld.so.cache`, and
+    `ResolveUnix` on the kernel UDS path (ABI v9; the plugin must still
+    reach the kernel to register). Restricted kernels downgrade gracefully
+    via the crate's best-effort compat; `NotEnforced` fails the spawn.
+    Only enforced when `sandbox: true` — otherwise a warning is logged.
+    Covered by `tests/unit/` (`fsaccess` module: mode/env parsing, rule
+    access-right mapping, path resolution) and `tests/integration/test_shim.rs`
+    (`sandboxed_plugin_denied_undeclared_reads`,
+    `sandboxed_plugin_writes_only_declared_writable_paths`,
+    `sandboxed_plugin_reads_declared_readonly_paths`,
+    `sandboxed_plugin_full_mode_is_unrestricted`,
+    `sandboxed_plugin_reaches_kernel_socket`).
 
 - [ ] R9-04 — **seccomp syscall filter in `pre_exec`:** default-deny
       allowlist (or a tight denylist of kernel-escape-capable syscalls —
@@ -560,7 +589,7 @@ surfaces cover every planned plugin).
 | B2 | `stop` swallows ESRCH, can orphan the live registered instance — shipped: stop blocks until exit (SIGKILL deadline) | R9-02 |
 | B3 | `spawn_internal` overwrites the manual-start entry on duplicate restart — shipped: `PluginAlreadyRunning` guard + restart-cancel on stop | R9-02 |
 | B4 | cgroup scope reap loops on `Device or resource busy` — shipped: stop waits for reap completion | R9-02 |
-| R9-03 | filesystem isolation (Landlock / minimal rootfs) | R9-02 |
+| R9-03 | filesystem isolation (Landlock / minimal rootfs) — shipped: Landlock ruleset in shim pre_exec, `max_fs_access`/`readonly_paths`/`writable_paths` config, fail-closed, integration-tested | R9-02 |
 | R9-04 | seccomp syscall filter | R9-03 |
 | R9-05 | `/proc` `hidepid=2` interim visibility hardening | R8 + N ship gate |
 | R9-06 | docs: fix stale `AUDIT.md` pointer, record exact rlimit semantics | none |
@@ -575,12 +604,14 @@ surfaces cover every planned plugin).
 **Ship gate:** R8-01..R8-05 are kernel-local and land together on `develop`;
 R8-06/R8-07 are cross-repo coordination items shipped from their own repos.
 The Immediate N1–N5 items shipped (2026-08-11) — all kernel-local, independent
-of the cross-repo items; N5 restored the DoD `fmt` gate. Phase 9 is explicitly
-deferred — no R9 item is scheduled until R8 ships. M7/M9 remain
-deferred by decision. R9-01/R9-05 are Linux-cgroup/mount-namespace work and
-require a delegated cgroup v2 subtree or root. Phase 10 (plugin config +
-marketplace state) is likewise deferred and independent of Phase 9 — it can
-land before or after hard isolation.
+of the cross-repo items; N5 restored the DoD `fmt` gate. Phase 9 was explicitly
+deferred until R8 shipped; with that gate lifted, R9-01 (cgroup pids), R9-02
+(shim PID namespace), R9-05 (closed with R9-02), R9-06 (docs), and R9-03
+(Landlock filesystem isolation) have shipped on `develop`. R9-04 (seccomp) is
+the remaining Phase 9 item. M7/M9 remain deferred by decision. R9-01/R9-05 are
+Linux-cgroup/mount-namespace work and require a delegated cgroup v2 subtree or
+root. Phase 10 (plugin config + marketplace state) is likewise deferred and
+independent of Phase 9 — it can land before or after hard isolation.
 
 ## Definition of Done
 

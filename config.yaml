@@ -115,10 +115,15 @@ allow_no_auth: true
 #       - /run/user/1000/veyron.sock  # use XDG_RUNTIME_DIR/veyron.sock (fallback: ~/.veyron/run/veyron.sock)
 #     env:                           # extra environment variables
 #       - LOG_LEVEL=info
-#     sandbox: false                 # true: isolate in private user+net namespace (Linux). PID-namespace isolation is NOT included — unshare(CLONE_NEWPID) in the spawn path makes every multithreaded plugin die with EINVAL (threads can't spawn while pid_for_children is pending). Needs a shim-process supervisor; see src/plugins/runner.rs.
+#     sandbox: false                 # true: isolate in private user+net+PID+mount namespace (Linux) via a shim process (R9-02). Plugins run as PID 1 of their own namespace with a private /proc.
 #     grace_seconds: 10              # optional, default 5 — seconds to wait after SIGTERM before SIGKILL
 #     max_procs: 1024                # optional, default 1024 — process-count cap (applied to every plugin, not just sandboxed). With cgroup v2 available the budget is the plugin's own cgroup pids.max: counts only that plugin's threads, isolated from the rest of the session (R9-01). Otherwise the fallback is RLIMIT_NPROC, which counts ALL threads of the real uid at clone time — on busy sessions (hundreds of threads) a low value makes every plugin thread spawn fail with EAGAIN, so raise it per-plugin there.
 #     max_vmem_mb: 512               # optional, default 512 — RLIMIT_AS cap in MiB (applied to every plugin, not just sandboxed)
+#     max_fs_access: full            # optional, default full — Landlock filesystem ceiling for sandboxed plugins (R9-03). full: unrestricted; read-only: exec requirements + readonly_paths (read) + writable_paths (write); none: exec requirements + writable_paths only. Requires sandbox: true and Linux 5.13+.
+#     readonly_paths:                # optional — dirs/files the plugin may read (granted read+execute on dirs). Honored when max_fs_access: read-only.
+#       - /usr/share/example
+#     writable_paths:                # optional — dirs/files the plugin may write/create. Honored when max_fs_access is read-only or none.
+#       - /var/lib/veyron/plugins/my-plugin
 
 # --- Local voice stack (tts + stt) ------------------------------------------
 # sandbox: true now works for non-root kernels — sandbox_pre_exec switches
