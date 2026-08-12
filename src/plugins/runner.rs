@@ -28,20 +28,18 @@ const VEYRON_CGROUP_DIR: &str = "veyron";
 /// Run inside new user + network namespaces and apply resource limits.
 /// Passed as a `pre_exec` hook; executes in the child process before exec.
 ///
-/// The original implementation also unshared the PID namespace
-/// (`CLONE_NEWPID`). That is fundamentally incompatible with this
-/// supervisor's spawn path: `unshare(CLONE_NEWPID)` marks the *caller* so
-/// that its children land in a fresh PID namespace, and the exec'd plugin
-/// inherits that state. The kernel refuses thread creation for a process
-/// with a pending `pid_for_children` namespace (`CLONE_NEWPID` cannot be
-/// combined with `CLONE_THREAD` — threads must share a PID namespace), so
-/// every multithreaded plugin (tokio runtimes included) died instantly
-/// with EINVAL on its first worker-thread spawn — as root and non-root
-/// alike. Doing it correctly requires a shim process: a supervisor-forked
-/// wrapper that unshares `CLONE_NEWPID`, forks the plugin (which is *born*
-/// into the namespace as PID 1, where threads work), and forwards signals
-/// and exit status. That redesign is out of scope here; until it lands,
-/// the sandbox isolates via user + network namespaces and rlimits instead.
+/// PID-namespace isolation is not done here (and cannot be): the original
+/// implementation unshared `CLONE_NEWPID` in this hook, but the exec'd plugin
+/// then inherited a pending `pid_for_children` namespace and the kernel
+/// refused thread creation (`CLONE_NEWPID` cannot be combined with
+/// `CLONE_THREAD` — threads must share a PID namespace), so every
+/// multithreaded plugin (tokio runtimes included) died instantly with EINVAL
+/// on its first worker-thread spawn — as root and non-root alike. Correct
+/// PID-namespace isolation needs a shim process, which has landed as R9-02:
+/// sandboxed plugins are spawned through `vyn __shim` (see `plugins::shim`),
+/// which unshares a fresh namespace and forks the plugin into it as PID 1.
+/// This hook stays the host-side sandbox: user + network namespaces, rlimits,
+/// and the per-plugin pids-cgroup join below.
 ///
 /// User namespace: for an unprivileged operator (no CAP_SYS_ADMIN in the
 /// current user namespace) the direct `CLONE_NEWNET` unshare fails with

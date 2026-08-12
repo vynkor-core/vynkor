@@ -36,15 +36,3 @@ name = "fuzz_router_pipeline"
 path = "fuzz_targets/fuzz_router_pipeline.rs"
 test = false
 doc = false
-
-[[bin]]
-name = "fuzz_proto_envelope"
-path = "fuzz_targets/fuzz_proto_envelope.rs"
-test = false
-doc = false
-
-[[bin]]
-name = "fuzz_target_routing"
-path = "fuzz_targets/fuzz_target_routing.rs"
-test = false
-doc = false

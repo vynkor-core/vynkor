@@ -9,10 +9,34 @@ use veyron::kernel;
 use veyron::utils;
 use veyron::utils::config::{load_config, Config};
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    // sandbox shim: must stay single-threaded — unshare(CLONE_NEWUSER) fails
+    // with EINVAL in a multithreaded process, and the tokio runtime below
+    // spawns worker threads. Dispatch it before the runtime exists. Linux
+    // only: PID namespaces do not exist elsewhere.
+    #[cfg(target_os = "linux")]
+    if let Commands::Shim {
+        plugin_binary,
+        args,
+    } = &cli.command
+    {
+        let code = match veyron::plugins::shim::run(plugin_binary, args) {
+            Ok(code) => code,
+            Err(e) => {
+                eprintln!("shim: {e:#}");
+                1
+            }
+        };
+        std::process::exit(code);
+    }
+
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(run_kernel(cli))
+}
+
+async fn run_kernel(cli: Cli) -> Result<()> {
     match cli.command {
         Commands::Start {
             foreground,
@@ -120,6 +144,8 @@ async fn main() -> Result<()> {
         Commands::CompleteSlugs => {
             complete::complete_slugs().await?;
         }
+        #[cfg(target_os = "linux")]
+        Commands::Shim { .. } => unreachable!("__shim is dispatched before the tokio runtime"),
     }
 
     Ok(())
