@@ -40,6 +40,11 @@ jobs:
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz
 
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "35.1"
+
       - name: Restore seed corpus
         run: |
           CORPUS_DIR="fuzz/corpus/${{ matrix.target }}"
