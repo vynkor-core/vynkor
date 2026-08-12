@@ -17,20 +17,16 @@ jobs:
       - uses: actions/checkout@v4
 
       # SDKs/wire live in sibling repos (not submodules — temporary decision,
-      # see ROADMAP). Check them out beside the workspace so tests and the
+      # see ROADMAP). Clone them beside the workspace so tests and the
       # proto drift check can reach their sources via ../veyron-* paths.
-      - uses: actions/checkout@v4
-        with:
-          repository: veyron-core/veyron-wire
-          path: ../veyron-wire
-      - uses: actions/checkout@v4
-        with:
-          repository: veyron-core/veyron-sdk-cpp
-          path: ../veyron-sdk-cpp
-      - uses: actions/checkout@v4
-        with:
-          repository: veyron-core/veyron-sdk-python
-          path: ../veyron-sdk-python
+      # Plain git clone: actions/checkout@v4 refuses `path: ../` (repo path
+      # must stay under the workspace) since runner 2.319+.
+      - name: Clone veyron-wire (sibling)
+        run: git clone --depth 1 https://github.com/veyron-core/veyron-wire.git ../veyron-wire
+      - name: Clone veyron-sdk-cpp (sibling)
+        run: git clone --depth 1 https://github.com/veyron-core/veyron-sdk-cpp.git ../veyron-sdk-cpp
+      - name: Clone veyron-sdk-python (sibling)
+        run: git clone --depth 1 https://github.com/veyron-core/veyron-sdk-python.git ../veyron-sdk-python
 
       - name: Proto drift check (T-17)
         run: |
