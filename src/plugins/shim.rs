@@ -179,6 +179,10 @@ pub fn run(plugin_binary: &Path, args: &[String]) -> anyhow::Result<i32> {
                         socket_path.as_deref(),
                     )?;
                 }
+                // R9-04: seccomp syscall denylist (ptrace, bpf, mount, ...).
+                // Fail-closed like Landlock: a plugin that cannot be filtered
+                // never runs — the readiness byte is written only below.
+                crate::plugins::seccomp::apply()?;
                 // the readiness byte; the supervisor treats a missing pid line as
                 // a failed spawn, so this is the sandbox admission gate
                 match write(std::os::fd::BorrowedFd::borrow_raw(ready_fd), b"R") {

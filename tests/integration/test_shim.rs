@@ -610,3 +610,166 @@ print('RESULT=' + result)"
         "socket resolve must not be denied by the ruleset, logs: {logs:?}"
     );
 }
+
+// ---- R9-04: seccomp syscall denylist ----
+
+/// Probe that seccomp is actually enforced for a sandboxed plugin: spawn one
+/// that calls `ptrace` (denied) and one that does not; the former must die
+/// with SIGSYS while the latter survives long enough to print. A successful
+/// ptrace or a failed spawn means the host cannot enforce the filter.
+async fn seccomp_available(sup: &PluginSupervisor, python: &str) -> bool {
+    let probe = PluginConfig {
+        plugin_id: "seccomp_probe".to_string(),
+        binary_path: PathBuf::from(python),
+        args: vec![
+            "-c".to_string(),
+            "import ctypes, sys; \
+             libc = ctypes.CDLL(None, use_errno=True); \
+             r = libc.ptrace(0, 0, 0, 0); \
+             print('PASS', r, 'errno', ctypes.get_errno(), flush=True); \
+             time.sleep(30)"
+                .to_string(),
+        ],
+        env: vec![
+            "PYTHONNOUSERSITE=1".to_string(),
+            "PYTHONDONTWRITEBYTECODE=1".to_string(),
+        ],
+        restart_policy: RestartPolicy::Never,
+        max_restarts: 0,
+        sandbox: true,
+        grace_seconds: 1,
+        ..Default::default()
+    };
+    // the probe must die (SIGSYS), not survive the denied syscall
+    if sup.spawn_plugin(probe).await.is_err() {
+        return false;
+    }
+    let logs = wait_for_log(sup, "seccomp_probe", "PASS").await;
+    let _ = sup.stop_plugin("seccomp_probe").await;
+    !logs.iter().any(|l| l.contains("PASS"))
+}
+
+/// A sandboxed plugin calling a denied syscall (`ptrace`) must be killed with
+/// SIGSYS — the filter is fail-closed and the plugin never runs unfiltered.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn sandboxed_plugin_denied_ptrace_dies_with_sigsys() {
+    let Some(python) = python3_bin() else {
+        eprintln!("skipping: python3 not found");
+        return;
+    };
+    set_shim_bin();
+    let sup = Arc::new(PluginSupervisor::new("/tmp/veyron_shim_seccomp.sock"));
+    if !seccomp_available(&sup, &python).await {
+        eprintln!("skipping: seccomp syscall filter unavailable");
+        return;
+    }
+
+    let config = PluginConfig {
+        plugin_id: "seccomp_ptrace".to_string(),
+        binary_path: PathBuf::from(&python),
+        args: vec![
+            "-c".to_string(),
+            "import ctypes, time; \
+             print('STARTED', flush=True); \
+             libc = ctypes.CDLL(None, use_errno=True); \
+             libc.ptrace(0, 0, 0, 0); \
+             print('PTRACE_RETURNED', flush=True); \
+             time.sleep(30)"
+                .to_string(),
+        ],
+        env: vec![
+            "PYTHONNOUSERSITE=1".to_string(),
+            "PYTHONDONTWRITEBYTECODE=1".to_string(),
+        ],
+        restart_policy: RestartPolicy::Never,
+        max_restarts: 0,
+        sandbox: true,
+        grace_seconds: 1,
+        ..Default::default()
+    };
+    let proc = sup
+        .spawn_plugin(config)
+        .await
+        .expect("sandbox spawn must succeed");
+
+    let logs = wait_for_log(&sup, "seccomp_ptrace", "STARTED").await;
+    assert!(
+        logs.iter().any(|l| l.contains("STARTED")),
+        "plugin must start before the syscall, logs: {logs:?}"
+    );
+
+    // the ptrace call must never return — the process dies with SIGSYS
+    assert!(
+        !logs.iter().any(|l| l.contains("PTRACE_RETURNED")),
+        "denied ptrace must not return, logs: {logs:?}"
+    );
+    for _ in 0..30 {
+        let alive =
+            nix::sys::signal::kill(nix::unistd::Pid::from_raw(proc.pid as i32), None).is_ok();
+        if !alive {
+            return;
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+    panic!("plugin pid {} survived a denied ptrace syscall", proc.pid);
+}
+
+/// The seccomp denylist must not disturb normal plugin operation: a sandboxed
+/// plugin doing ordinary work (threads, sockets, files via declared paths)
+/// keeps running under the filter.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn sandboxed_plugin_runs_normally_under_seccomp() {
+    let Some(python) = python3_bin() else {
+        eprintln!("skipping: python3 not found");
+        return;
+    };
+    set_shim_bin();
+    let sup = Arc::new(PluginSupervisor::new("/tmp/veyron_shim_seccomp_ok.sock"));
+    if !sandbox_available(&sup).await {
+        eprintln!("skipping: unprivileged user namespaces unavailable");
+        return;
+    }
+
+    let config = PluginConfig {
+        plugin_id: "seccomp_ok".to_string(),
+        binary_path: PathBuf::from(&python),
+        args: vec![
+            "-c".to_string(),
+            "import threading, time; \
+             def worker(): \
+                 [x*x for x in range(1000)]; \
+                 print('WORKER_DONE', flush=True); \
+             t = threading.Thread(target=worker); \
+             t.start(); \
+             print('MAIN_READY', flush=True); \
+             t.join(); \
+             time.sleep(30)"
+                .to_string(),
+        ],
+        env: vec![
+            "PYTHONNOUSERSITE=1".to_string(),
+            "PYTHONDONTWRITEBYTECODE=1".to_string(),
+        ],
+        restart_policy: RestartPolicy::Never,
+        max_restarts: 0,
+        sandbox: true,
+        grace_seconds: 1,
+        ..Default::default()
+    };
+    sup.spawn_plugin(config)
+        .await
+        .expect("sandbox spawn must succeed");
+
+    let logs = wait_for_log(&sup, "seccomp_ok", "WORKER_DONE").await;
+    let _ = sup.stop_plugin("seccomp_ok").await;
+    assert!(
+        logs.iter().any(|l| l.contains("MAIN_READY")),
+        "plugin main thread must run under seccomp, logs: {logs:?}"
+    );
+    assert!(
+        logs.iter().any(|l| l.contains("WORKER_DONE")),
+        "plugin worker thread must run under seccomp, logs: {logs:?}"
+    );
+}

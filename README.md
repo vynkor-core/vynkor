@@ -93,6 +93,8 @@ Every plugin runs in a separate OS process. The kernel spawns it, injects `VEYRO
 
 Optionally, a sandboxed plugin's filesystem access is restricted with the Landlock LSM (R9-03): `max_fs_access: none` (exec requirements + `writable_paths` only) or `read-only` (+ `readonly_paths`) denies reads/writes of everything else with `EACCES`, enforced by the shim in the plugin's `pre_exec` before it runs — a plugin that cannot be restricted is killed, never run unrestricted. `max_fs_access` is only honored when `sandbox: true`.
 
+Every sandboxed plugin additionally runs under a seccomp syscall filter (R9-04): a tight denylist of kernel-escape-capable syscalls — `ptrace`, `bpf`, kernel keyrings (`keyctl`/`add_key`/`request_key`), module loading, `reboot`/`kexec_*`, mount-namespace escape (`mount`, `pivot_root`, `chroot`, `setns`, ...), file-handle Landlock bypass (`open_by_handle_at`/`name_to_handle_at`), cross-process memory, `perf_event_open`, `userfaultfd`, `io_uring_*` — is installed in the plugin's `pre_exec` (after Landlock, before it runs) via the pure-Rust `seccompiler` crate. A denied syscall kills the plugin with `SIGSYS`; a plugin that cannot be filtered is killed, never run unfiltered. Everything else stays allowed, so arbitrary third-party plugins keep working without a per-SDK allowlist.
+
 ---
 
 ## Getting Started
