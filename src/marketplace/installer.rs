@@ -132,6 +132,15 @@ pub async fn install(
             ))
         })?;
 
+    // R10-03 — a revoked entry is never installable, whether it came from a
+    // fresh fetch or the stale cache: revocation outlives the cache TTL.
+    if entry.is_revoked() {
+        return Err(VeyronError::Internal(format!(
+            "Plugin '{}' v{} is revoked by the maintainer. Aborting — do not install.",
+            entry.slug, entry.version
+        )));
+    }
+
     let kernel_ver = Version::parse(env!("CARGO_PKG_VERSION"))
         .map_err(|e| VeyronError::Internal(format!("parse kernel version: {e}")))?;
 
@@ -596,6 +605,7 @@ pub fn validate_manifest(
         min_kernel_version: manifest.kernel_compatibility_range.min.clone(),
         max_kernel_version: manifest.kernel_compatibility_range.max.clone(),
         signature: String::new(),
+        status: "stable".into(),
     };
     check_kernel_compatibility(&compat_entry, kernel_ver)?;
 

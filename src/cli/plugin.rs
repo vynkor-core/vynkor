@@ -69,9 +69,16 @@ pub async fn handle(
         let url = registry_url.unwrap_or("");
         async move {
             if url.is_empty() {
-                fetch_registry(refresh, cache_ttl_secs, tmp_dir).await
+                fetch_registry(refresh, cache_ttl_secs, tmp_dir, marketplace_public_key).await
             } else {
-                fetch_registry_with_url(url, refresh, cache_ttl_secs, tmp_dir).await
+                fetch_registry_with_url(
+                    url,
+                    refresh,
+                    cache_ttl_secs,
+                    tmp_dir,
+                    marketplace_public_key,
+                )
+                .await
             }
         }
     };
@@ -244,6 +251,15 @@ fn print_table(entries: &[RegistryEntry]) {
         "DESCRIPTION",
     ];
 
+    // revoked entries stay listed so an operator sees why install fails
+    let display_slug = |e: &RegistryEntry| {
+        if e.is_revoked() {
+            format!("{} [revoked]", e.slug)
+        } else {
+            e.slug.clone()
+        }
+    };
+
     // Compute column widths
     let mut widths = [
         HEADERS[0].len(),
@@ -257,8 +273,9 @@ fn print_table(entries: &[RegistryEntry]) {
 
     for e in entries {
         let perms = e.permissions.join(", ");
+        let slug = display_slug(e);
         widths[0] = widths[0].max(e.id.len());
-        widths[1] = widths[1].max(e.slug.len());
+        widths[1] = widths[1].max(slug.len());
         widths[2] = widths[2].max(e.version.len());
         widths[3] = widths[3].max(e.min_kernel_version.len());
         widths[4] = widths[4].max(e.max_kernel_version.len());
@@ -288,7 +305,7 @@ fn print_table(entries: &[RegistryEntry]) {
         println!(
             "{:<w0$}  {:<w1$}  {:<w2$}  {:<w3$}  {:<w4$}  {:<w5$}  {}",
             e.id,
-            e.slug,
+            display_slug(e),
             e.version,
             e.min_kernel_version,
             e.max_kernel_version,
