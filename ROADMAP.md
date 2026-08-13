@@ -568,7 +568,7 @@ explicit state store. Independent of Phase 9 — can land before or after it.
     entries verified; offline stale fallback with a dead network still
     lists.
 
-- [ ] R10-04 — **`vyn plugin enable|disable <slug>`:** toggling a per-plugin
+- [x] R10-04 — **`vyn plugin enable|disable <slug>`:** toggling a per-plugin
       file (rename/comment-out) replaces hand-editing `config.yaml` when an
       operator wants a plugin kept on disk but not auto-spawned — today that
       means uncommenting/commenting the installer's block by hand, which
@@ -576,6 +576,21 @@ explicit state store. Independent of Phase 9 — can land before or after it.
   - Files: `src/cli/plugin.rs`, `src/plugins/loader.rs`.
   - Acceptance: `disable` stops auto-spawn on boot without uninstalling;
     `enable` restores it; the state survives SIGHUP reload.
+  - Done: `installer::disable_plugin_config`/`enable_plugin_config` rename
+    `plugins.d/<slug>.yaml` ↔ `<slug>.yaml.disabled` — the rename (not a
+    delete) preserves the operator's tuning, so re-enabling restores it
+    verbatim. A `Toggle` outcome distinguishes toggled/already/missing;
+    `validate_slug` guards the path (M-09 class); an active+disabled file
+    pair is refused because `fs::rename` would silently clobber the disabled
+    copy. CLI: `vyn plugin disable|enable <slug>`; a missing drop-in errors
+    with `PluginNotFound`, or notes when the slug lives in the deprecated
+    inline `plugins:` list (where a rename can't stop it). The loader needed
+    no change — `merge_plugin_dropins` only globs `*.yaml`/`*.yml`, so the
+    renamed file is skipped at boot and on SIGHUP reload. Covered by 9
+    installer unit tests (`test_installer.rs`) plus
+    `load_config_skips_disabled_dropin` (`config.rs`); live-verified:
+    enabled → kernel spawns the plugin, disabled → no spawn on boot, and
+    the double-toggle / unknown-slug error paths are clean.
 
 ---
 
@@ -690,7 +705,7 @@ surfaces cover every planned plugin).
 | R10-01 | plugin settings out of `config.yaml` → `plugins.d/` drop-in dir — shipped: merge + `plugins_dir` key, write/remove drop-ins, slug/symlink hardening, inline list deprecated | R8 + N ship gate |
 | R10-02 | installed-plugin state store (`installed.json`) — shipped: XDG data-dir ledger, atomic writes, reinstall-skip, missing-dir-tolerant remove, offline `list --installed` | none |
 | R10-03 | `registry.json` cache rework — shipped: versioned `registry-cache.json` in the state dir, verified-entries-only stale policy, `revoked` status blocks install, registry v2 map-form parsing | R10-02 |
-| R10-04 | `vyn plugin enable\|disable` toggle | R10-01 |
+| R10-04 | `vyn plugin enable\|disable` toggle — shipped: drop-in rename to `<slug>.yaml.disabled` (skipped by the `*.yaml` glob at boot + SIGHUP), content preserved on re-enable, slug/path hardening, inline-`plugins:` note | R10-01 |
 | P11-01 | protocol v1.4 — `PermissionType` additions 15–19 (`SECRETS`/`CLIPBOARD`/`LAUNCH`/`SCREEN`/`HOME`), header bump, wire regeneration | `secrets` plugin (veyron-plugins) needs it |
 | P11-02 | proto-copy sync — 6 files / 4 repos; fixes standalone SDK v1.2 drift, adds drift guard | P11-01 |
 | P11-03 | M9 zero-value enum renumber on the v1.4 bump (wire-breaking) | P11-01 |
