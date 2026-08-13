@@ -512,7 +512,14 @@ fn extract_zip_respects_files_allowlist() {
     let allowlist: HashSet<String> = ["plugin.json".to_string(), "bin/foo".to_string()]
         .into_iter()
         .collect();
-    extract_zip(&archive, &dest, 1024 * 1024 * 1024, 10_000, Some(&allowlist)).unwrap();
+    extract_zip(
+        &archive,
+        &dest,
+        1024 * 1024 * 1024,
+        10_000,
+        Some(&allowlist),
+    )
+    .unwrap();
 
     assert!(dest.join("plugin.json").exists());
     assert!(dest.join("bin/foo").exists());
@@ -537,8 +544,14 @@ fn extract_zip_errors_on_missing_allowlisted_file() {
     let allowlist: HashSet<String> = ["plugin.json".to_string(), "bin/missing".to_string()]
         .into_iter()
         .collect();
-    let err =
-        extract_zip(&archive, &dest, 1024 * 1024 * 1024, 10_000, Some(&allowlist)).unwrap_err();
+    let err = extract_zip(
+        &archive,
+        &dest,
+        1024 * 1024 * 1024,
+        10_000,
+        Some(&allowlist),
+    )
+    .unwrap_err();
     assert!(
         err.to_string().contains("bin/missing"),
         "missing allowlisted file must be named, got: {err}"
