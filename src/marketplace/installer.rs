@@ -673,6 +673,85 @@ pub fn remove_plugin_config(plugins_dir: &Path, slug: &str) -> Result<bool, Veyr
     }
 }
 
+/// Outcome of an enable/disable toggle (R10-04).
+#[derive(Debug, PartialEq, Eq)]
+pub enum Toggle {
+    /// The drop-in was renamed: enabled→disabled or disabled→enabled.
+    Toggled,
+    /// The requested state was already in effect.
+    Already,
+    /// No drop-in (active or disabled) exists for the slug.
+    Missing,
+}
+
+/// Suffix a disabled drop-in carries: `plugins_dir/<slug>.yaml.disabled`.
+/// `merge_plugin_dropins` only globs `*.yaml`/`*.yml`, so the renamed file is
+/// skipped at boot and on SIGHUP reload — the plugin stays on disk and
+/// installed, but is not auto-spawned. Renaming (not deleting) preserves the
+/// operator's tuning, so `enable` restores it verbatim.
+const DISABLED_SUFFIX: &str = ".yaml.disabled";
+
+fn dropin_paths(plugins_dir: &Path, slug: &str) -> (PathBuf, PathBuf) {
+    (
+        plugins_dir.join(format!("{slug}.yaml")),
+        plugins_dir.join(format!("{slug}{DISABLED_SUFFIX}")),
+    )
+}
+
+/// Disable a plugin's auto-spawn drop-in (R10-04): rename
+/// `plugins_dir/<slug>.yaml` → `plugins_dir/<slug>.yaml.disabled`.
+pub fn disable_plugin_config(plugins_dir: &Path, slug: &str) -> Result<Toggle, VeyronError> {
+    validate_slug(slug)?;
+    let (active, disabled) = dropin_paths(plugins_dir, slug);
+    if active.exists() && disabled.exists() {
+        // fs::rename would silently clobber the disabled copy — refuse.
+        return Err(VeyronError::Internal(format!(
+            "both {}.yaml and {}.yaml.disabled exist in {} — remove one first",
+            slug,
+            slug,
+            plugins_dir.display()
+        )));
+    }
+    match fs::rename(&active, &disabled) {
+        Ok(()) => Ok(Toggle::Toggled),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            if disabled.exists() {
+                Ok(Toggle::Already)
+            } else {
+                Ok(Toggle::Missing)
+            }
+        }
+        Err(e) => Err(VeyronError::Io(e)),
+    }
+}
+
+/// Re-enable a disabled plugin's auto-spawn drop-in (R10-04): rename
+/// `plugins_dir/<slug>.yaml.disabled` → `plugins_dir/<slug>.yaml`.
+pub fn enable_plugin_config(plugins_dir: &Path, slug: &str) -> Result<Toggle, VeyronError> {
+    validate_slug(slug)?;
+    let (active, disabled) = dropin_paths(plugins_dir, slug);
+    if active.exists() && disabled.exists() {
+        // fs::rename would silently clobber the disabled copy — refuse.
+        return Err(VeyronError::Internal(format!(
+            "both {}.yaml and {}.yaml.disabled exist in {} — remove one first",
+            slug,
+            slug,
+            plugins_dir.display()
+        )));
+    }
+    match fs::rename(&disabled, &active) {
+        Ok(()) => Ok(Toggle::Toggled),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            if active.exists() {
+                Ok(Toggle::Already)
+            } else {
+                Ok(Toggle::Missing)
+            }
+        }
+        Err(e) => Err(VeyronError::Io(e)),
+    }
+}
+
 pub fn validate_manifest(
     path: &Path,
     kernel_ver: &Version,

@@ -786,3 +786,161 @@ fn uninstall_rejects_traversal_slug() {
         "traversal must not delete outside plugin dir"
     );
 }
+
+// disable_plugin_config: renames the active drop-in to <slug>.yaml.disabled
+#[test]
+fn disable_plugin_config_renames_active_dropin() {
+    use veyron::marketplace::installer::{
+        disable_plugin_config, write_plugin_config, InstalledPlugin, Toggle,
+    };
+
+    let tmp = tempdir().unwrap();
+    let plugins_dir = tmp.path().join("plugins.d");
+    let installed = InstalledPlugin {
+        slug: "ping-pong".into(),
+        plugin_id: "ping-pong".into(),
+        version: "0.1.0".into(),
+        binary_path: Path::new("/x/ping-pong-rs").into(),
+    };
+    write_plugin_config(&plugins_dir, &installed).unwrap();
+    let body = fs::read_to_string(plugins_dir.join("ping-pong.yaml")).unwrap();
+
+    let outcome = disable_plugin_config(&plugins_dir, "ping-pong").unwrap();
+    assert_eq!(outcome, Toggle::Toggled);
+    assert!(!plugins_dir.join("ping-pong.yaml").exists());
+    assert!(plugins_dir.join("ping-pong.yaml.disabled").exists());
+    // the rename preserves the operator's tuning verbatim
+    assert_eq!(
+        fs::read_to_string(plugins_dir.join("ping-pong.yaml.disabled")).unwrap(),
+        body
+    );
+}
+
+// disable_plugin_config: already disabled → Toggle::Already
+#[test]
+fn disable_plugin_config_already_disabled() {
+    use veyron::marketplace::installer::{disable_plugin_config, Toggle};
+
+    let tmp = tempdir().unwrap();
+    let plugins_dir = tmp.path().join("plugins.d");
+    fs::create_dir_all(&plugins_dir).unwrap();
+    fs::write(plugins_dir.join("ai.yaml.disabled"), "id: ai\n").unwrap();
+
+    let outcome = disable_plugin_config(&plugins_dir, "ai").unwrap();
+    assert_eq!(outcome, Toggle::Already);
+    assert!(plugins_dir.join("ai.yaml.disabled").exists());
+}
+
+// disable_plugin_config: no drop-in at all → Toggle::Missing
+#[test]
+fn disable_plugin_config_missing() {
+    use veyron::marketplace::installer::{disable_plugin_config, Toggle};
+
+    let tmp = tempdir().unwrap();
+    let plugins_dir = tmp.path().join("plugins.d");
+
+    let outcome = disable_plugin_config(&plugins_dir, "ghost").unwrap();
+    assert_eq!(outcome, Toggle::Missing);
+}
+
+// disable_plugin_config: active + disabled both present → refuse (a rename
+// would silently clobber the disabled copy)
+#[test]
+fn disable_plugin_config_refuses_when_both_exist() {
+    use veyron::marketplace::installer::disable_plugin_config;
+
+    let tmp = tempdir().unwrap();
+    let plugins_dir = tmp.path().join("plugins.d");
+    fs::create_dir_all(&plugins_dir).unwrap();
+    fs::write(plugins_dir.join("ai.yaml"), "id: ai\n").unwrap();
+    fs::write(plugins_dir.join("ai.yaml.disabled"), "id: ai\n").unwrap();
+
+    let err = disable_plugin_config(&plugins_dir, "ai").unwrap_err();
+    assert!(err.to_string().contains("remove one first"), "got: {err}");
+    assert!(plugins_dir.join("ai.yaml").exists());
+    assert!(plugins_dir.join("ai.yaml.disabled").exists());
+}
+
+// enable_plugin_config: restores the drop-in from .yaml.disabled verbatim
+#[test]
+fn enable_plugin_config_restores_dropin() {
+    use veyron::marketplace::installer::{enable_plugin_config, Toggle};
+
+    let tmp = tempdir().unwrap();
+    let plugins_dir = tmp.path().join("plugins.d");
+    fs::create_dir_all(&plugins_dir).unwrap();
+    let body = "id: ai\nbinary: /x/ai\n";
+    fs::write(plugins_dir.join("ai.yaml.disabled"), body).unwrap();
+
+    let outcome = enable_plugin_config(&plugins_dir, "ai").unwrap();
+    assert_eq!(outcome, Toggle::Toggled);
+    assert!(!plugins_dir.join("ai.yaml.disabled").exists());
+    assert_eq!(
+        fs::read_to_string(plugins_dir.join("ai.yaml")).unwrap(),
+        body
+    );
+}
+
+// enable_plugin_config: already enabled → Toggle::Already
+#[test]
+fn enable_plugin_config_already_enabled() {
+    use veyron::marketplace::installer::{enable_plugin_config, Toggle};
+
+    let tmp = tempdir().unwrap();
+    let plugins_dir = tmp.path().join("plugins.d");
+    fs::create_dir_all(&plugins_dir).unwrap();
+    fs::write(plugins_dir.join("ai.yaml"), "id: ai\n").unwrap();
+
+    let outcome = enable_plugin_config(&plugins_dir, "ai").unwrap();
+    assert_eq!(outcome, Toggle::Already);
+    assert!(plugins_dir.join("ai.yaml").exists());
+}
+
+// enable_plugin_config: no drop-in at all → Toggle::Missing
+#[test]
+fn enable_plugin_config_missing() {
+    use veyron::marketplace::installer::{enable_plugin_config, Toggle};
+
+    let tmp = tempdir().unwrap();
+    let plugins_dir = tmp.path().join("plugins.d");
+
+    let outcome = enable_plugin_config(&plugins_dir, "ghost").unwrap();
+    assert_eq!(outcome, Toggle::Missing);
+}
+
+// enable_plugin_config: active + disabled both present → refuse
+#[test]
+fn enable_plugin_config_refuses_when_both_exist() {
+    use veyron::marketplace::installer::enable_plugin_config;
+
+    let tmp = tempdir().unwrap();
+    let plugins_dir = tmp.path().join("plugins.d");
+    fs::create_dir_all(&plugins_dir).unwrap();
+    fs::write(plugins_dir.join("ai.yaml"), "id: ai\n").unwrap();
+    fs::write(plugins_dir.join("ai.yaml.disabled"), "id: ai\n").unwrap();
+
+    let err = enable_plugin_config(&plugins_dir, "ai").unwrap_err();
+    assert!(err.to_string().contains("remove one first"), "got: {err}");
+    assert!(plugins_dir.join("ai.yaml").exists());
+    assert!(plugins_dir.join("ai.yaml.disabled").exists());
+}
+
+// enable/disable_plugin_config: traversal slug is rejected, nothing renamed
+#[test]
+fn toggle_plugin_config_rejects_traversal_slug() {
+    use veyron::marketplace::installer::{disable_plugin_config, enable_plugin_config};
+
+    let tmp = tempdir().unwrap();
+    let plugins_dir = tmp.path().join("plugins.d");
+    let victim = tmp.path().join("victim.yaml");
+    fs::write(&victim, "keep").unwrap();
+
+    let err = disable_plugin_config(&plugins_dir, "../victim").unwrap_err();
+    assert!(err.to_string().contains("invalid slug"), "got: {err}");
+    let err = enable_plugin_config(&plugins_dir, "../victim").unwrap_err();
+    assert!(err.to_string().contains("invalid slug"), "got: {err}");
+    assert!(
+        victim.exists(),
+        "traversal must not rename outside plugins.d"
+    );
+}

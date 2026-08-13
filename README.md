@@ -137,10 +137,13 @@ sandbox: true        # Linux only
 ```
 
 `vyn plugin install` writes `plugins.d/<slug>.yaml`; `vyn plugin remove`
-deletes it. The legacy inline `plugins:` list in `config.yaml` still works
-but is deprecated — install/remove no longer touch `config.yaml`. SIGHUP
-re-reads config + drop-ins (surfacing parse errors / duplicate ids) but does
-not respawn the plugin set — restart the kernel to apply plugin changes.
+deletes it. `vyn plugin disable <slug>` keeps a plugin installed but stops it
+auto-spawning by renaming its drop-in to `<slug>.yaml.disabled` (R10-04);
+`vyn plugin enable <slug>` restores it. The legacy inline `plugins:` list in
+`config.yaml` still works but is deprecated — install/remove no longer touch
+`config.yaml`. SIGHUP re-reads config + drop-ins (surfacing parse errors /
+duplicate ids) but does not respawn the plugin set — restart the kernel to
+apply plugin changes.
 
 ### Run
 

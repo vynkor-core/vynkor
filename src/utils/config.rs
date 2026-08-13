@@ -538,6 +538,29 @@ mod tests {
         assert_eq!(ids, ["inline", "alpha", "bravo"]);
     }
 
+    // a disabled drop-in (<slug>.yaml.disabled, R10-04) is not globbed — the
+    // plugin stays installed but is skipped at boot and on SIGHUP reload
+    #[test]
+    fn load_config_skips_disabled_dropin() {
+        let dir = tempfile::tempdir().unwrap();
+        write_dropin(dir.path(), "a.yaml", "alpha");
+        let path = write_minimal_config(&dir, "");
+
+        let config = load_config(&path).unwrap();
+        assert_eq!(config.plugins.len(), 1);
+
+        std::fs::rename(
+            dir.path().join("plugins.d/a.yaml"),
+            dir.path().join("plugins.d/a.yaml.disabled"),
+        )
+        .unwrap();
+        let config = load_config(&path).unwrap();
+        assert!(
+            config.plugins.is_empty(),
+            "disabled drop-in must not merge into plugins"
+        );
+    }
+
     // default plugins_dir resolves to <config dir>/plugins.d
     #[test]
     fn load_config_default_plugins_dir_is_config_dir_plugins_d() {

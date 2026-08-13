@@ -1,11 +1,14 @@
 use clap::Subcommand;
+use std::path::Path;
 
 use crate::marketplace::installer::{
-    install, remove_plugin_config, uninstall, write_plugin_config, InstalledPlugin,
+    disable_plugin_config, enable_plugin_config, install, remove_plugin_config, uninstall,
+    write_plugin_config, InstalledPlugin, Toggle,
 };
 use crate::marketplace::registry::{
     fetch_registry, fetch_registry_with_url, RegistryEntry, DEFAULT_REGISTRY_URL,
 };
+use crate::utils::errors::VeyronError;
 
 #[derive(Subcommand)]
 pub enum PluginCmd {
@@ -43,6 +46,15 @@ pub enum PluginCmd {
     },
     Remove {
         target: String,
+    },
+    /// Keep a plugin installed but stop auto-spawning it on boot — renames its
+    /// `plugins.d/<slug>.yaml` drop-in to `<slug>.yaml.disabled` (R10-04).
+    Disable {
+        id: String,
+    },
+    /// Undo `disable`: restore the `<slug>.yaml` drop-in (R10-04).
+    Enable {
+        id: String,
     },
 }
 
@@ -175,8 +187,56 @@ pub async fn handle(
                 }
             }
         }
+        PluginCmd::Disable { id } => match disable_plugin_config(plugins_dir, &id) {
+            Ok(Toggle::Toggled) => {
+                println!("✓ Disabled '{id}' — kept installed, no longer auto-spawns on boot.");
+                note_inline_still_configured(config_path, &id);
+            }
+            Ok(Toggle::Already) => println!("Note: '{id}' is already disabled."),
+            Ok(Toggle::Missing) => missing_dropin(config_path, plugins_dir, &id)?,
+            Err(e) => return Err(e.into()),
+        },
+        PluginCmd::Enable { id } => match enable_plugin_config(plugins_dir, &id) {
+            Ok(Toggle::Toggled) => println!("✓ Enabled '{id}' — will auto-spawn on boot."),
+            Ok(Toggle::Already) => println!("Note: '{id}' is already enabled."),
+            Ok(Toggle::Missing) => missing_dropin(config_path, plugins_dir, &id)?,
+            Err(e) => return Err(e.into()),
+        },
     }
     Ok(())
+}
+
+/// The rename succeeded, but if `slug` also appears in the deprecated inline
+/// `plugins:` list (or another drop-in), that entry still auto-spawns it —
+/// surface it so the operator isn't surprised (mirrors `remove`).
+fn note_inline_still_configured(config_path: &str, slug: &str) {
+    if let Ok(cfg) = crate::utils::config::load_config(config_path) {
+        if cfg.plugins.iter().any(|p| p.id == slug) {
+            println!(
+                "Note: '{slug}' is still configured in `plugins:` or another drop-in — remove that entry too."
+            );
+        }
+    }
+}
+
+/// No drop-in (active or disabled) exists for `slug`. If it is configured in
+/// the deprecated inline `plugins:` list, a rename can't stop it — print a
+/// note and succeed. Otherwise fail loudly: the slug is likely a typo or not
+/// installed.
+fn missing_dropin(config_path: &str, plugins_dir: &Path, slug: &str) -> anyhow::Result<()> {
+    if let Ok(cfg) = crate::utils::config::load_config(config_path) {
+        if cfg.plugins.iter().any(|p| p.id == slug) {
+            println!(
+                "Note: '{slug}' has no drop-in — it's configured in the inline `plugins:` list; remove that entry to stop it auto-spawning."
+            );
+            return Ok(());
+        }
+    }
+    Err(VeyronError::PluginNotFound(format!(
+        "no drop-in config for '{slug}' at {}/ — install the plugin first",
+        plugins_dir.display()
+    ))
+    .into())
 }
 
 /// The kernel API's base URL. TLS is on whenever the kernel config declares
