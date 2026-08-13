@@ -70,6 +70,25 @@ impl PluginLoader {
         for def in defs {
             match validate_plugin_def(def) {
                 Ok(m) => {
+                    if let Some(manifest) = &m {
+                        let mut requirements = HashMap::new();
+                        if let Some(actions) = &manifest.actions {
+                            for spec in actions {
+                                if let Some(perm) = spec.permission() {
+                                    if let Some(pt) =
+                                        crate::auth::permissions::resolve_permission(perm)
+                                    {
+                                        requirements.insert(spec.name().to_string(), pt);
+                                    }
+                                }
+                            }
+                        }
+                        if !requirements.is_empty() {
+                            manager
+                                .registry()
+                                .set_action_requirements(def.id.clone(), requirements);
+                        }
+                    }
                     manifests.insert(&def.id, m);
                 }
                 Err(e) => {

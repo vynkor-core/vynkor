@@ -106,9 +106,9 @@ fn build_frame_with_flags(target: &str, payload: &[u8], flags: u16) -> Vec<u8> {
 
 #[tokio::test]
 async fn ws_client_registers_and_receives_ack() {
-    let (_shutdown_tx, _registry, _bus) = start_kernel("/tmp/veyron_integ_ws.sock", 19300).await;
+    let (_shutdown_tx, _registry, _bus) = start_kernel("/tmp/veyron_integ_ws.sock", 19340).await;
 
-    let mut ws = ws_connect_retry(19300).await;
+    let mut ws = ws_connect_retry(19340).await;
 
     // send PluginRegister
     let reg_env = Envelope {
@@ -228,11 +228,11 @@ async fn ws_rejects_compressed_and_fragmented_inbound_frames() {
 async fn ws_mac_tagged_frames_accepted_on_secured_kernel() {
     let secret = "ws-mac-test-secret-32-bytes-minimum";
     let (_shutdown, _reg, _bus) =
-        start_kernel_secured("/tmp/veyron_ws_mac_ok.sock", 19310, secret).await;
+        start_kernel_secured("/tmp/veyron_ws_mac_ok.sock", 19346, secret).await;
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     let token = create_test_token("ws-mac-plugin", vec![], secret.as_bytes(), 3600);
-    let mut ws = ws_connect_with_jwt(19310, &token).await;
+    let mut ws = ws_connect_with_jwt(19346, &token).await;
 
     // Send PluginRegister with JWT
     let reg_env = Envelope {
@@ -317,11 +317,11 @@ async fn ws_mac_tagged_frames_accepted_on_secured_kernel() {
 async fn ws_untagged_frames_rejected_on_secured_kernel() {
     let secret = "ws-mac-reject-secret-32-bytes-minimum";
     let (_shutdown, _reg, _bus) =
-        start_kernel_secured("/tmp/veyron_ws_mac_reject.sock", 19311, secret).await;
+        start_kernel_secured("/tmp/veyron_ws_mac_reject.sock", 19347, secret).await;
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     let token = create_test_token("ws-plain-plugin", vec![], secret.as_bytes(), 3600);
-    let mut ws = ws_connect_with_jwt(19311, &token).await;
+    let mut ws = ws_connect_with_jwt(19347, &token).await;
 
     // Register (untagged — ack is sent before MAC kicks in)
     let reg_env = Envelope {
@@ -375,9 +375,9 @@ async fn ws_untagged_frames_rejected_on_secured_kernel() {
 
 #[tokio::test]
 async fn ws_closed_after_max_parse_errors() {
-    let (_shutdown, _reg, _bus) = start_kernel("/tmp/veyron_ws_parse_err.sock", 19321).await;
+    let (_shutdown, _reg, _bus) = start_kernel("/tmp/veyron_ws_parse_err.sock", 19348).await;
 
-    let mut ws = ws_connect_retry(19321).await;
+    let mut ws = ws_connect_retry(19348).await;
 
     // 44 bytes with bad magic — parse_frame returns Err on each
     let bad_frame = vec![0xFFu8; 44];

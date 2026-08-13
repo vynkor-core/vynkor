@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::io::Read;
@@ -61,10 +62,53 @@ pub struct InstallManifest {
     pub binary: String,
     pub kernel_compatibility_range: KernelCompatRange,
     pub events: Option<Vec<String>>,
-    pub actions: Option<Vec<String>>,
+    pub actions: Option<Vec<ActionSpec>>,
     /// Plugin IDs that must be loaded and registered before this plugin starts.
     #[serde(default)]
     pub requires: Vec<String>,
+    /// Manifest v2 extraction allowlist: the archive entries to extract into
+    /// the plugin dir. Empty = not declared (legacy extract-everything).
+    #[serde(default)]
+    pub files: Vec<String>,
+}
+
+/// A single entry in a v2 manifest's `actions` array. Legacy manifests declare
+/// actions as plain strings; v2 manifests declare objects with a per-action
+/// `permission` (the permission a *caller* must hold to invoke the action,
+/// T-19 anti-laundering) plus optional JSON-Schema `input`/`output`. The
+/// kernel accepts both forms — the untagged enum parses whichever is present.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum ActionSpec {
+    Legacy(String),
+    V2(ActionSpecV2),
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ActionSpecV2 {
+    pub name: String,
+    #[serde(default)]
+    pub permission: Option<String>,
+    #[serde(default)]
+    pub input: Option<serde_json::Value>,
+    #[serde(default)]
+    pub output: Option<serde_json::Value>,
+}
+
+impl ActionSpec {
+    pub fn name(&self) -> &str {
+        match self {
+            ActionSpec::Legacy(s) => s,
+            ActionSpec::V2(spec) => &spec.name,
+        }
+    }
+
+    pub fn permission(&self) -> Option<&str> {
+        match self {
+            ActionSpec::Legacy(_) => None,
+            ActionSpec::V2(spec) => spec.permission.as_deref(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -208,11 +252,17 @@ pub async fn install(
         return Err(VeyronError::Io(e));
     }
 
+    // Manifest v2 `files` extraction allowlist, read from the archive's
+    // plugin.json IN MEMORY before extraction. `None` (no plugin.json, no
+    // `files` key, or unreadable) = legacy extract-everything.
+    let allowlist = read_files_allowlist(&archive_path);
+
     if let Err(e) = extract_zip(
         &archive_path,
         &extract_dir,
         max_extracted_bytes,
         max_archive_entries,
+        allowlist.as_ref(),
     ) {
         let _ = fs::remove_dir_all(&stage_dir);
         return Err(e);
@@ -376,11 +426,35 @@ async fn download_with_progress(
     Ok(bytes)
 }
 
+/// Manifest v2 `files` extraction allowlist, read from `plugin.json` inside
+/// the archive without extracting it. Returns `None` when there is no
+/// allowlist (no plugin.json, no `files` key, empty list, or any read/parse
+/// error) — the caller then falls back to extract-everything.
+fn read_files_allowlist(archive: &Path) -> Option<HashSet<String>> {
+    let file = fs::File::open(archive).ok()?;
+    let mut zip = zip::ZipArchive::new(file).ok()?;
+    let mut entry = zip.by_name("plugin.json").ok()?;
+    let mut buf = Vec::new();
+    entry.read_to_end(&mut buf).ok()?;
+    let value: serde_json::Value = serde_json::from_slice(&buf).ok()?;
+    let files = value.get("files")?.as_array()?;
+    let set: HashSet<String> = files
+        .iter()
+        .filter_map(|f| f.as_str().map(str::to_string))
+        .collect();
+    if set.is_empty() {
+        None
+    } else {
+        Some(set)
+    }
+}
+
 pub fn extract_zip(
     archive: &Path,
     dest: &Path,
     max_extracted_bytes: u64,
     max_archive_entries: usize,
+    allowlist: Option<&HashSet<String>>,
 ) -> Result<(), VeyronError> {
     let file = fs::File::open(archive).map_err(VeyronError::Io)?;
     let mut zip =
@@ -395,6 +469,9 @@ pub fn extract_zip(
 
     let canon_dest = dest.canonicalize().map_err(VeyronError::Io)?;
     let mut total_extracted: u64 = 0;
+
+    // Allowlisted names not yet seen in the archive; empty when no allowlist.
+    let mut missing: HashSet<String> = allowlist.cloned().unwrap_or_default();
 
     for i in 0..zip.len() {
         let mut entry = zip
@@ -416,6 +493,15 @@ pub fn extract_zip(
             return Err(VeyronError::Internal(format!(
                 "Malformed archive: path traversal detected in entry '{name}'. Aborting."
             )));
+        }
+
+        // Manifest v2 `files` allowlist: skip entries not named in it. The
+        // zip-slip check above still applies to every entry, allowlisted or not.
+        if let Some(list) = allowlist {
+            if !list.contains(&name) {
+                continue;
+            }
+            missing.remove(&name);
         }
 
         // Skip symlinks — do not follow them during extraction.
@@ -469,6 +555,12 @@ pub fn extract_zip(
                     .map_err(VeyronError::Io)?;
             }
         }
+    }
+
+    if let Some(missing_name) = missing.iter().next() {
+        return Err(VeyronError::Internal(format!(
+            "Malformed archive: manifest `files` lists '{missing_name}' which is missing from the archive. Aborting."
+        )));
     }
 
     Ok(())
@@ -616,6 +708,25 @@ pub fn validate_manifest(
                 "Plugin '{}' declares unknown permission '{perm}'.",
                 manifest.plugin_id
             )));
+        }
+    }
+
+    // Manifest v2: every per-action `permission` must resolve to a known
+    // permission. Fail-closed — an unknown per-action permission refuses the
+    // whole plugin, so a typo can't silently downgrade the action to
+    // unrestricted.
+    if let Some(actions) = &manifest.actions {
+        for spec in actions {
+            if let ActionSpec::V2(spec) = spec {
+                if let Some(p) = &spec.permission {
+                    if crate::auth::permissions::resolve_permission(p).is_none() {
+                        return Err(VeyronError::Internal(format!(
+                            "Plugin '{}' declares unknown action permission '{}' for action '{}'.",
+                            manifest.plugin_id, p, spec.name
+                        )));
+                    }
+                }
+            }
         }
     }
 

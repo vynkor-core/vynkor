@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use veyron::auth::permissions::{check_ipc_target, check_permission};
+use veyron::auth::permissions::{check_ipc_target, check_permission, resolve_permission};
 use veyron::plugins::registry::PluginRegistry;
 use veyron::proto::veyron::{PermissionType, PluginManifest};
 
@@ -69,6 +69,31 @@ fn unknown_plugin_returns_not_found_error() {
     let registry = Arc::new(PluginRegistry::new());
     let result = check_permission(&registry, "ghost", PermissionType::PermissionNetwork);
     assert!(result.is_err());
+}
+
+// ── Manifest v2: resolve_permission ─────────────────────────────────────────
+
+#[test]
+fn resolve_permission_accepts_lowercase_and_proto_forms() {
+    assert_eq!(
+        resolve_permission("network"),
+        Some(PermissionType::PermissionNetwork)
+    );
+    assert_eq!(
+        resolve_permission("PERMISSION_NETWORK"),
+        Some(PermissionType::PermissionNetwork)
+    );
+    assert_eq!(
+        resolve_permission("storage"),
+        Some(PermissionType::PermissionStorage)
+    );
+}
+
+#[test]
+fn resolve_permission_rejects_garbage() {
+    assert_eq!(resolve_permission("teleport"), None);
+    assert_eq!(resolve_permission(""), None);
+    assert_eq!(resolve_permission("PERMISSION_UNKNOWN"), None);
 }
 
 // ── T-04: per-plugin IPC allowlist ───────────────────────────────────────────

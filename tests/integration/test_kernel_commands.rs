@@ -418,6 +418,126 @@ async fn kernel_denies_action_when_requester_lacks_required_permission() {
 }
 
 #[tokio::test]
+async fn kernel_enforces_provider_declared_per_action_permission() {
+    // Manifest v2: the provider-declared per-action permission gates callers at
+    // routing time (data-driven anti-laundering). `db_get` requires
+    // PERMISSION_STORAGE on BOTH provider and requester; a requester without it
+    // is denied, a requester with it is routed through to the provider.
+    use std::collections::HashMap;
+    use veyron::proto::veyron::PermissionType;
+
+    let (shutdown_tx, registry, _bus) =
+        start_kernel("/tmp/veyron_integ_action_v2_perm.sock", 19234).await;
+
+    // Provider declares the action AND holds the required permission.
+    let mut provider = VeyronClient::connect("/tmp/veyron_integ_action_v2_perm.sock")
+        .await
+        .unwrap();
+    provider
+        .register(
+            "db-provider",
+            PluginManifest {
+                actions: vec!["db_get".to_string()],
+                permissions: vec!["PERMISSION_STORAGE".to_string()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    registry.set_action_requirements(
+        "db-provider".to_string(),
+        HashMap::from([("db_get".to_string(), PermissionType::PermissionStorage)]),
+    );
+
+    // Half 1: requester WITHOUT PERMISSION_STORAGE is denied.
+    let mut unprivileged = VeyronClient::connect("/tmp/veyron_integ_action_v2_perm.sock")
+        .await
+        .unwrap();
+    unprivileged
+        .register("unprivileged-requester", PluginManifest::default())
+        .await
+        .unwrap();
+
+    let resp = timeout(
+        Duration::from_secs(2),
+        unprivileged.send_action("db_get", br#"{"key":"a"}"#, 2000),
+    )
+    .await
+    .expect("timed out")
+    .expect("send_action failed");
+    assert_eq!(
+        resp.status,
+        ActionStatus::ActionPermissionDeny as i32,
+        "requester without PERMISSION_STORAGE must be denied"
+    );
+    let never_received = timeout(Duration::from_millis(300), provider.recv()).await;
+    assert!(
+        never_received.is_err(),
+        "provider must not receive the denied request"
+    );
+
+    // Half 2: requester WITH PERMISSION_STORAGE is routed through.
+    let mut privileged = VeyronClient::connect("/tmp/veyron_integ_action_v2_perm.sock")
+        .await
+        .unwrap();
+    privileged
+        .register(
+            "privileged-requester",
+            PluginManifest {
+                permissions: vec!["PERMISSION_STORAGE".to_string()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let request_fut = tokio::spawn(async move {
+        privileged
+            .send_action("db_get", br#"{"key":"a"}"#, 2000)
+            .await
+    });
+
+    let received = timeout(Duration::from_secs(2), provider.recv())
+        .await
+        .expect("provider recv timed out")
+        .expect("provider recv failed");
+    let internal_action_id = match received.payload {
+        Some(veyron::proto::veyron::envelope::Payload::ActionRequest(req)) => {
+            assert_eq!(req.action, "db_get");
+            req.action_id
+        }
+        other => panic!("expected ActionRequest, got {other:?}"),
+    };
+
+    let resp_env = veyron::proto::veyron::Envelope {
+        payload: Some(veyron::proto::veyron::envelope::Payload::ActionResponse(
+            veyron::proto::veyron::ActionResponse {
+                action_id: internal_action_id,
+                status: ActionStatus::ActionOk as i32,
+                data_json: br#"{"value":"v"}"#.to_vec(),
+                error: String::new(),
+            },
+        )),
+        ..Default::default()
+    };
+    provider.send("kernel", resp_env).await.unwrap();
+
+    let resp = timeout(Duration::from_secs(2), request_fut)
+        .await
+        .expect("timed out")
+        .expect("task panicked")
+        .expect("send_action failed");
+    assert_eq!(
+        resp.status,
+        ActionStatus::ActionOk as i32,
+        "requester with PERMISSION_STORAGE must be routed to the provider"
+    );
+
+    let _ = shutdown_tx.send(());
+}
+
+#[tokio::test]
 async fn action_concurrency_cap_denies_third_concurrent_call_to_same_provider() {
     // R6-03: a caller with action_caller_max_concurrent = 2 gets a 3rd concurrent
     // ActionRequest to the SAME provider denied, but a concurrent request to a
@@ -931,7 +1051,7 @@ async fn action_response_from_non_provider_plugin_is_rejected_not_proxied() {
     // inject falsified data or to steal/grief the response slot before the
     // legitimate provider replies.
     let (shutdown_tx, _registry, _bus) =
-        start_kernel("/tmp/veyron_integ_action_spoof.sock", 19218).await;
+        start_kernel("/tmp/veyron_integ_action_spoof.sock", 19343).await;
 
     let mut provider = VeyronClient::connect("/tmp/veyron_integ_action_spoof.sock")
         .await
@@ -1042,7 +1162,7 @@ async fn ambiguous_action_providers_returns_not_found() {
     // misconfiguration, not something the kernel should guess its way
     // through. Must refuse to route, same as zero providers.
     let (shutdown_tx, _registry, _bus) =
-        start_kernel("/tmp/veyron_integ_action_ambiguous.sock", 19219).await;
+        start_kernel("/tmp/veyron_integ_action_ambiguous.sock", 19344).await;
 
     let mut provider_a = VeyronClient::connect("/tmp/veyron_integ_action_ambiguous.sock")
         .await
@@ -1167,7 +1287,7 @@ async fn provider_side_action_failure_proxies_through_unchanged() {
 #[tokio::test]
 async fn kernel_forwards_request_chunks_to_provider_with_translated_action_id() {
     let (shutdown_tx, _registry, _bus) =
-        start_kernel("/tmp/veyron_integ_stream_upload.sock", 19301).await;
+        start_kernel("/tmp/veyron_integ_stream_upload.sock", 19341).await;
 
     let mut provider = VeyronClient::connect("/tmp/veyron_integ_stream_upload.sock")
         .await

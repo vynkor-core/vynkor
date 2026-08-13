@@ -1,7 +1,8 @@
 use crate::ipc::connection::Outbound;
-use crate::proto::veyron::PluginManifest;
+use crate::proto::veyron::{PermissionType, PluginManifest};
 use crate::utils::errors::VeyronError;
 use dashmap::DashMap;
+use std::collections::HashMap;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 
@@ -64,6 +65,10 @@ pub struct PluginRegistry {
     by_conn_id: DashMap<u64, String>,
     pong_times: DashMap<String, Instant>,
     pending_actions: DashMap<String, PendingAction>,
+    /// Manifest v2 per-action requirements: provider plugin_id → (action name →
+    /// required PermissionType). Populated at load time from the manifest; the
+    /// router consults it before the legacy hardcoded map.
+    action_requirements: DashMap<String, HashMap<String, PermissionType>>,
 }
 
 impl PluginRegistry {
@@ -73,6 +78,7 @@ impl PluginRegistry {
             by_conn_id: DashMap::new(),
             pong_times: DashMap::new(),
             pending_actions: DashMap::new(),
+            action_requirements: DashMap::new(),
         }
     }
 
@@ -136,6 +142,7 @@ impl PluginRegistry {
         if let Some((_, entry)) = self.by_plugin_id.remove(plugin_id) {
             self.by_conn_id.remove(&entry.conn_id);
             self.pong_times.remove(plugin_id);
+            self.clear_action_requirements(plugin_id);
         }
     }
 
@@ -150,6 +157,29 @@ impl PluginRegistry {
 
     pub fn get(&self, plugin_id: &str) -> Option<PluginEntry> {
         self.by_plugin_id.get(plugin_id).map(|e| e.clone())
+    }
+
+    /// Manifest v2: store the provider-declared per-action permission
+    /// requirements for `plugin_id`. Called at load time from the manifest.
+    pub fn set_action_requirements(
+        &self,
+        plugin_id: String,
+        requirements: HashMap<String, PermissionType>,
+    ) {
+        self.action_requirements.insert(plugin_id, requirements);
+    }
+
+    /// Manifest v2: the permission a caller must hold to invoke `action` on
+    /// `plugin_id`, if the provider declared one. `None` = no data-driven
+    /// requirement (the router then falls back to the legacy hardcoded map).
+    pub fn action_requirement(&self, plugin_id: &str, action: &str) -> Option<PermissionType> {
+        self.action_requirements
+            .get(plugin_id)
+            .and_then(|m| m.get(action).copied())
+    }
+
+    pub fn clear_action_requirements(&self, plugin_id: &str) {
+        self.action_requirements.remove(plugin_id);
     }
 
     pub fn list(&self) -> Vec<PluginEntry> {

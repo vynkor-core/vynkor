@@ -16,6 +16,26 @@ pub fn required_permission_for_action(action: &str) -> Option<PermissionType> {
     }
 }
 
+/// Normalizes a permission string (lowercase `storage` or proto
+/// `PERMISSION_STORAGE`) to its PermissionType, if known. Used for
+/// manifest-declared per-action permissions (Manifest v2).
+pub fn resolve_permission(s: &str) -> Option<PermissionType> {
+    let name = if let Some(rest) = s.strip_prefix("PERMISSION_") {
+        format!("PERMISSION_{}", rest.to_ascii_uppercase())
+    } else {
+        format!("PERMISSION_{}", s.to_ascii_uppercase())
+    };
+    // `from_str_name` happily resolves the literal "PERMISSION_UNKNOWN" to the
+    // UNKNOWN variant (value 0) — that is not a usable requirement, so treat
+    // it as unresolvable, matching `known_permissions()` which excludes it.
+    let pt = PermissionType::from_str_name(&name)?;
+    if pt == PermissionType::PermissionUnknown {
+        None
+    } else {
+        Some(pt)
+    }
+}
+
 // lowercases and strips the PERMISSION_ prefix so manifests can declare either
 // the documented lowercase form (network) or the proto name (PERMISSION_NETWORK).
 // pub(crate): config-time comparisons (T-04 clamp, validate_plugin_def) must

@@ -71,7 +71,7 @@ async fn plugin_a_sends_to_plugin_b_and_b_receives() {
 #[tokio::test]
 async fn action_request_gets_caller_plugin_id_stamped_and_spoof_overwritten() {
     let (_shutdown_tx, _registry, _bus) =
-        start_kernel("/tmp/veyron_integ_caller_stamp.sock", 19202).await;
+        start_kernel("/tmp/veyron_integ_caller_stamp.sock", 19345).await;
 
     let mut requester = VeyronClient::connect("/tmp/veyron_integ_caller_stamp.sock")
         .await

@@ -23,6 +23,10 @@ impl PluginManager {
         self.registry.list()
     }
 
+    pub fn registry(&self) -> &Arc<PluginRegistry> {
+        &self.registry
+    }
+
     pub fn get(&self, plugin_id: &str) -> Option<PluginEntry> {
         self.registry.get(plugin_id)
     }
