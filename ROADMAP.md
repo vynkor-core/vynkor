@@ -799,7 +799,7 @@ surfaces cover every planned plugin).
 | N4 | daemon-start readiness handshake (pid-file TOCTOU) — shipped, smoke-verified | none |
 | N5 | `cargo fmt` fix for `test_proto_sync.rs` (DoD gate) — shipped, gate green | none |
 | M7 | C++/Python framing fuzz harness (deferred) | none |
-| M9 | zero-value enum renumber (deferred) | next protocol bump |
+| M9 | zero-value enum renumber — SHIPPED with protocol v1.5 (P11-03, 2026-08-13) | v1.5 wire bump |
 | R9-01 | cgroup v2 `pids.max` per-plugin accounting (replaces shared-uid RLIMIT_NPROC) | R8 + N ship gate |
 | R9-02 | PID namespace via shim supervisor | R9-01 |
 | B1 | stop/start race — stale `ExitEvent` (no PID/epoch) → wrong-instance restart → duplicate registration — shipped: epoch-gated `ExitEvent`, stale exits dropped | R9-02 |
@@ -826,7 +826,8 @@ deferred until R8 shipped; with that gate lifted, R9-01 (cgroup pids), R9-02
 (shim PID namespace), R9-05 (closed with R9-02), R9-06 (docs), and R9-03
 (Landlock filesystem isolation) have shipped on `develop`. R9-04 (seccomp)
 shipped with the tight kernel-escape denylist (2026-08-12) — Phase 9 is now
-complete. M7/M9 remain deferred by decision. R9-01/R9-05 are
+complete. M7 remains deferred by decision; M9 shipped with protocol v1.5
+(P11-03, 2026-08-13). R9-01/R9-05 are
 Linux-cgroup/mount-namespace work and require a delegated cgroup v2 subtree or
 root. Phase 10 (plugin config + marketplace state) is likewise deferred and
 independent of Phase 9 — it can land before or after hard isolation.

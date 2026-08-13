@@ -11,12 +11,12 @@ Method: three parallel read-only code-audit passes. Findings below are deduplica
 |----------|-------|-------|----------|
 | Critical | 2 | 2 | 0 |
 | High     | 5 | 5 | 0 |
-| Medium   | 11 | 9 | 2 (M7, M9) |
+| Medium   | 11 | 10 | 1 (M7) |
 | Low      | 2 | 2 | 0 |
-| **Total** | **20** | **18** | **2** |
+| **Total** | **20** | **19** | **1** |
 
 **New findings from the 2026-08-11 pass:** N1 (moderate), N2–N5 (low) — see below.
-**Still open:** M7 (C++/Python fuzz harness) and M9 (zero-value enum renumber, wire-breaking). Both are tracked in `ROADMAP.md`.
+**Still open:** M7 (C++/Python fuzz harness). M9 (zero-value enum renumber) shipped with protocol v1.5 (P11-03, 2026-08-13). Both tracked in `ROADMAP.md`.
 
 ---
 
@@ -129,7 +129,7 @@ Method: three parallel read-only code-audit passes. Findings below are deduplica
 - **Fix:** wrap payload/MAC read phase in a per-frame timeout in both SDKs.
 
 ### M9. `ActionStatus`/`CommandStatus` proto enums default to OK (zero-value footgun)
-- **STATUS (2026-08-11): DEFERRED (deliberate)** — renumbering is wire-breaking; deferred to the next protocol version bump. Do not close until then. Tracked in `ROADMAP.md`.
+- **STATUS (2026-08-13): FIXED** — shipped with the protocol v1.5 bump (P11-03): `ActionStatus` gains `ACTION_UNKNOWN = 0` (OK/ERROR/... → 1..7), `CommandStatus` moves `COMMAND_UNKNOWN` to 0 (OK/ERROR → 1/2). The interim T-16 lint remains as a construction-site guard. See `ROADMAP.md` P11-03.
 - **File:** `proto/veyron_protocol.proto:138-144,165-170`
 - **Issue:** `ACTION_OK = 0`, `COMMAND_OK = 0` — unlike every other status enum in the file (`*_UNKNOWN = 0` pattern). A missed `set_status()` call anywhere silently reports success.
 - **Fix:** wire-breaking to renumber now; at minimum add a lint/test asserting every construction site sets `status` explicitly. Track for next protocol version bump.
