@@ -7,7 +7,7 @@ use veyron::cli::{complete, plugin};
 use veyron::cli::{Cli, Commands};
 use veyron::kernel;
 use veyron::utils;
-use veyron::utils::config::{load_config, Config};
+use veyron::utils::config::{load_config, resolve_plugins_dir, Config};
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -122,6 +122,7 @@ async fn run_kernel(cli: Cli) -> Result<()> {
         Commands::Plugin { cmd, config, token } => {
             let cfg = load_config(&config).unwrap_or_default();
             let token = token.or_else(|| std::env::var("VEYRON_JWT_TOKEN").ok());
+            let plugins_dir = resolve_plugins_dir(&config, cfg.plugins_dir.as_deref());
             plugin::handle(
                 cmd,
                 cfg.port,
@@ -135,6 +136,7 @@ async fn run_kernel(cli: Cli) -> Result<()> {
                 cfg.max_archive_entries,
                 cfg.marketplace_public_key.as_deref(),
                 &config,
+                &plugins_dir,
             )
             .await?;
         }

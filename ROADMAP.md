@@ -462,7 +462,7 @@ surgery, and no record of what is installed, from where, or at what version.
 Phase 10 gives each plugin its own config file and gives the marketplace an
 explicit state store. Independent of Phase 9 — can land before or after it.
 
-- [ ] R10-01 — **Per-plugin config via `plugins.d/` drop-in directory:** the
+- [x] R10-01 — **Per-plugin config via `plugins.d/` drop-in directory:** the
       `plugins:` list leaves `config.yaml` for a `plugins.d/*.yaml` directory
       (new `plugins_dir` config key, default `<config_dir>/plugins.d/`); each
       file carries exactly one plugin entry (id, binary, restart, sandbox,
@@ -475,6 +475,29 @@ explicit state store. Independent of Phase 9 — can land before or after it.
     `src/cli/plugin.rs`, `config.yaml` (Veyron repo).
   - Acceptance: install/remove never touch `config.yaml`; a hand-written
     entry in `plugins.d/` boots; duplicate ids across files fail loudly.
+  - Done: `Config.plugins_dir` (default `<config dir>/plugins.d/`,
+    `resolve_plugins_dir` shared by boot + CLI);
+    `merge_plugin_dropins` globs `*.yaml`/`*.yml`, filename-sort merge after
+    the inline `plugins:` list, duplicate `id` across drop-ins or with the
+    inline list = boot error. Installer: marker machinery deleted, replaced
+    by `write_plugin_config`/`remove_plugin_config` — `create_new`
+    (O_CREAT|O_EXCL) so a pre-planted symlink can never redirect the write
+    (M-09 class), and `validate_slug` (`[A-Za-z0-9._-]`, no separators)
+    applied to `write`/`remove`/`uninstall` so operator or registry input
+    cannot traverse out of `plugins.d/`/`plugin_dir`. CLI `install` writes
+    `plugins.d/<slug>.yaml` (existing file left untouched, with a note),
+    `remove` deletes it and warns if the id is still configured. Repo
+    `config.yaml` stripped of the inline `plugins:` + marker blocks; the
+    five dev plugins moved to `plugins.d/*.yaml`. Inline `plugins:` still
+    parses (deprecated) so existing configs keep booting. SIGHUP re-reads +
+    re-merges (parse errors/dups surface at reload) but does not respawn the
+    plugin set — documented. Covered by `src/utils/config.rs` unit tests
+    (merge order, default/explicit `plugins_dir`, dup inline+drop-in / two
+    drop-ins, missing dir, full `PluginDef` round-trip) and
+    `tests/unit/test_installer.rs` (write/remove drop-ins, sandbox hint,
+    existing-file no-clobber, symlink no-follow, traversal rejection in
+    write/remove/uninstall). Live: boot loads all five `plugins.d/` plugins
+    and they register.
 
 - [ ] R10-02 — **Explicit installed-plugin state store:** replace
       filesystem-sniffing `~/.local/lib/veyron/plugins/<slug>` with
@@ -618,7 +641,7 @@ surfaces cover every planned plugin).
 | R9-04 | seccomp syscall filter — shipped: tight kernel-escape denylist via `seccompiler` in shim pre_exec, fail-closed, SIGSYS on denied syscalls, SDK baselines profiled, regression tests | R9-03 |
 | R9-05 | `/proc` `hidepid=2` interim visibility hardening | R8 + N ship gate |
 | R9-06 | docs: fix stale `AUDIT.md` pointer, record exact rlimit semantics | none |
-| R10-01 | plugin settings out of `config.yaml` → `plugins.d/` drop-in dir | R8 + N ship gate |
+| R10-01 | plugin settings out of `config.yaml` → `plugins.d/` drop-in dir — shipped: merge + `plugins_dir` key, write/remove drop-ins, slug/symlink hardening, inline list deprecated | R8 + N ship gate |
 | R10-02 | installed-plugin state store (`installed.json`) | none |
 | R10-03 | `registry.json` cache rework (schema version, revocation policy) | R10-02 |
 | R10-04 | `vyn plugin enable\|disable` toggle | R10-01 |
