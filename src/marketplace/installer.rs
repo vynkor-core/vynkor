@@ -290,7 +290,7 @@ pub async fn install(
 /// is already installed at `version` *and* the install dir still exists. A
 /// missing dir (half-deleted install) falls through so `install` repairs it.
 /// Rebuilds `InstalledPlugin` from the live manifest so the caller can still
-/// append the (idempotent) config example.
+/// write the auto-spawn drop-in config.
 pub fn skip_reinstall(
     tmp_dir: &Path,
     slug: &str,
