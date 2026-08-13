@@ -28,7 +28,7 @@ fn kernel_exits_cleanly_on_sigterm() {
     let cfg_path = "/tmp/veyron_sigterm_cfg.yaml";
     let socket = "/tmp/veyron_sigterm_test.sock";
     let pid_file = "/tmp/veyron_sigterm_test.pid";
-    write_test_config(cfg_path, socket, 19301, pid_file);
+    write_test_config(cfg_path, socket, 19342, pid_file);
 
     // Remove stale socket/pid from a previous failed run
     let _ = fs::remove_file(socket);

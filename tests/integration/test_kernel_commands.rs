@@ -1051,7 +1051,7 @@ async fn action_response_from_non_provider_plugin_is_rejected_not_proxied() {
     // inject falsified data or to steal/grief the response slot before the
     // legitimate provider replies.
     let (shutdown_tx, _registry, _bus) =
-        start_kernel("/tmp/veyron_integ_action_spoof.sock", 19218).await;
+        start_kernel("/tmp/veyron_integ_action_spoof.sock", 19343).await;
 
     let mut provider = VeyronClient::connect("/tmp/veyron_integ_action_spoof.sock")
         .await
@@ -1162,7 +1162,7 @@ async fn ambiguous_action_providers_returns_not_found() {
     // misconfiguration, not something the kernel should guess its way
     // through. Must refuse to route, same as zero providers.
     let (shutdown_tx, _registry, _bus) =
-        start_kernel("/tmp/veyron_integ_action_ambiguous.sock", 19219).await;
+        start_kernel("/tmp/veyron_integ_action_ambiguous.sock", 19344).await;
 
     let mut provider_a = VeyronClient::connect("/tmp/veyron_integ_action_ambiguous.sock")
         .await
@@ -1287,7 +1287,7 @@ async fn provider_side_action_failure_proxies_through_unchanged() {
 #[tokio::test]
 async fn kernel_forwards_request_chunks_to_provider_with_translated_action_id() {
     let (shutdown_tx, _registry, _bus) =
-        start_kernel("/tmp/veyron_integ_stream_upload.sock", 19301).await;
+        start_kernel("/tmp/veyron_integ_stream_upload.sock", 19341).await;
 
     let mut provider = VeyronClient::connect("/tmp/veyron_integ_stream_upload.sock")
         .await
