@@ -38,7 +38,8 @@ Top-level structure: a JSON array of plugin entries.
   "sha256": "<64-char lowercase hex>",
   "min_kernel_version": "0.3.0",
   "max_kernel_version": "1.0.0",
-  "signature": "<128-char lowercase hex Ed25519 signature>"
+  "signature": "<128-char lowercase hex Ed25519 signature>",
+  "status": "stable"
 }
 ```
 
@@ -58,6 +59,7 @@ Top-level structure: a JSON array of plugin entries.
 | `min_kernel_version` | string | Semver lower bound (inclusive). `vyn install` rejects if running kernel is older. |
 | `max_kernel_version` | string | Semver upper bound (inclusive). `vyn install` rejects if running kernel is newer. Use `"*"` for no upper bound. |
 | `signature` | string | Ed25519 signature (128-char lowercase hex, 64 bytes) over `"{slug}:{version}:{sha256}"`, produced by the offline maintainer signing key. Verified against a pinned public key (or `marketplace_public_key` in `config.yaml` for private registries) *independent of* the `sha256` check — a compromised registry-serving channel can lie about both the archive and its hash together, but cannot forge this signature (T-11). |
+| `status` | string | Optional. Lifecycle status: `stable` (default when absent), `beta`, `deprecated`, `hidden`, `revoked`. Only `revoked` is enforced by the kernel: `vyn install` refuses a revoked entry, and the entry stays listed with a `[revoked]` marker so an operator sees why. Revocation is operational — it rides the (signable) registry channel but is not itself covered by the entry signature, which is the same trust boundary T-11 already assumes. |
 
 ### Invariants
 
@@ -66,6 +68,60 @@ Top-level structure: a JSON array of plugin entries.
 - `min_kernel_version` must be a valid semver string or absent (treated as `"0.0.0"`).
 - `max_kernel_version` must be a valid semver string or `"*"`.
 - `min_kernel_version <= max_kernel_version` when both are semver (not `"*"`).
+- A `status` of `revoked` is terminal: the entry is never installable, and no version of the same `slug` should be published until the incident is resolved under a new version.
+
+### Kernel-side registry cache (R10-03)
+
+The kernel mirrors the fetched document to `registry-cache.json` in the
+marketplace state dir (same directory as `installed.json`; `VEYRON_STATE_DIR`
+/ `XDG_DATA_HOME` relocate it). The cache is a **versioned wrapper**, not a
+raw mirror:
+
+- `schema_version` — a cache written with a different version is read as
+  empty (never misread); the file is written atomically (temp + rename).
+- `last_check` + per-slug `installed_version`/`last_check` — inputs for
+  offline upgrade detection.
+- `meta` — echoed from the registry document when present (registry v2).
+
+**Stale policy:** the cache only ever persists entries whose maintainer
+signature verified at write time (against the pinned key or the
+`marketplace_public_key` override). A stale-cache fallback on network failure
+therefore never serves unverified content; an all-unverified refetch
+(compromised channel / wrong key) keeps the previous verified snapshot.
+**Revocation outlives the TTL:** a `revoked` entry stays in the cache and is
+refused by `install` even when the cache is stale.
+
+### Registry v2 (planned — parser already tolerant)
+
+The veyron-plugins roadmap ("Infrastructure Evolution") plans to reshape
+`registry.json` into an object keyed by slug with a root `meta` and per-version
+delivery metadata:
+
+```json
+{
+  "meta": { "apiVersion": 2, "lastUpdated": "2026-08-13" },
+  "revoked": ["evil@1.0.0"],
+  "ai": {
+    "name": "AI",
+    "status": "stable",
+    "versions": {
+      "0.1.0": {
+        "archive_url": "https://.../ai.zip",
+        "sha256": "<hex>",
+        "signature": "<hex>",
+        "min_kernel_version": "0.1.0",
+        "max_kernel_version": "*"
+      }
+    }
+  }
+}
+```
+
+The kernel parser accepts **both** the flat array and this map form (snake_case
+or camelCase field names); `versions` flatten to one entry per version, and a
+root `revoked` list folds into each matching entry's `status`. A plugin entry
+with no `versions` yet produces no installable entry. This is forward
+compatibility only — no kernel change is required when the v2 document ships.
 
 ---
 
