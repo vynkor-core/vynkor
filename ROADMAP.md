@@ -176,10 +176,10 @@ permission-surface inconsistency; N1 is the largest single hot-path win.
   - Acceptance: `cargo fmt --check` exits 0.
   - **Status (2026-08-11): FIXED** — `cargo fmt` run tree-wide; `fmt --check` exits 0.
 
-> Deferred audit items M7 (C++/Python fuzz harness) and M9 (zero-value enum
-> renumber, wire-breaking) remain open — tracked in the Task Summary below
-> and in `AUDIT.md`. M7 is the last substantive coverage gap; M9 rides the
-> protocol v1.4 bump (P11-03).
+> Deferred audit items M7 (C++/Python fuzz harness) remains open — tracked in
+> the Task Summary below and in `AUDIT.md`. M9 (zero-value enum renumber)
+> shipped with the v1.5 bump (P11-03, 2026-08-13). M7 is the last substantive
+> coverage gap.
 
 ---
 
@@ -594,18 +594,17 @@ explicit state store. Independent of Phase 9 — can land before or after it.
 
 ---
 
-## Phase 11 — Protocol v1.4: permission additions (deferred)
+## Phase 11 — Protocol v1.4: permission additions
 
-Deferred until the veyron-plugins fleet needs them — `secrets` is the first
-plugin that cannot ship without one of these values, so P11 is the gate for
-the whole next plugin batch. Tracked from the plugin side in
-`veyron-plugins/ROADMAP.md` ("Kernel-side changes needed"); this section is
+The `secrets` plugin is the first that cannot ship without the new permission
+values, so P11 gates the whole next plugin batch. Tracked from the plugin side
+in `veyron-plugins/ROADMAP.md` ("Kernel-side changes needed"); this section is
 the kernel's half of the same work. Purely an enum addition + regeneration +
 copy sync — no new Envelope payloads, no IPC/framing/orchestrator changes
 (the existing `ActionRequest`/`Event`/`EventPublish`/IPC/streaming/WS
 surfaces cover every planned plugin).
 
-- [ ] P11-01 — **Add five `PermissionType` values (15–19, contiguous):**
+- [x] P11-01 — **Add five `PermissionType` values (15–19, contiguous):**
   `PERMISSION_SECRETS` (15), `PERMISSION_CLIPBOARD` (16),
   `PERMISSION_LAUNCH` (17), `PERMISSION_SCREEN` (18), `PERMISSION_HOME`
   (19); bump the `// v 1.3` header to `// v 1.4`. Contiguity is
@@ -620,8 +619,16 @@ surfaces cover every planned plugin).
     + publish).
   - Acceptance: a plugin.json declaring `"secrets"` passes
     `validate_manifest`; R8-02's drift test stays green.
+  - **Status (2026-08-13): SHIPPED** — proto v1.4 landed in `veyron-wire`
+    (`899bf8d`), regen'ed prost types consumed by the kernel
+    (`0b98dac`, merged via PR #13 `31f2cd4`); R8-02's drift test stays
+    green. Note: `veyron-wire` published as **0.2.1** (not 0.3.0). The
+    `[patch.crates-io]` override is still in place: it now pins wire
+    **0.2.2** (`feat/wire-v1.5-status-renumber`, the P11-03 renumber below)
+    and `veyron-sdk 0.1.3` (not yet on crates.io — 0.1.2 is). Both entries
+    drop once the pinned versions publish.
 
-- [ ] P11-02 — **Sync all six proto copies (fixes pre-existing v1.2
+- [x] P11-02 — **Sync all six proto copies (fixes pre-existing v1.2
   drift):** the three in-repo copies (`wire/proto`,
   `sdk/python/proto`, `sdk/cpp/proto`) are R8-05-guarded and move
   together; the standalone `veyron-sdk-python`/`veyron-sdk-cpp` repos are
@@ -636,16 +643,112 @@ surfaces cover every planned plugin).
     `tests/unit/test_proto_sync.rs`.
   - Acceptance: Python/C++ SDK examples exercise `publish_event` and
     storage-permission manifests against a v1.4 kernel.
+  - **Status (2026-08-13): SHIPPED** — all three sibling copies
+    (`../veyron-wire`, `../veyron-sdk-python`, `../veyron-sdk-cpp` proto
+    files) are byte-identical at v1.4; R8-05 was extended with a staleness
+    check on the generated Python binding asserting the five new
+    permission names plus `caller_plugin_id`, so a regen skip fails loudly.
 
-- [ ] P11-03 — **Land M9 (zero-value enum renumber) on the same bump:**
-  M9 is wire-breaking and gated on the next protocol version bump — this
-  is that bump. Renumber `PERMISSION_UNKNOWN = 0` per the `AUDIT.md` plan
-  while the enum is already being edited, and update
-  `known_permissions()`'s exclusion accordingly.
-  - Files: `wire/proto/veyron_protocol.proto` (+ all copies, same sync as
-    P11-02).
-  - Acceptance: no real permission value collides with `PERMISSION_UNKNOWN`;
-    R8-02/R8-05 tests still pass.
+- [x] P11-03 — **Land M9 (zero-value enum renumber) on the next wire-breaking
+  protocol bump.** Deferred by decision — `AUDIT.md:242`: "bundle into the
+  next wire-breaking protocol version bump; do not fix piecemeal". The
+  interim lint guarding explicit `status:` at construction sites is already
+  in place since Phase 6 (T-16); this is the full fix.
+
+  **Why (the bug it fixes):** proto3 defaults every enum field to its `0`
+  value whenever the wire omits it. `ActionStatus` and `CommandStatus` are
+  the only status enums in the protocol that make `0` = **success**
+  (`ACTION_OK = 0`, `COMMAND_OK = 0`), so any construction site that forgets
+  `set_status()` — or any peer built from an older/drifting proto copy —
+  silently reads back as **OK** instead of an error. Every other status enum
+  in the file already follows the safe `*_UNKNOWN = 0` pattern:
+  `PermissionType` (`PERMISSION_UNKNOWN = 0`), `EventPublishStatus`
+  (proto line 270 explicitly documents it: "a missed set_status() shows up
+  as this, not OK"), `ErrorCode` (`ERR_UNKNOWN = 0`), `AudioCodec`
+  (`AUDIO_CODEC_UNSPECIFIED = 0`). `ActionStatus` does not even *have* an
+  `ACTION_UNKNOWN` variant; `CommandStatus` parks `COMMAND_UNKNOWN` on 2
+  instead of 0. Renumbering flips the default to "unknown", so a missed
+  `set_status()` fails loudly downstream instead of faking success.
+
+  **Current → target** (in `../veyron-wire/proto/veyron_protocol.proto`):
+
+  | `ActionStatus` | now | after | | `CommandStatus` | now | after |
+  |---|---|---|---|---|---|---|
+  | `ACTION_UNKNOWN` | — | **0** (new) | | `COMMAND_UNKNOWN` | 2 | **0** |
+  | `ACTION_OK` | 0 | 1 | | `COMMAND_OK` | 0 | 1 |
+  | `ACTION_ERROR` | 1 | 2 | | `COMMAND_ERROR` | 1 | 2 |
+  | `ACTION_TIMEOUT` | 2 | 3 | | `COMMAND_PERMISSION_DENIED` | 3 | 3 |
+  | `ACTION_PERMISSION_DENY` | 3 | 4 | | | | |
+  | `ACTION_NOT_FOUND` | 4 | 5 | | | | |
+  | `ACTION_QUOTA_EXCEEDED` | 5 | 6 | | | | |
+  | `ACTION_STREAM_BACKPRESSURE` | 6 | 7 | | | | |
+
+  Result: every status enum in the file has `0` = "unknown/unset". Do **not**
+  touch the already-correct enums (`PermissionType`, `EventPublishStatus`,
+  `ErrorCode`, `AudioCodec`) — renumbering them is a gratuitous break.
+
+  **Where** (every location that must move in lockstep — one wire-breaking
+  version, no partial landings):
+  - `../veyron-wire/proto/veyron_protocol.proto` — the renumber itself;
+    header `// v 1.4` → `// v 1.5`.
+  - `../veyron-wire/src/lib.rs` — `PROTOCOL_VERSION` `"1.4"` → `"1.5"`,
+    same commit as the header (they must stay in sync).
+  - `../veyron-wire/Cargo.toml` — `0.2.1` → `0.3.0`: breaking wire changes
+    bump the **minor** (additive changes bump patch), per the wire README.
+  - `../veyron-sdk-python/proto/veyron_protocol.proto`,
+    `../veyron-sdk-cpp/proto/veyron_protocol.proto` — re-sync byte-identical
+    (R8-05 reads these sibling paths directly and fails on drift).
+  - `../veyron-sdk-python/veyron/veyron_protocol_pb2.py` — regenerate via
+    `scripts/gen_proto_python.py`. Caveat: the R8-05 staleness marker check
+    asserts symbol **names**, not values, so a pure renumber with a skipped
+    regen would NOT fail loudly — the regen must be done deliberately.
+  - `../veyron-sdk-rust/Cargo.toml` — `veyron-wire = "0.2.1"` → `"0.3.0"`.
+  - `Cargo.toml` (this repo) — keep the `[patch.crates-io]` override until
+    wire 0.3.0 publishes, then drop the wire entry (the `veyron-sdk 0.1.3`
+    entry stays until that crate publishes).
+  - **No Rust/C++/Python source edits anywhere**: every construction and
+    comparison site uses the named variant (`ActionStatus::ActionOk as i32`,
+    `r.status() == veyron::proto::ACTION_OK`, `ActionStatus.ACTION_OK`,
+    `set_status(ACTION_OK)`), so the new values arrive via the regenerated
+    bindings. (Verified 2026-08-13: kernel `src/ipc/protocol.rs`,
+    `src/kernel/commands.rs`, integration tests, and all three SDKs contain
+    zero hardcoded status numbers.)
+
+  **How (release order):**
+  1. `veyron-wire`: renumber the two enums, bump header + `PROTOCOL_VERSION`
+     + `Cargo.toml` to 0.3.0 in **one commit**; `cargo build` regenerates the
+     prost types.
+  2. Re-sync the two vendored proto copies (python/cpp) byte-identical and
+     regenerate `veyron_protocol_pb2.py` (step is deliberate — see caveat).
+  3. `veyron-sdk-rust`: bump the `veyron-wire` requirement to 0.3.0.
+  4. Publish `veyron-wire` 0.3.0 to crates.io.
+  5. Kernel: full suite — R8-02/R8-05 and the T-16 interim lint must stay
+     green; drop the wire patch entry once 0.3.0 is on crates.io.
+  6. Grep the SDKs for residual numeric status comparisons (`== 0`, `== 1`
+     against a status field) before closing — a renumber can't be caught by
+     the compiler.
+
+  **Acceptance:** `ACTION_OK`/`COMMAND_OK` are nonzero; every status enum in
+  the file has `*_UNKNOWN = 0`; R8-02/R8-05 and the interim lint
+  (`action_response_and_command_ack_literals_set_status_explicitly`,
+  `tests/unit/test_proto.rs`) all pass; Python/C++ examples round-trip
+  against a v1.5 kernel.
+
+  **Status (2026-08-13): SHIPPED** — v1.5 landed on
+  `feat/wire-v1.5-status-renumber`: `ActionStatus` gains `ACTION_UNKNOWN = 0`
+  (OK/ERROR/... shift to 1..7), `CommandStatus` moves `COMMAND_UNKNOWN` to 0
+  (OK/ERROR → 1/2). Header + `PROTOCOL_VERSION` + `Cargo.toml` moved in one
+  commit; the python/cpp proto copies were re-synced byte-identical and
+  `veyron_protocol_pb2.py` regenerated (deliberate — R8-05 asserts symbol
+  *names*, not values). **Deviation from the plan:** `veyron-wire` stays at
+  **0.2.2** (not 0.3.0) and the crates.io publish is deferred until the PRs
+  merge — the kernel consumes the branch via the `[patch.crates-io]`
+  override; `veyron-sdk-rust` needed no bump (its `0.2.1` req is satisfied by
+  the 0.2.2 patch). No source edits anywhere — every status construction and
+  comparison site uses named variants (re-grepped across kernel + all three
+  SDKs; the C++ `echo_plugin` was rebuilt against the v1.5 bindings). R8-02 /
+  R8-05 and the T-16 interim lint stay green; full suite passes (91 unit +
+  84 integration + 260 api), clippy `-D warnings` and `fmt --check` clean.
 
 ---
 
@@ -656,12 +759,18 @@ surfaces cover every planned plugin).
   `PERMISSION_STORAGE` before the registry entry is installable. The
   protocol v1.4 permission additions (Phase 11) are likewise tracked from
   the plugin side in its "Kernel-side changes needed" section — `secrets`
-  is the first plugin blocked on P11.
-- **veyron-wire** (`veyron-wire/`): 0.2.0 publish (R8-07) is release-process
-  work; kernel changes here only consume it. P11-01 bumps it again to 0.3.0.
+  was the first plugin blocked on P11; with P11-01/P11-02 shipped the kernel
+  side is unblocked; P11-03 (M9) shipped on v1.5 and does not gate plugins.
+- **veyron-wire** (`veyron-wire/`): 0.2.0 publish (R8-07) shipped; the
+  protocol v1.4 bump (P11-01) shipped as **0.2.1** on crates.io; the v1.5
+  status-enum renumber (P11-03) is **0.2.2** on
+  `feat/wire-v1.5-status-renumber`, consumed by the kernel via a
+  `[patch.crates-io]` override — the wire patch entry drops once 0.2.2
+  publishes, the `veyron-sdk 0.1.3` entry must stay until 0.1.3 publishes.
 - **veyron-sdk-python / veyron-sdk-cpp** (standalone repos): proto copies
-  have already drifted to v1.2 (no guard exists for them) — P11-02 syncs
-  them to v1.4 and adds drift protection.
+  synced to v1.4 (P11-02) and guarded — the R8-05 drift test reads the
+  sibling-repo paths directly and now also checks the generated Python
+  binding for staleness.
 - **sdk/python/proto**, **sdk/cpp/proto** vendored copies: guarded by the R8-05
   drift test, which reads them via sibling-repo paths (`../veyron-sdk-python`,
   `../veyron-sdk-cpp`) after the submodule removal below.
@@ -684,7 +793,7 @@ surfaces cover every planned plugin).
 | R8-04 | registry schema doc alignment | none |
 | R8-05 | proto-copy byte-identity test | none |
 | R8-06 | `database` plugin landing (veyron-plugins) | R8-01, R8-02 |
-| R8-07 | `veyron-wire` 0.2.0 publish + patch removal | none |
+| R8-07 | `veyron-wire` 0.2.0 publish — shipped; patch override re-added for the v1.4 housekeeping bump (see P11-01: wire entry droppable, `veyron-sdk 0.1.3` entry stays) | none |
 | N1 | router payload-sharing (`Arc<[u8]>`) in `forward`/`broadcast` — closed as non-issue; `Arc::ptr_eq` regression tests | none |
 | N2 | permission form normalization in clamp + config cross-check — shipped, tests for both forms | none |
 | N3 | config numeric bounds validation — shipped, zero-clamp + warn + tests | none |
@@ -706,9 +815,9 @@ surfaces cover every planned plugin).
 | R10-02 | installed-plugin state store (`installed.json`) — shipped: XDG data-dir ledger, atomic writes, reinstall-skip, missing-dir-tolerant remove, offline `list --installed` | none |
 | R10-03 | `registry.json` cache rework — shipped: versioned `registry-cache.json` in the state dir, verified-entries-only stale policy, `revoked` status blocks install, registry v2 map-form parsing | R10-02 |
 | R10-04 | `vyn plugin enable\|disable` toggle — shipped: drop-in rename to `<slug>.yaml.disabled` (skipped by the `*.yaml` glob at boot + SIGHUP), content preserved on re-enable, slug/path hardening, inline-`plugins:` note | R10-01 |
-| P11-01 | protocol v1.4 — `PermissionType` additions 15–19 (`SECRETS`/`CLIPBOARD`/`LAUNCH`/`SCREEN`/`HOME`), header bump, wire regeneration | `secrets` plugin (veyron-plugins) needs it |
-| P11-02 | proto-copy sync — 6 files / 4 repos; fixes standalone SDK v1.2 drift, adds drift guard | P11-01 |
-| P11-03 | M9 zero-value enum renumber on the v1.4 bump (wire-breaking) | P11-01 |
+| P11-01 | protocol v1.4 — `PermissionType` additions 15–19 (`SECRETS`/`CLIPBOARD`/`LAUNCH`/`SCREEN`/`HOME`), header bump, wire regeneration — shipped (`899bf8d` + `31f2cd4`); `veyron-wire` published as 0.2.1; `[patch.crates-io]` still needed for `veyron-sdk 0.1.3` (not yet on crates.io) | `secrets` plugin (veyron-plugins) needs it |
+| P11-02 | proto-copy sync — all sibling copies byte-identical at v1.4 + Python-binding staleness check — shipped | P11-01 |
+| P11-03 | M9 zero-value enum renumber — SHIPPED on protocol v1.5 (2026-08-13): `*_UNKNOWN = 0` for ActionStatus/CommandStatus, header + `PROTOCOL_VERSION` 1.5, `veyron-wire` 0.2.2 consumed via patch branch (crates.io publish deferred), python/cpp copies synced + pb2 regenerated, no source edits anywhere | v1.5 wire bump |
 
 **Ship gate:** R8-01..R8-05 are kernel-local and land together on `develop`;
 R8-06/R8-07 are cross-repo coordination items shipped from their own repos.
@@ -722,6 +831,12 @@ complete. M7/M9 remain deferred by decision. R9-01/R9-05 are
 Linux-cgroup/mount-namespace work and require a delegated cgroup v2 subtree or
 root. Phase 10 (plugin config + marketplace state) is likewise deferred and
 independent of Phase 9 — it can land before or after hard isolation.
+Phase 11 shipped (2026-08-13): P11-01 (protocol v1.4 permission values 15–19,
+`veyron-wire` 0.2.1 published) and P11-02 (proto-copy sync + drift guard) are
+done; P11-03 (M9 zero-value enum renumber) shipped on protocol **v1.5** —
+`veyron-wire` 0.2.2 consumed via the `[patch.crates-io]` override on
+`feat/wire-v1.5-status-renumber` (crates.io publish deferred until the PRs
+merge; the `veyron-sdk 0.1.3` patch entry stays until 0.1.3 publishes).
 
 ## Definition of Done
 
