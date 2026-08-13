@@ -1,8 +1,7 @@
 use clap::Subcommand;
 
 use crate::marketplace::installer::{
-    append_config_example, install, remove_config_example, uninstall, ConfigExampleStatus,
-    InstalledPlugin,
+    install, remove_plugin_config, uninstall, write_plugin_config, InstalledPlugin,
 };
 use crate::marketplace::registry::{fetch_registry, fetch_registry_with_url, RegistryEntry};
 
@@ -58,6 +57,7 @@ pub async fn handle(
     max_archive_entries: usize,
     marketplace_public_key: Option<&str>,
     config_path: &str,
+    plugins_dir: &std::path::Path,
 ) -> anyhow::Result<()> {
     let fetch = |refresh: bool| {
         let url = registry_url.unwrap_or("");
@@ -117,31 +117,41 @@ pub async fn handle(
                 marketplace_public_key,
             )
             .await?;
-            append_config_example(config_path, &installed)?;
+            if write_plugin_config(plugins_dir, &installed)? {
+                println!(
+                    "✓ Wrote auto-spawn config to {}/{}.yaml",
+                    plugins_dir.display(),
+                    installed.slug
+                );
+            } else {
+                println!(
+                    "Note: {}/{}.yaml already exists — left untouched.",
+                    plugins_dir.display(),
+                    installed.slug
+                );
+            }
         }
         PluginCmd::Remove { target } => {
             uninstall(&target, tmp_dir)?;
 
-            match remove_config_example(config_path, &target) {
-                Ok(ConfigExampleStatus::Removed) => {
-                    println!("✓ Removed the commented config.yaml example for '{target}'.");
-                }
-                Ok(ConfigExampleStatus::Active) => {
+            match remove_plugin_config(plugins_dir, &target) {
+                Ok(true) => {
                     println!(
-                        "Note: '{target}' has an active (uncommented) entry in config.yaml — left untouched."
+                        "✓ Removed auto-spawn config {}/{}.yaml",
+                        plugins_dir.display(),
+                        target
                     );
-                    return Ok(());
                 }
-                Ok(ConfigExampleStatus::NotFound) => {}
+                Ok(false) => {}
                 Err(e) => return Err(e.into()),
             }
 
-            // the example block can be gone while the plugin is still live in
-            // `plugins:` (e.g. it was activated before removal) — warn then
+            // the drop-in can be gone while the plugin is still live in
+            // `plugins:` (deprecated inline list) or another drop-in — warn
             if let Ok(cfg) = crate::utils::config::load_config(config_path) {
                 if cfg.plugins.iter().any(|p| p.id == target) {
                     println!(
-                        "Note: '{target}' is still listed under `plugins:` in config.yaml — remove that entry too."
+                        "Note: '{target}' is still configured in `plugins:` or another drop-in — remove that entry too."
                     );
                 }
             }

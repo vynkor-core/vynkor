@@ -352,14 +352,13 @@ fn manifest_not_found_errors() {
     assert!(err.to_string().contains("Invalid plugin.json"));
 }
 
-// append_config_example: appends a commented block with binary path + marker
+// write_plugin_config: writes a per-plugin drop-in with binary path + id
 #[test]
-fn append_config_example_adds_commented_block() {
-    use veyron::marketplace::installer::{append_config_example, InstalledPlugin};
+fn write_plugin_config_creates_dropin_file() {
+    use veyron::marketplace::installer::{write_plugin_config, InstalledPlugin};
 
     let tmp = tempdir().unwrap();
-    let cfg = tmp.path().join("config.yaml");
-    fs::write(&cfg, "port: 8888\n").unwrap();
+    let plugins_dir = tmp.path().join("plugins.d");
 
     let installed = InstalledPlugin {
         slug: "ping-pong".into(),
@@ -367,23 +366,25 @@ fn append_config_example_adds_commented_block() {
         version: "0.1.0".into(),
         binary_path: Path::new("/home/u/.local/lib/veyron/plugins/ping-pong/ping-pong").into(),
     };
-    append_config_example(&cfg.display().to_string(), &installed).unwrap();
+    assert!(write_plugin_config(&plugins_dir, &installed).unwrap());
 
-    let content = fs::read_to_string(&cfg).unwrap();
-    assert!(content.contains("# veyron install: ping-pong v0.1.0"));
-    assert!(content.contains("#   - id: ping-pong"));
+    let path = plugins_dir.join("ping-pong.yaml");
+    assert!(path.exists());
+    let content = fs::read_to_string(&path).unwrap();
+    assert!(content.contains("id: ping-pong"));
     assert!(content.contains("binary: /home/u/.local/lib/veyron/plugins/ping-pong/ping-pong"));
-    assert!(content.contains("#     sandbox: true"));
+    assert!(content.contains("restart: on-failure"));
+    assert!(content.contains("max_restarts: 5"));
+    assert!(content.contains("sandbox: true"));
 }
 
-// append_config_example: network gets sandbox: false hint (egress needs a route)
+// write_plugin_config: network gets sandbox: false hint (egress needs a route)
 #[test]
-fn append_config_example_network_sandbox_false() {
-    use veyron::marketplace::installer::{append_config_example, InstalledPlugin};
+fn write_plugin_config_network_sandbox_false() {
+    use veyron::marketplace::installer::{write_plugin_config, InstalledPlugin};
 
     let tmp = tempdir().unwrap();
-    let cfg = tmp.path().join("config.yaml");
-    fs::write(&cfg, "port: 8888\n").unwrap();
+    let plugins_dir = tmp.path().join("plugins.d");
 
     let installed = InstalledPlugin {
         slug: "network".into(),
@@ -391,20 +392,23 @@ fn append_config_example_network_sandbox_false() {
         version: "0.1.5".into(),
         binary_path: Path::new("/home/u/.local/lib/veyron/plugins/network/network").into(),
     };
-    append_config_example(&cfg.display().to_string(), &installed).unwrap();
+    write_plugin_config(&plugins_dir, &installed).unwrap();
 
-    let content = fs::read_to_string(&cfg).unwrap();
-    assert!(content.contains("#     sandbox: false"));
+    let content = fs::read_to_string(plugins_dir.join("network.yaml")).unwrap();
+    assert!(content.contains("sandbox: false"));
 }
 
-// append_config_example: second call for the same slug is a no-op (idempotent)
+// write_plugin_config: existing drop-in is left untouched (operator-tuned),
+// and the write reports "not written"
 #[test]
-fn append_config_example_is_idempotent() {
-    use veyron::marketplace::installer::{append_config_example, InstalledPlugin};
+fn write_plugin_config_keeps_existing_file() {
+    use veyron::marketplace::installer::{write_plugin_config, InstalledPlugin};
 
     let tmp = tempdir().unwrap();
-    let cfg = tmp.path().join("config.yaml");
-    fs::write(&cfg, "port: 8888\n").unwrap();
+    let plugins_dir = tmp.path().join("plugins.d");
+    fs::create_dir_all(&plugins_dir).unwrap();
+    let path = plugins_dir.join("database.yaml");
+    fs::write(&path, "id: database\nbinary: /custom/database\n").unwrap();
 
     let installed = InstalledPlugin {
         slug: "database".into(),
@@ -412,123 +416,118 @@ fn append_config_example_is_idempotent() {
         version: "0.1.0".into(),
         binary_path: Path::new("/home/u/.local/lib/veyron/plugins/database/database").into(),
     };
-    let path = cfg.display().to_string();
-    append_config_example(&path, &installed).unwrap();
-    let once = fs::read_to_string(&cfg).unwrap();
-    append_config_example(&path, &installed).unwrap();
-    let twice = fs::read_to_string(&cfg).unwrap();
+    assert!(!write_plugin_config(&plugins_dir, &installed).unwrap());
 
-    assert_eq!(once, twice);
-    assert_eq!(once.matches("# veyron install: database").count(), 1);
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        "id: database\nbinary: /custom/database\n"
+    );
 }
 
-// append_config_example: missing config file is a silent no-op, not an error
+// write_plugin_config: a pre-planted symlink is never followed — the write
+// reports "not written" and the symlink target stays untouched (M-09 class)
 #[test]
-fn append_config_example_missing_config_is_noop() {
-    use veyron::marketplace::installer::{append_config_example, InstalledPlugin};
+fn write_plugin_config_does_not_follow_symlink() {
+    use veyron::marketplace::installer::{write_plugin_config, InstalledPlugin};
 
     let tmp = tempdir().unwrap();
-    let missing = tmp.path().join("does-not-exist.yaml");
+    let plugins_dir = tmp.path().join("plugins.d");
+    fs::create_dir_all(&plugins_dir).unwrap();
+    let victim = tmp.path().join("victim.txt");
+    fs::write(&victim, "do not touch").unwrap();
+    std::os::unix::fs::symlink(&victim, plugins_dir.join("pwned.yaml")).unwrap();
 
     let installed = InstalledPlugin {
-        slug: "network".into(),
-        plugin_id: "network".into(),
-        version: "0.1.5".into(),
-        binary_path: Path::new("/x/network").into(),
+        slug: "pwned".into(),
+        plugin_id: "pwned".into(),
+        version: "0.1.0".into(),
+        binary_path: Path::new("/x/pwned").into(),
     };
-    assert!(append_config_example(&missing.display().to_string(), &installed).is_ok());
-    assert!(!missing.exists());
+    assert!(!write_plugin_config(&plugins_dir, &installed).unwrap());
+    assert_eq!(fs::read_to_string(&victim).unwrap(), "do not touch");
 }
 
-// remove_config_example: fully-commented block is removed, config content intact
+// write_plugin_config: traversal slug is rejected, nothing written
 #[test]
-fn remove_config_example_removes_commented_block() {
+fn write_plugin_config_rejects_traversal_slug() {
+    use veyron::marketplace::installer::{write_plugin_config, InstalledPlugin};
+
+    let tmp = tempdir().unwrap();
+    let plugins_dir = tmp.path().join("plugins.d");
+
+    let installed = InstalledPlugin {
+        slug: "../evil".into(),
+        plugin_id: "evil".into(),
+        version: "0.1.0".into(),
+        binary_path: Path::new("/x/evil").into(),
+    };
+    assert!(write_plugin_config(&plugins_dir, &installed).is_err());
+    assert!(!tmp.path().join("evil.yaml").exists());
+}
+
+// write_plugin_config: creates the plugins.d dir when missing
+#[test]
+fn write_plugin_config_creates_plugins_dir() {
+    use veyron::marketplace::installer::{write_plugin_config, InstalledPlugin};
+
+    let tmp = tempdir().unwrap();
+    let plugins_dir = tmp.path().join("nested").join("plugins.d");
+
+    let installed = InstalledPlugin {
+        slug: "ai".into(),
+        plugin_id: "ai".into(),
+        version: "0.1.0".into(),
+        binary_path: Path::new("/x/ai").into(),
+    };
+    write_plugin_config(&plugins_dir, &installed).unwrap();
+
+    assert!(plugins_dir.join("ai.yaml").exists());
+}
+
+// remove_plugin_config: removes the drop-in file, returns true
+#[test]
+fn remove_plugin_config_removes_file() {
     use veyron::marketplace::installer::{
-        append_config_example, remove_config_example, ConfigExampleStatus, InstalledPlugin,
+        remove_plugin_config, write_plugin_config, InstalledPlugin,
     };
 
     let tmp = tempdir().unwrap();
-    let cfg = tmp.path().join("config.yaml");
-    fs::write(&cfg, "port: 8888\n").unwrap();
-    let path = cfg.display().to_string();
+    let plugins_dir = tmp.path().join("plugins.d");
 
     let installed = InstalledPlugin {
         slug: "ping-pong".into(),
         plugin_id: "ping-pong".into(),
         version: "0.1.0".into(),
-        binary_path: Path::new("/home/u/.local/lib/veyron/plugins/ping-pong/ping-pong-rs").into(),
+        binary_path: Path::new("/x/ping-pong-rs").into(),
     };
-    append_config_example(&path, &installed).unwrap();
+    write_plugin_config(&plugins_dir, &installed).unwrap();
 
-    let status = remove_config_example(&path, "ping-pong").unwrap();
-    assert_eq!(status, ConfigExampleStatus::Removed);
-    assert_eq!(fs::read_to_string(&cfg).unwrap(), "port: 8888\n");
+    let removed = remove_plugin_config(&plugins_dir, "ping-pong").unwrap();
+    assert!(removed);
+    assert!(!plugins_dir.join("ping-pong.yaml").exists());
 }
 
-// remove_config_example: an uncommented (live) entry is never deleted
+// remove_plugin_config: no drop-in for the slug → false, no error
 #[test]
-fn remove_config_example_leaves_active_block() {
-    use veyron::marketplace::installer::{remove_config_example, ConfigExampleStatus};
+fn remove_plugin_config_missing_is_false() {
+    use veyron::marketplace::installer::remove_plugin_config;
 
     let tmp = tempdir().unwrap();
-    let cfg = tmp.path().join("config.yaml");
-    // operator uncommented the `- id:` line — the entry is live
-    fs::write(
-        &cfg,
-        "port: 8888\n\n\
-         # --- installed via `vyn plugin install network` ---\n\
-         # veyron install: network v0.1.5\n\
-         - id: network\n\
-         \x20 binary: /x/network\n",
-    )
-    .unwrap();
-    let path = cfg.display().to_string();
-    let before = fs::read_to_string(&cfg).unwrap();
+    let plugins_dir = tmp.path().join("plugins.d");
 
-    let status = remove_config_example(&path, "network").unwrap();
-    assert_eq!(status, ConfigExampleStatus::Active);
-    assert_eq!(fs::read_to_string(&cfg).unwrap(), before);
+    let removed = remove_plugin_config(&plugins_dir, "ghost").unwrap();
+    assert!(!removed);
 }
 
-// remove_config_example: no marker for the slug → NotFound, file untouched
+// remove_plugin_config: removing the middle drop-in keeps sibling files
 #[test]
-fn remove_config_example_not_found_is_noop() {
-    use veyron::marketplace::installer::{remove_config_example, ConfigExampleStatus};
-
-    let tmp = tempdir().unwrap();
-    let cfg = tmp.path().join("config.yaml");
-    fs::write(&cfg, "port: 8888\n").unwrap();
-    let path = cfg.display().to_string();
-    let before = fs::read_to_string(&cfg).unwrap();
-
-    let status = remove_config_example(&path, "ghost").unwrap();
-    assert_eq!(status, ConfigExampleStatus::NotFound);
-    assert_eq!(fs::read_to_string(&cfg).unwrap(), before);
-}
-
-// remove_config_example: missing config file → NotFound, not an error
-#[test]
-fn remove_config_example_missing_config_is_not_found() {
-    use veyron::marketplace::installer::{remove_config_example, ConfigExampleStatus};
-
-    let tmp = tempdir().unwrap();
-    let missing = tmp.path().join("does-not-exist.yaml");
-
-    let status = remove_config_example(&missing.display().to_string(), "network").unwrap();
-    assert_eq!(status, ConfigExampleStatus::NotFound);
-}
-
-// remove_config_example: removing the middle block keeps sibling blocks
-#[test]
-fn remove_config_example_keeps_sibling_blocks() {
+fn remove_plugin_config_keeps_sibling_dropins() {
     use veyron::marketplace::installer::{
-        append_config_example, remove_config_example, ConfigExampleStatus, InstalledPlugin,
+        remove_plugin_config, write_plugin_config, InstalledPlugin,
     };
 
     let tmp = tempdir().unwrap();
-    let cfg = tmp.path().join("config.yaml");
-    fs::write(&cfg, "port: 8888\n").unwrap();
-    let path = cfg.display().to_string();
+    let plugins_dir = tmp.path().join("plugins.d");
 
     let mk = |slug: &str, binary: &str| InstalledPlugin {
         slug: slug.into(),
@@ -536,15 +535,48 @@ fn remove_config_example_keeps_sibling_blocks() {
         version: "0.1.0".into(),
         binary_path: Path::new(binary).into(),
     };
-    append_config_example(&path, &mk("ping-pong", "/x/ping-pong-rs")).unwrap();
-    append_config_example(&path, &mk("network", "/x/network")).unwrap();
-    append_config_example(&path, &mk("ai", "/x/ai")).unwrap();
+    write_plugin_config(&plugins_dir, &mk("ping-pong", "/x/ping-pong-rs")).unwrap();
+    write_plugin_config(&plugins_dir, &mk("network", "/x/network")).unwrap();
+    write_plugin_config(&plugins_dir, &mk("ai", "/x/ai")).unwrap();
 
-    let status = remove_config_example(&path, "network").unwrap();
-    assert_eq!(status, ConfigExampleStatus::Removed);
+    let removed = remove_plugin_config(&plugins_dir, "network").unwrap();
+    assert!(removed);
+    assert!(!plugins_dir.join("network.yaml").exists());
+    assert!(plugins_dir.join("ping-pong.yaml").exists());
+    assert!(plugins_dir.join("ai.yaml").exists());
+}
 
-    let content = fs::read_to_string(&cfg).unwrap();
-    assert!(!content.contains("veyron install: network"));
-    assert!(content.contains("veyron install: ping-pong"));
-    assert!(content.contains("veyron install: ai"));
+// remove_plugin_config: traversal slug is rejected, nothing deleted
+#[test]
+fn remove_plugin_config_rejects_traversal_slug() {
+    use veyron::marketplace::installer::remove_plugin_config;
+
+    let tmp = tempdir().unwrap();
+    let plugins_dir = tmp.path().join("plugins.d");
+    let victim = tmp.path().join("victim.yaml");
+    fs::write(&victim, "keep").unwrap();
+
+    let err = remove_plugin_config(&plugins_dir, "../victim").unwrap_err();
+    assert!(err.to_string().contains("invalid slug"), "got: {err}");
+    assert!(
+        victim.exists(),
+        "traversal must not delete outside plugins.d"
+    );
+}
+
+// uninstall: traversal slug is rejected, nothing deleted
+#[test]
+fn uninstall_rejects_traversal_slug() {
+    use veyron::marketplace::installer::uninstall;
+
+    let tmp = tempdir().unwrap();
+    let victim = tmp.path().join("victim");
+    fs::create_dir_all(&victim).unwrap();
+
+    let err = uninstall("../../victim", tmp.path()).unwrap_err();
+    assert!(err.to_string().contains("invalid slug"), "got: {err}");
+    assert!(
+        victim.exists(),
+        "traversal must not delete outside plugin dir"
+    );
 }

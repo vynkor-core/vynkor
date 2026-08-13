@@ -99,7 +99,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 /// What `install` placed on disk, so the CLI can point the operator at it and
-/// (optionally) append a commented config.yaml example.
+/// write a per-plugin drop-in auto-spawn config.
 pub struct InstalledPlugin {
     pub slug: String,
     pub plugin_id: String,
@@ -243,8 +243,8 @@ pub async fn install(
     // Step 8 — Success output
     let dest_str = dest.display();
     println!(
-        "✓ Installed {} v{} to {dest_str}/\n   Add to config.yaml to activate:\n     plugins:\n       - id: {}\n         binary: {dest_str}/{}",
-        entry.slug, manifest.version, manifest.plugin_id, manifest.binary
+        "✓ Installed {} v{} to {dest_str}/\n   Auto-spawn entry: plugins.d/{}.yaml",
+        entry.slug, manifest.version, entry.slug
     );
 
     Ok(InstalledPlugin {
@@ -414,6 +414,7 @@ pub fn extract_zip(
 /// edit `config.yaml`. Callers should stop the plugin first if the kernel is
 /// running it.
 pub fn uninstall(slug: &str, tmp_dir: &Path) -> Result<(), VeyronError> {
+    validate_slug(slug)?;
     let dest = plugin_dir(tmp_dir).join(slug);
 
     if !dest.exists() {
@@ -428,129 +429,79 @@ pub fn uninstall(slug: &str, tmp_dir: &Path) -> Result<(), VeyronError> {
     Ok(())
 }
 
-/// Append a commented-out config.yaml entry for `installed` so the operator
-/// can enable the plugin by uncommenting. No-op when the config file does not
-/// exist or already carries a `# veyron install:` marker for this slug
-/// (idempotent across reinstalls).
-pub fn append_config_example(
-    config_path: &str,
-    installed: &InstalledPlugin,
-) -> Result<(), VeyronError> {
-    let content = match fs::read_to_string(config_path) {
-        Ok(c) => c,
-        Err(_) => return Ok(()), // config absent — nothing to edit
-    };
-
-    let marker = format!("# veyron install: {} ", installed.slug);
-    if content.lines().any(|l| l.contains(&marker)) {
-        return Ok(());
-    }
-
-    // network permission means the plugin opens outbound sockets — the example
-    // must not suggest a netns that would block its egress
-    let sandbox_hint = if installed.plugin_id == "network" {
-        "false     # network egress needs a route out"
+/// Reject slugs that could escape `plugin_dir`/`plugins_dir` via path
+/// traversal (`../`, `/`, `..`, empty). Applied to every path a slug is
+/// joined into — the CLI `remove` target is operator input, and registry
+/// slugs are remote-controlled, so neither may shape a filesystem path.
+fn validate_slug(slug: &str) -> Result<(), VeyronError> {
+    let ok = !slug.is_empty()
+        && slug.len() <= 64
+        && slug != "."
+        && slug != ".."
+        && slug
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.');
+    if ok {
+        Ok(())
     } else {
-        "true"
-    };
+        Err(VeyronError::InvalidPluginId(format!(
+            "invalid slug '{slug}': only [A-Za-z0-9._-], no path separators"
+        )))
+    }
+}
 
-    let block = format!(
-        "\n# --- installed via `vyn plugin install {}` ---\n\
-         {marker}v{}\n\
-         # Uncomment to auto-spawn on kernel start:\n\
-         #   - id: {}\n\
-         #     binary: {}\n\
-         #     restart: on-failure\n\
-         #     max_restarts: 5\n\
-         #     sandbox: {sandbox_hint}\n",
-        installed.slug,
-        installed.version,
-        installed.plugin_id,
-        installed.binary_path.display(),
+/// Write a per-plugin drop-in config `plugins_dir/<slug>.yaml` (R10-01) so the
+/// kernel auto-spawns the installed plugin. Returns whether the file was
+/// written — an existing file (operator-tuned, or a planted symlink) is left
+/// untouched. `create_new` (O_CREAT|O_EXCL) never follows a symlink, so a
+/// pre-planted link cannot redirect the write onto an arbitrary target
+/// (AUDIT M-09 class).
+pub fn write_plugin_config(
+    plugins_dir: &Path,
+    installed: &InstalledPlugin,
+) -> Result<bool, VeyronError> {
+    validate_slug(&installed.slug)?;
+    fs::create_dir_all(plugins_dir).map_err(VeyronError::Io)?;
+    let path = plugins_dir.join(format!("{}.yaml", installed.slug));
+
+    // network plugin opens outbound sockets — the sandbox netns would block
+    // its egress, so the generated entry must not suggest it
+    let sandbox = installed.plugin_id != "network";
+
+    let body =
+        format!(
+        "# auto-spawn entry written by `vyn plugin install {}` — edit to tune, remove to disable\n\
+         id: {}\n\
+         binary: {}\n\
+         restart: on-failure\n\
+         max_restarts: 5\n\
+         sandbox: {}\n",
+        installed.slug, installed.plugin_id, installed.binary_path.display(), sandbox
     );
-
-    let mut out = content;
-    if !out.ends_with('\n') {
-        out.push('\n');
+    match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+    {
+        Ok(mut f) => {
+            use std::io::Write;
+            f.write_all(body.as_bytes()).map_err(VeyronError::Io)?;
+            Ok(true)
+        }
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(false),
+        Err(e) => Err(VeyronError::Io(e)),
     }
-    out.push_str(&block);
-    fs::write(config_path, out).map_err(VeyronError::Io)?;
-    Ok(())
 }
 
-/// Outcome of [`remove_config_example`] — tells the CLI whether the block was
-/// dropped, left alone because the operator activated it, or never existed.
-#[derive(Debug, PartialEq, Eq)]
-pub enum ConfigExampleStatus {
-    /// Commented block removed from the config.
-    Removed,
-    /// Block exists but at least one line is uncommented — active entry, untouched.
-    Active,
-    /// No block for this slug (or no config file at all).
-    NotFound,
-}
-
-/// Remove the commented block `append_config_example` wrote for `slug`, but
-/// only while it is fully commented. If the operator uncommented any line
-/// (the plugin is live in config.yaml) the block is left untouched — never
-/// delete an active entry from behind the operator's back.
-pub fn remove_config_example(
-    config_path: &str,
-    slug: &str,
-) -> Result<ConfigExampleStatus, VeyronError> {
-    let content = match fs::read_to_string(config_path) {
-        Ok(c) => c,
-        Err(_) => return Ok(ConfigExampleStatus::NotFound), // config absent
-    };
-
-    let lines: Vec<String> = content.lines().map(str::to_owned).collect();
-    let marker = format!("# veyron install: {slug} ");
-    let marker_idx = lines.iter().position(|l| l.contains(&marker));
-    let Some(marker_idx) = marker_idx else {
-        return Ok(ConfigExampleStatus::NotFound);
-    };
-
-    // the block header sits directly above the marker; if somehow missing,
-    // treat the marker line itself as the start
-    let start = (0..marker_idx)
-        .rev()
-        .find(|&i| lines[i].trim_start().starts_with("# --- "))
-        .unwrap_or(marker_idx);
-
-    // the next block header (or EOF) closes this block
-    let end = ((marker_idx + 1)..lines.len())
-        .find(|&i| lines[i].trim_start().starts_with("# --- "))
-        .unwrap_or(lines.len());
-
-    // an uncommented line means the entry is active — refuse to touch it
-    let active = lines[start..end]
-        .iter()
-        .any(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#'));
-    if active {
-        return Ok(ConfigExampleStatus::Active);
+/// Delete the drop-in config for `slug`. Returns whether a file was removed.
+pub fn remove_plugin_config(plugins_dir: &Path, slug: &str) -> Result<bool, VeyronError> {
+    validate_slug(slug)?;
+    let path = plugins_dir.join(format!("{slug}.yaml"));
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(VeyronError::Io(e)),
     }
-
-    let mut kept: Vec<String> = Vec::with_capacity(lines.len() - (end - start));
-    for (i, l) in lines.iter().enumerate() {
-        if (start..end).contains(&i) {
-            continue;
-        }
-        // drop the blank separator the appender put above the block
-        if i + 1 == start && l.trim().is_empty() && !kept.is_empty() {
-            continue;
-        }
-        kept.push(l.clone());
-    }
-    while kept.last().is_some_and(|l| l.trim().is_empty()) {
-        kept.pop();
-    }
-
-    let mut out = kept.join("\n");
-    if !out.is_empty() {
-        out.push('\n');
-    }
-    fs::write(config_path, out).map_err(VeyronError::Io)?;
-    Ok(ConfigExampleStatus::Removed)
 }
 
 pub fn validate_manifest(

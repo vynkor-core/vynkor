@@ -124,13 +124,23 @@ port: 8080
 jwt_secret: "change-me-in-production"
 log_level: info
 
-plugins:
-  - id: my-plugin
-    binary: ./target/release/my_plugin
-    restart: on-failure   # always | on-failure | never
-    max_restarts: 5
-    sandbox: true        # Linux only
+# plugins_dir defaults to <config dir>/plugins.d/ — one file per plugin:
 ```
+
+```yaml
+# plugins.d/my-plugin.yaml
+id: my-plugin
+binary: ./target/release/my_plugin
+restart: on-failure   # always | on-failure | never
+max_restarts: 5
+sandbox: true        # Linux only
+```
+
+`vyn plugin install` writes `plugins.d/<slug>.yaml`; `vyn plugin remove`
+deletes it. The legacy inline `plugins:` list in `config.yaml` still works
+but is deprecated — install/remove no longer touch `config.yaml`. SIGHUP
+re-reads config + drop-ins (surfacing parse errors / duplicate ids) but does
+not respawn the plugin set — restart the kernel to apply plugin changes.
 
 ### Run
 

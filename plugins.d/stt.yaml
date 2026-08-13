@@ -1,0 +1,15 @@
+id: stt
+binary: /home/behzod/projects/veyron-core/veyron-plugins/plugins/stt/target/release/stt
+restart: on-failure
+max_restarts: 5
+sandbox: true
+env:
+  # Cloud provider only; default-deny allowlist. No key set on dev box.
+  - STT_PLUGIN_ALLOWED_KEY_ENVS=OPENAI_API_KEY
+  - STT_PLUGIN_LOCAL_MODEL_DIR=/home/behzod/projects/veyron-core/veyron-plugins/models/stt/zipformer-ru-int8
+  - STT_PLUGIN_LOCAL_MODEL_TYPE=transducer
+grace_seconds: 10
+# RLIMIT_NPROC counts the uid's TOTAL threads at clone time — this
+# desktop session already runs ~900, so the default would be marginal.
+max_procs: 4096
+max_vmem_mb: 1024

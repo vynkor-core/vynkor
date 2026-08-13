@@ -1,0 +1,13 @@
+# ai: LLM chat_completion, no permissions of its own — calls out through the
+# `network` plugin above, so network must be running for ai to do anything.
+id: ai
+binary: /home/behzod/.local/lib/veyron/plugins/ai/ai
+restart: on-failure
+max_restarts: 5
+sandbox: true
+env:
+  # Default-deny allowlist: names of env vars callers may reference via
+  # api_key_env. No keys set on dev box; add real keys per provider.
+  - AI_PLUGIN_ALLOWED_KEY_ENVS=ANTHROPIC_API_KEY,OPENAI_API_KEY,OLLAMA_API_KEY
+max_procs: 64
+max_vmem_mb: 512

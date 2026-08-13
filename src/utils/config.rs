@@ -1,5 +1,5 @@
 use serde::Deserialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tracing::warn;
 
 /// One plugin entry in the `plugins:` list in config.yaml.
@@ -75,6 +75,13 @@ pub struct Config {
     /// Plugins to auto-spawn on kernel start. Empty by default.
     #[serde(default)]
     pub plugins: Vec<PluginDef>,
+    /// Directory of per-plugin drop-in config files (R10-01). Each `*.yaml`
+    /// file carries exactly one plugin entry; they are globbed and merged
+    /// into `plugins` in filename-sort order, after any inline `plugins:`
+    /// entries. Default: `<config dir>/plugins.d/`. The inline list stays
+    /// supported (deprecated) so existing configs keep booting.
+    #[serde(default)]
+    pub plugins_dir: Option<PathBuf>,
     #[serde(default = "default_watchdog_interval")]
     pub watchdog_interval_secs: u64,
     #[serde(default = "default_watchdog_timeout")]
@@ -292,6 +299,7 @@ impl Default for Config {
             jwt_secret: None,
             allow_no_auth: false,
             plugins: vec![],
+            plugins_dir: None,
             watchdog_interval_secs: default_watchdog_interval(),
             watchdog_timeout_secs: default_watchdog_timeout(),
             log_buffer_lines: default_log_buffer_lines(),
@@ -333,8 +341,57 @@ pub fn load_config(path: &str) -> anyhow::Result<Config> {
     let content = std::fs::read_to_string(path)?;
     let mut config: Config = serde_yaml::from_str(&content)?;
     config.config_file = Some(path.to_string());
+    config.plugins_dir = Some(resolve_plugins_dir(path, config.plugins_dir.as_deref()));
+    merge_plugin_dropins(&mut config)?;
     clamp_invalid_numerics(&mut config);
     Ok(config)
+}
+
+/// Resolve the drop-in plugin dir: an explicit `plugins_dir` config key wins,
+/// otherwise `<config dir>/plugins.d`. Shared by `load_config` (boot + SIGHUP)
+/// and the CLI (`vyn plugin install` must write to the same place the kernel
+/// reads from).
+pub fn resolve_plugins_dir(config_path: &str, explicit: Option<&Path>) -> PathBuf {
+    explicit.map(Path::to_path_buf).unwrap_or_else(|| {
+        Path::new(config_path)
+            .parent()
+            .map(|p| p.join("plugins.d"))
+            .unwrap_or_else(|| PathBuf::from("plugins.d"))
+    })
+}
+
+/// Glob `plugins_dir/*.yaml`, parse each as one `PluginDef`, and append to
+/// `config.plugins` in filename-sort order. A duplicate `id` — across drop-in
+/// files or clashing with an inline `plugins:` entry — is a boot error: the
+/// operator must not silently get one of the two definitions ignored.
+fn merge_plugin_dropins(config: &mut Config) -> anyhow::Result<()> {
+    let dir = config
+        .plugins_dir
+        .as_ref()
+        .expect("plugins_dir resolved by load_config");
+    if !dir.is_dir() {
+        return Ok(()); // no drop-ins yet — nothing to merge
+    }
+    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)?
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "yaml" || e == "yml"))
+        .collect();
+    files.sort(); // filename sort = deterministic merge order (R10-01)
+    for file in files {
+        let content = std::fs::read_to_string(&file)?;
+        let plugin: PluginDef = serde_yaml::from_str(&content)
+            .map_err(|e| anyhow::anyhow!("{}: {}", file.display(), e))?;
+        if config.plugins.iter().any(|p| p.id == plugin.id) {
+            anyhow::bail!(
+                "duplicate plugin id '{}': defined both in {} and in an inline `plugins:` entry or another drop-in file",
+                plugin.id,
+                file.display()
+            );
+        }
+        config.plugins.push(plugin);
+    }
+    Ok(())
 }
 
 /// Zero is never a valid value for these fields — a hand-edited config that
@@ -457,5 +514,127 @@ mod tests {
         assert_eq!(config.max_connections, 4096);
         assert_eq!(config.watchdog_interval_secs, 60);
         assert_eq!(config.watchdog_timeout_secs, 15);
+    }
+
+    fn write_dropin(dir: &std::path::Path, filename: &str, id: &str) {
+        std::fs::create_dir_all(dir.join("plugins.d")).unwrap();
+        std::fs::write(
+            dir.join("plugins.d").join(filename),
+            format!("id: {id}\nbinary: /x/{id}\nrestart: on-failure\n"),
+        )
+        .unwrap();
+    }
+
+    // drop-in files merge into plugins in filename-sort order, after the
+    // inline `plugins:` list
+    #[test]
+    fn load_config_merges_dropin_files_in_filename_order() {
+        let dir = tempfile::tempdir().unwrap();
+        write_dropin(dir.path(), "b.yaml", "bravo");
+        write_dropin(dir.path(), "a.yaml", "alpha");
+        let path = write_minimal_config(&dir, "plugins:\n  - id: inline\n    binary: /x/inline\n");
+        let config = load_config(&path).unwrap();
+        let ids: Vec<_> = config.plugins.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, ["inline", "alpha", "bravo"]);
+    }
+
+    // default plugins_dir resolves to <config dir>/plugins.d
+    #[test]
+    fn load_config_default_plugins_dir_is_config_dir_plugins_d() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_minimal_config(&dir, "");
+        let config = load_config(&path).unwrap();
+        assert_eq!(config.plugins_dir.unwrap(), dir.path().join("plugins.d"));
+    }
+
+    // explicit plugins_dir config key wins over the default
+    #[test]
+    fn load_config_honors_explicit_plugins_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let custom = tempfile::tempdir().unwrap();
+        std::fs::write(
+            custom.path().join("x.yaml"),
+            "id: custom\nbinary: /x/custom\nrestart: on-failure\n",
+        )
+        .unwrap();
+        let path =
+            write_minimal_config(&dir, &format!("plugins_dir: {}\n", custom.path().display()));
+        let config = load_config(&path).unwrap();
+        assert_eq!(config.plugins_dir.unwrap(), custom.path());
+        assert_eq!(config.plugins.len(), 1);
+        assert_eq!(config.plugins[0].id, "custom");
+    }
+
+    // duplicate id between a drop-in and the inline list fails boot loudly
+    #[test]
+    fn load_config_duplicate_id_across_inline_and_dropin_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        write_dropin(dir.path(), "a.yaml", "dup");
+        let path = write_minimal_config(&dir, "plugins:\n  - id: dup\n    binary: /x/dup\n");
+        let err = load_config(&path).unwrap_err().to_string();
+        assert!(err.contains("duplicate plugin id 'dup'"), "got: {err}");
+    }
+
+    // duplicate id across two drop-in files fails boot loudly
+    #[test]
+    fn load_config_duplicate_id_across_dropin_files_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        write_dropin(dir.path(), "a.yaml", "dup");
+        write_dropin(dir.path(), "b.yaml", "dup");
+        let path = write_minimal_config(&dir, "");
+        let err = load_config(&path).unwrap_err().to_string();
+        assert!(err.contains("duplicate plugin id 'dup'"), "got: {err}");
+    }
+
+    // missing plugins.d dir is not an error — fresh installs have no drop-ins
+    #[test]
+    fn load_config_missing_plugins_dir_is_fine() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_minimal_config(&dir, "");
+        let config = load_config(&path).unwrap();
+        assert!(config.plugins.is_empty());
+    }
+
+    // all PluginDef fields survive the drop-in round-trip — a drop-in file is
+    // not a reduced schema, it is the full per-plugin config surface
+    #[test]
+    fn load_config_dropin_roundtrips_full_plugindef() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("plugins.d")).unwrap();
+        std::fs::write(
+            dir.path().join("plugins.d").join("full.yaml"),
+            "id: full\n\
+             binary: /x/full\n\
+             restart: always\n\
+             max_restarts: 9\n\
+             args: [--flag]\n\
+             env: [A=B, C=D]\n\
+             sandbox: true\n\
+             grace_seconds: 7\n\
+             max_procs: 128\n\
+             max_vmem_mb: 256\n\
+             permissions: [storage]\n\
+             max_fs_access: read-only\n\
+             readonly_paths: [/usr/share/foo]\n\
+             writable_paths: [/var/lib/veyron/foo]\n",
+        )
+        .unwrap();
+        let path = write_minimal_config(&dir, "");
+
+        let config = load_config(&path).unwrap();
+        let p = &config.plugins[0];
+        assert_eq!(p.id, "full");
+        assert_eq!(p.restart, "always");
+        assert_eq!(p.max_restarts, 9);
+        assert_eq!(p.args, ["--flag"]);
+        assert_eq!(p.env, ["A=B", "C=D"]);
+        assert!(p.sandbox);
+        assert_eq!(p.grace_seconds, 7);
+        assert_eq!(p.max_procs, Some(128));
+        assert_eq!(p.max_vmem_mb, Some(256));
+        assert_eq!(p.permissions, ["storage"]);
+        assert_eq!(p.max_fs_access.as_deref(), Some("read-only"));
+        assert_eq!(p.readonly_paths, [PathBuf::from("/usr/share/foo")]);
+        assert_eq!(p.writable_paths, [PathBuf::from("/var/lib/veyron/foo")]);
     }
 }
