@@ -12,7 +12,13 @@ pub fn generate_completions(shell: Shell) {
 
 pub async fn complete_slugs() -> anyhow::Result<()> {
     let cfg = crate::utils::config::Config::default();
-    let entries = fetch_registry(false, cfg.registry_cache_ttl_secs, &cfg.tmp_dir).await?;
+    let entries = fetch_registry(
+        false,
+        cfg.registry_cache_ttl_secs,
+        &cfg.tmp_dir,
+        cfg.marketplace_public_key.as_deref(),
+    )
+    .await?;
     for e in entries {
         println!("{}", e.slug);
     }

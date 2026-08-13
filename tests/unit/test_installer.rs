@@ -5,7 +5,7 @@ use std::path::Path;
 use semver::Version;
 use tempfile::tempdir;
 
-use veyron::marketplace::installer::{extract_zip, validate_manifest};
+use veyron::marketplace::installer::{extract_zip, install, validate_manifest};
 use veyron::marketplace::registry::{check_kernel_compatibility, RegistryEntry};
 use veyron::proto::veyron::PermissionType;
 
@@ -45,6 +45,7 @@ fn make_entry(slug: &str, min: &str, max: &str) -> RegistryEntry {
         min_kernel_version: min.into(),
         max_kernel_version: max.into(),
         signature: String::new(),
+        status: "stable".into(),
     }
 }
 
@@ -86,6 +87,34 @@ fn compat_above_max_rejected() {
     let msg = err.to_string();
     assert!(
         msg.contains("requires Veyron kernel <= 1.0.0") && msg.contains("you are running 2.0.0"),
+        "unexpected: {msg}"
+    );
+}
+
+// R10-03: revoked entry refused before any download happens
+#[tokio::test]
+async fn install_refuses_revoked_entry() {
+    let tmp = tempdir().unwrap();
+    let mut entry = make_entry("revoked-plugin", "0.1.0", "*");
+    entry.status = "revoked".into();
+    let err = match install(
+        &[entry],
+        "revoked-plugin",
+        tmp.path(),
+        1024 * 1024,
+        1024 * 1024,
+        10_000,
+        None,
+        "https://registry.example",
+    )
+    .await
+    {
+        Ok(_) => panic!("revoked install must fail"),
+        Err(e) => e,
+    };
+    let msg = err.to_string();
+    assert!(
+        msg.contains("revoked") && msg.contains("do not install"),
         "unexpected: {msg}"
     );
 }
