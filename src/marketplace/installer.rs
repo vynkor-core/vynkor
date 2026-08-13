@@ -3,6 +3,7 @@ use std::io;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use indicatif::{ProgressBar, ProgressStyle};
 use semver::Version;
@@ -12,6 +13,7 @@ use sha2::{Digest, Sha256};
 use crate::marketplace::registry::{
     check_kernel_compatibility, verify_entry_signature, RegistryEntry,
 };
+use crate::marketplace::state::{load_state, record_install, InstalledEntry};
 use crate::proto::veyron::PermissionType;
 use crate::utils::errors::VeyronError;
 
@@ -118,6 +120,7 @@ pub async fn install(
     max_extracted_bytes: u64,
     max_archive_entries: usize,
     marketplace_public_key: Option<&str>,
+    source_url: &str,
 ) -> Result<InstalledPlugin, VeyronError> {
     // Step 1 — Resolve metadata
     let entry = entries
@@ -129,14 +132,28 @@ pub async fn install(
             ))
         })?;
 
-    // Step 2 — Kernel version compatibility check
     let kernel_ver = Version::parse(env!("CARGO_PKG_VERSION"))
         .map_err(|e| VeyronError::Internal(format!("parse kernel version: {e}")))?;
 
+    // Step 2 — Kernel version compatibility check
     check_kernel_compatibility(entry, &kernel_ver)
         .map_err(|e| VeyronError::Incompatible(format!("{e}. Upgrade Veyron first.")))?;
 
     let plugin_base = plugin_dir(tmp_dir);
+
+    // R10-02 — same version already installed (state + dir present): warn and
+    // skip the whole pipeline instead of re-downloading/re-extracting.
+    let dest = plugin_base.join(&entry.slug);
+    if let Some(already) = skip_reinstall(tmp_dir, &entry.slug, &entry.version, &dest) {
+        println!(
+            "✓ '{slug}' v{version} is already installed at {dest}/ — nothing to re-install.",
+            slug = entry.slug,
+            version = entry.version,
+            dest = dest.display(),
+        );
+        return Ok(already);
+    }
+
     let stage_dir = tmp_install_dir(&plugin_base, &entry.slug);
     let _ = fs::remove_dir_all(&stage_dir);
     fs::create_dir_all(&stage_dir).map_err(VeyronError::Io)?;
@@ -193,14 +210,12 @@ pub async fn install(
     }
 
     // Step 6 — Atomic move to plugin directory
-    let base = plugin_base;
-    if let Err(e) = fs::create_dir_all(&base) {
+    if let Err(e) = fs::create_dir_all(&plugin_base) {
         let _ = fs::remove_dir_all(&stage_dir);
         return Err(VeyronError::Io(e));
     }
 
-    let dest = base.join(&entry.slug);
-    let bak = base.join(format!("{}.bak", entry.slug));
+    let bak = plugin_base.join(format!("{}.bak", entry.slug));
     let had_existing = dest.exists();
 
     if had_existing {
@@ -240,6 +255,22 @@ pub async fn install(
     }
     let _ = fs::remove_dir_all(&stage_dir);
 
+    // R10-02 — record in the explicit state store; a plugin on disk but
+    // untracked is exactly the drift this store exists to prevent.
+    record_install(
+        tmp_dir,
+        InstalledEntry {
+            slug: entry.slug.clone(),
+            version: manifest.version.clone(),
+            sha256: actual_hash,
+            installed_at: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+            source_url: source_url.to_string(),
+        },
+    )?;
+
     // Step 8 — Success output
     let dest_str = dest.display();
     println!(
@@ -249,6 +280,32 @@ pub async fn install(
 
     Ok(InstalledPlugin {
         slug: entry.slug.clone(),
+        plugin_id: manifest.plugin_id,
+        version: manifest.version,
+        binary_path: dest.join(manifest.binary),
+    })
+}
+
+/// R10-02 — skip the whole install pipeline when the state store says `slug`
+/// is already installed at `version` *and* the install dir still exists. A
+/// missing dir (half-deleted install) falls through so `install` repairs it.
+/// Rebuilds `InstalledPlugin` from the live manifest so the caller can still
+/// append the (idempotent) config example.
+pub fn skip_reinstall(
+    tmp_dir: &Path,
+    slug: &str,
+    version: &str,
+    dest: &Path,
+) -> Option<InstalledPlugin> {
+    let state = load_state(tmp_dir);
+    let tracked = state.get(slug)?;
+    if tracked.version != version || !dest.exists() {
+        return None;
+    }
+    let kernel_ver = Version::parse(env!("CARGO_PKG_VERSION")).ok()?;
+    let manifest = validate_manifest(&dest.join("plugin.json"), &kernel_ver).ok()?;
+    Some(InstalledPlugin {
+        slug: slug.to_string(),
         plugin_id: manifest.plugin_id,
         version: manifest.version,
         binary_path: dest.join(manifest.binary),
@@ -408,25 +465,36 @@ pub fn extract_zip(
     Ok(())
 }
 
-/// Remove an installed plugin's directory from `plugin_dir()`.
+/// Remove an installed plugin's directory from `plugin_dir()` and drop its
+/// record from the state store.
 ///
 /// This only deletes files on disk — it does not stop a running instance or
 /// edit `config.yaml`. Callers should stop the plugin first if the kernel is
 /// running it.
 pub fn uninstall(slug: &str, tmp_dir: &Path) -> Result<(), VeyronError> {
     validate_slug(slug)?;
+    let tracked = crate::marketplace::state::remove_record(tmp_dir, slug)?;
     let dest = plugin_dir(tmp_dir).join(slug);
 
-    if !dest.exists() {
-        return Err(VeyronError::PluginNotFound(format!(
-            "'{slug}' is not installed at {}",
-            dest.display()
-        )));
+    if dest.exists() {
+        fs::remove_dir_all(&dest).map_err(VeyronError::Io)?;
+        println!("✓ Removed {slug} from {}/", dest.display());
+        return Ok(());
     }
 
-    fs::remove_dir_all(&dest).map_err(VeyronError::Io)?;
-    println!("✓ Removed {slug} from {}/", dest.display());
-    Ok(())
+    // dir already gone — the state record is what makes this a success (R10-02)
+    if tracked.is_some() {
+        println!(
+            "⚠ '{slug}' dir was already missing at {} — removed it from the install state.",
+            dest.display()
+        );
+        return Ok(());
+    }
+
+    Err(VeyronError::PluginNotFound(format!(
+        "'{slug}' is not installed at {}",
+        dest.display()
+    )))
 }
 
 /// Reject slugs that could escape `plugin_dir`/`plugins_dir` via path

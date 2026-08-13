@@ -499,7 +499,7 @@ explicit state store. Independent of Phase 9 — can land before or after it.
     write/remove/uninstall). Live: boot loads all five `plugins.d/` plugins
     and they register.
 
-- [ ] R10-02 — **Explicit installed-plugin state store:** replace
+- [x] R10-02 — **Explicit installed-plugin state store:** replace
       filesystem-sniffing `~/.local/lib/veyron/plugins/<slug>` with
       `~/.local/share/veyron/installed.json` recording slug, version, sha256,
       install time, source registry URL. Enables `vyn plugin list --installed`
@@ -511,6 +511,20 @@ explicit state store. Independent of Phase 9 — can land before or after it.
   - Acceptance: `vyn plugin list --installed` shows versions offline;
     reinstalling the same version warns instead of re-extracting; remove
     tolerates a missing dir.
+  - Done: `marketplace::state` — `installed.json` under the XDG data dir
+    (`VEYRON_STATE_DIR`/`XDG_DATA_HOME`/`$HOME/.local/share/veyron`, mirroring
+    `plugin_dir()`'s env-override pattern), written atomically (temp + rename),
+    corrupt file tolerated (logs + starts empty). `install` records
+    slug/version/archive-sha256/install-time/registry-source after a success
+    and skips a same-version reinstall whose dir still exists (missing dir
+    falls through to repair); `uninstall` drops the state record and succeeds
+    when the dir is already gone. `vyn plugin list --installed` prints the
+    offline table (slug/version/installed-at/source). Covered by
+    `tests/unit/test_state.rs` (15 tests: roundtrip, upsert, remove, missing-
+    dir tolerance, reinstall-skip matrix, timestamp formatting). Live-verified
+    against the real registry: install → state → kernel spawns the
+    marketplace-installed plugin → remove (dir + state) → remove with dir
+    deleted by hand.
 
 - [ ] R10-03 — **`registry.json` cache rework:** the TTL cache at
       `~/.cache/veyron/registry.json` is a raw mirror of the remote registry
@@ -642,7 +656,7 @@ surfaces cover every planned plugin).
 | R9-05 | `/proc` `hidepid=2` interim visibility hardening | R8 + N ship gate |
 | R9-06 | docs: fix stale `AUDIT.md` pointer, record exact rlimit semantics | none |
 | R10-01 | plugin settings out of `config.yaml` → `plugins.d/` drop-in dir — shipped: merge + `plugins_dir` key, write/remove drop-ins, slug/symlink hardening, inline list deprecated | R8 + N ship gate |
-| R10-02 | installed-plugin state store (`installed.json`) | none |
+| R10-02 | installed-plugin state store (`installed.json`) — shipped: XDG data-dir ledger, atomic writes, reinstall-skip, missing-dir-tolerant remove, offline `list --installed` | none |
 | R10-03 | `registry.json` cache rework (schema version, revocation policy) | R10-02 |
 | R10-04 | `vyn plugin enable\|disable` toggle | R10-01 |
 | P11-01 | protocol v1.4 — `PermissionType` additions 15–19 (`SECRETS`/`CLIPBOARD`/`LAUNCH`/`SCREEN`/`HOME`), header bump, wire regeneration | `secrets` plugin (veyron-plugins) needs it |
