@@ -3,13 +3,19 @@ use clap::Subcommand;
 use crate::marketplace::installer::{
     install, remove_plugin_config, uninstall, write_plugin_config, InstalledPlugin,
 };
-use crate::marketplace::registry::{fetch_registry, fetch_registry_with_url, RegistryEntry};
+use crate::marketplace::registry::{
+    fetch_registry, fetch_registry_with_url, RegistryEntry, DEFAULT_REGISTRY_URL,
+};
 
 #[derive(Subcommand)]
 pub enum PluginCmd {
     List {
         #[arg(long)]
         refresh: bool,
+        /// List what's installed from the local state store — works offline,
+        /// no registry fetch (R10-02).
+        #[arg(long)]
+        installed: bool,
     },
     Search {
         query: String,
@@ -72,9 +78,13 @@ pub async fn handle(
     let base = base_url(port, tls);
 
     match cmd {
-        PluginCmd::List { refresh } => {
-            let entries = fetch(refresh).await?;
-            print_table(&entries);
+        PluginCmd::List { refresh, installed } => {
+            if installed {
+                print_installed(tmp_dir);
+            } else {
+                let entries = fetch(refresh).await?;
+                print_table(&entries);
+            }
         }
         PluginCmd::Search { query, refresh } => {
             let entries = fetch(refresh).await?;
@@ -107,6 +117,7 @@ pub async fn handle(
         }
         PluginCmd::Install { target, refresh } => {
             let entries = fetch(refresh).await?;
+            let source_url = registry_url.unwrap_or(DEFAULT_REGISTRY_URL);
             let installed: InstalledPlugin = install(
                 &entries,
                 &target,
@@ -115,6 +126,7 @@ pub async fn handle(
                 max_extracted_bytes,
                 max_archive_entries,
                 marketplace_public_key,
+                source_url,
             )
             .await?;
             if write_plugin_config(plugins_dir, &installed)? {
@@ -166,6 +178,59 @@ pub async fn handle(
 fn base_url(port: u16, tls: bool) -> String {
     let scheme = if tls { "https" } else { "http" };
     format!("{scheme}://127.0.0.1:{port}")
+}
+
+/// Offline installed-plugin listing straight from the state store — no
+/// registry fetch (R10-02).
+fn print_installed(tmp_dir: &std::path::Path) {
+    let state = crate::marketplace::state::load_state(tmp_dir);
+    if state.entries.is_empty() {
+        println!("No plugins installed. Run 'vyn plugin install <slug>' to install one.");
+        return;
+    }
+
+    const HEADERS: [&str; 4] = ["SLUG", "VERSION", "INSTALLED_AT", "SOURCE"];
+    let mut widths: [usize; 4] = HEADERS.map(str::len);
+    let rows: Vec<[String; 4]> = state
+        .entries
+        .iter()
+        .map(|e| {
+            [
+                e.slug.clone(),
+                e.version.clone(),
+                crate::marketplace::state::format_ts(e.installed_at),
+                e.source_url.clone(),
+            ]
+        })
+        .collect();
+    for row in &rows {
+        for (i, cell) in row.iter().enumerate() {
+            widths[i] = widths[i].max(cell.len());
+        }
+    }
+
+    println!(
+        "{:<w0$}  {:<w1$}  {:<w2$}  {}",
+        HEADERS[0],
+        HEADERS[1],
+        HEADERS[2],
+        HEADERS[3],
+        w0 = widths[0],
+        w1 = widths[1],
+        w2 = widths[2],
+    );
+    for row in &rows {
+        println!(
+            "{:<w0$}  {:<w1$}  {:<w2$}  {}",
+            row[0],
+            row[1],
+            row[2],
+            row[3],
+            w0 = widths[0],
+            w1 = widths[1],
+            w2 = widths[2],
+        );
+    }
 }
 
 fn print_table(entries: &[RegistryEntry]) {

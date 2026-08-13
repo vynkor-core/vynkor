@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::utils::errors::VeyronError;
 
-const REGISTRY_URL: &str =
+/// The official registry URL. Public so the CLI can record it as the install
+/// source in the state store when no `registry_url:` override is configured.
+pub const DEFAULT_REGISTRY_URL: &str =
     "https://raw.githubusercontent.com/veyron-core/veyron-plugins/main/registry.json";
 
 /// Ed25519 public key (hex, 32 bytes) pinned at compile time. `sha256` alone
@@ -190,7 +192,7 @@ pub async fn fetch_registry(
     cache_ttl_secs: u64,
     tmp_dir: &std::path::Path,
 ) -> Result<Vec<RegistryEntry>, VeyronError> {
-    fetch_registry_with_url(REGISTRY_URL, refresh, cache_ttl_secs, tmp_dir).await
+    fetch_registry_with_url(DEFAULT_REGISTRY_URL, refresh, cache_ttl_secs, tmp_dir).await
 }
 
 /// Like `fetch_registry` but accepts a custom URL to support private registry overrides
