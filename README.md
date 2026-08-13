@@ -241,6 +241,22 @@ Current posture: **pre-production**. Kernel core (framing, MAC, fragmentation, s
 - **Audit:** `AUDIT.md`
 - **Roadmap:** `ROADMAP.md`
 
+### Consuming unpublished veyron crates
+
+`veyron-wire` and `veyron-sdk` (Rust) are normally pulled from crates.io.
+Between releases, the new versions may not be published yet — `Cargo.toml`
+then carries a `[patch.crates-io]` override resolving them from git. The
+version requirement stays in place; the patch only swaps the source:
+
+```toml
+[patch.crates-io]
+veyron-wire = { git = "https://github.com/veyron-core/veyron-wire", branch = "<branch>" }
+veyron-sdk   = { git = "https://github.com/veyron-core/veyron-sdk-rust", branch = "<branch>" }
+```
+
+Drop the section once the pinned versions are on crates.io. Branch pins
+must be replaced with `main`/tags before the branch is deleted.
+
 ---
 
 ## License

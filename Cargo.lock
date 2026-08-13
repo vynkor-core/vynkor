@@ -3352,9 +3352,8 @@ dependencies = [
 
 [[package]]
 name = "veyron-sdk"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "979d8dee4454c3e5c13644acdd08b8c235465a00966cb06b79d2c699295d01ef"
+version = "0.1.3"
+source = "git+https://github.com/veyron-core/veyron-sdk-rust?branch=feat%2Fwire-housekeeping-v1.4#07a784cfb43dcd55a0e3813a4af475f7da2bdf67"
 dependencies = [
  "crc32fast",
  "prost 0.13.5",
@@ -3364,9 +3363,8 @@ dependencies = [
 
 [[package]]
 name = "veyron-wire"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "191d7537c969f2e9f3941fb1b2500e21a6dc77b7561d80b42a65ab9b5a6b5353"
+version = "0.2.1"
+source = "git+https://github.com/veyron-core/veyron-wire?branch=feat%2Fwire-housekeeping-v1.4#899bf8d9f312577d53bdac07c96f53320896b7f1"
 dependencies = [
  "crc32fast",
  "hkdf",
