@@ -3343,6 +3343,7 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "tracing-test",
+ "url",
  "veyron-sdk",
  "veyron-wire",
  "zip",
