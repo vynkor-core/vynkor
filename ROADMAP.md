@@ -526,7 +526,7 @@ explicit state store. Independent of Phase 9 — can land before or after it.
     marketplace-installed plugin → remove (dir + state) → remove with dir
     deleted by hand.
 
-- [ ] R10-03 — **`registry.json` cache rework:** the TTL cache at
+- [x] R10-03 — **`registry.json` cache rework:** the TTL cache at
       `~/.cache/veyron/registry.json` is a raw mirror of the remote registry
       document. Move it under the marketplace state dir, version the schema,
       persist per-plugin `installed_version`/`last_check`, and make
@@ -535,6 +535,38 @@ explicit state store. Independent of Phase 9 — can land before or after it.
   - Files: `src/marketplace/registry.rs`, `src/marketplace/state.rs` (new).
   - Acceptance: cache file carries a schema version; revoked-entry handling
     is explicit and covered by tests.
+  - Done: the cache moved to `registry-cache.json` in the marketplace state
+    dir (`state_dir()`), wrapped in a versioned
+    `RegistryCache{schema_version, last_check, meta, entries, plugins}` with
+    atomic temp+rename writes; a foreign/missing `schema_version` or corrupt
+    file reads as empty. Registry v2 readiness: the parser accepts both the
+    flat array and the v2 map form (`{meta, revoked, "<slug>": {versions}}`,
+    see veyron-plugins ROADMAP "Infrastructure Evolution") via an untagged
+    shape, flattening `versions` into one entry per version and folding the
+    root `revoked` list into each entry's `status` — so only
+    `RegistryEntry::is_revoked()` exists downstream. **Stale policy
+    (decided):** the cache only ever persists entries whose maintainer
+    signature verified at write time (`verify_entries`, pinned or
+    `marketplace_public_key` override) — a stale fallback therefore never
+    serves unverified content; an all-unverified refetch (compromised
+    channel / wrong key) keeps the previous verified snapshot instead of
+    clobbering it. **Revocation:** `status: revoked` (flat form) or the v2
+    root `revoked: ["slug", "slug@ver"]` list; revoked entries stay cached —
+    revocation outlives the TTL — and `install` refuses them with a clear
+    error; `vyn plugin list` marks them `[revoked]`. Per-plugin
+    `installed_version`/`last_check` are snapshotted from `installed.json`
+    at write for offline upgrade detection. The kernel-side change is
+    independent of when veyron-plugins ships the v2 document — absent
+    `status`/`meta` fields read as `stable`/`None`.
+  - Covered by `src/marketplace/registry.rs` unit tests (versioned
+    round-trip, v2 parse + revoked-list folding, unverified-not-cached,
+    keep-previous-on-all-unverified, revocation-outlives-TTL,
+    per-plugin snapshot, foreign schema = empty) and
+    `tests/unit/test_installer.rs`
+    (`install_refuses_revoked_entry`). Live-verified against the real
+    registry: fetch → cache with `schema_version: 1` in the state dir, 4/4
+    entries verified; offline stale fallback with a dead network still
+    lists.
 
 - [ ] R10-04 — **`vyn plugin enable|disable <slug>`:** toggling a per-plugin
       file (rename/comment-out) replaces hand-editing `config.yaml` when an
@@ -657,7 +689,7 @@ surfaces cover every planned plugin).
 | R9-06 | docs: fix stale `AUDIT.md` pointer, record exact rlimit semantics | none |
 | R10-01 | plugin settings out of `config.yaml` → `plugins.d/` drop-in dir — shipped: merge + `plugins_dir` key, write/remove drop-ins, slug/symlink hardening, inline list deprecated | R8 + N ship gate |
 | R10-02 | installed-plugin state store (`installed.json`) — shipped: XDG data-dir ledger, atomic writes, reinstall-skip, missing-dir-tolerant remove, offline `list --installed` | none |
-| R10-03 | `registry.json` cache rework (schema version, revocation policy) | R10-02 |
+| R10-03 | `registry.json` cache rework — shipped: versioned `registry-cache.json` in the state dir, verified-entries-only stale policy, `revoked` status blocks install, registry v2 map-form parsing | R10-02 |
 | R10-04 | `vyn plugin enable\|disable` toggle | R10-01 |
 | P11-01 | protocol v1.4 — `PermissionType` additions 15–19 (`SECRETS`/`CLIPBOARD`/`LAUNCH`/`SCREEN`/`HOME`), header bump, wire regeneration | `secrets` plugin (veyron-plugins) needs it |
 | P11-02 | proto-copy sync — 6 files / 4 repos; fixes standalone SDK v1.2 drift, adds drift guard | P11-01 |
