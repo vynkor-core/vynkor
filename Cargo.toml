@@ -97,11 +97,3 @@ mockito = "1"
 tempfile = "3"
 tracing-test = "0.2"
 temp-env = "0.3.6"
-
-# veyron-wire 0.2.2 (status-enum renumber, wire protocol v1.5 — M9) and
-# veyron-sdk 0.1.3 (wire req 0.2.2) are not yet published to crates.io.
-# Resolve them from git until the crates release; drop this section once
-# published. See README.md → "Consuming unpublished veyron crates".
-[patch.crates-io]
-veyron-wire = { git = "https://github.com/veyron-core/veyron-wire", branch = "feat/wire-v1.5-status-renumber" }
-veyron-sdk = { git = "https://github.com/veyron-core/veyron-sdk-rust", branch = "feat/wire-housekeeping-v1.4" }
