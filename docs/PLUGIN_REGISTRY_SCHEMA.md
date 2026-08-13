@@ -145,7 +145,21 @@ dependencies); when absent the plugin is spawned with no manifest-derived checks
   },
   "binary": "stt-whisper",
   "events": ["system.ready"],
-  "actions": ["transcribe_audio"],
+  "actions": [
+    {
+      "name": "transcribe_audio",
+      "permission": "audio",
+      "input": { "type": "object", "properties": { "format": { "type": "string" } } },
+      "output": { "type": "object", "properties": { "text": { "type": "string" } } }
+    }
+  ],
+  "config_schema": {
+    "type": "object",
+    "properties": {
+      "WHISPER_MODEL": { "type": "string", "default": "base" }
+    }
+  },
+  "files": ["stt-whisper", "plugin.json", "models/ggml-tiny.bin"],
   "requires": ["audio-router"]
 }
 ```
@@ -162,8 +176,21 @@ dependencies); when absent the plugin is spawned with no manifest-derived checks
 | `kernel_compatibility_range.max` | string | Yes | Semver upper bound (inclusive) or `"*"`. |
 | `binary` | string | Yes | Relative path to the executable within the plugin directory. |
 | `events` | string[] | No | Event types the plugin subscribes to (auto-subscribed at load). Empty array if none. |
-| `actions` | string[] | No | Action identifiers the plugin exposes. Empty array if none. |
+| `actions` | array of objects | No | Action identifiers the plugin exposes. **Manifest v2**: each element is an object `{ "name", "permission"?, "input"?, "output"? }` (see below). The **legacy string form** (`["transcribe_audio"]`) is still accepted by the kernel. Empty array if none. |
+| `actions[].name` | string | Yes | Action identifier. Must be unique within the manifest. |
+| `actions[].permission` | string | No | Lowercase permission name (`storage`) or proto name (`PERMISSION_STORAGE`). The permission a **caller** must hold to invoke the action (data-driven anti-laundering, T-19: the provider's own grant authorizes it to *perform* the action, not arbitrary callers to *invoke* it). Absent/empty = unrestricted (declared action is authorization enough). |
+| `actions[].input` | object | No | JSON Schema (draft-07 subset) describing the action's `params_json` input. Informational — the kernel does not validate it. |
+| `actions[].output` | object | No | JSON Schema (draft-07 subset) describing the action's `data_json` output. Informational — the kernel does not validate it. |
+| `config_schema` | object | No | JSON Schema (draft-07 subset) describing the plugin's configuration; properties keyed by env-var name. The kernel does **not** validate it (dumb core). |
+| `files` | string[] | No | Explicit list of archive files extracted into the plugin dir (root-relative names as stored in the archive). Doubles as the installer **extraction allowlist** — when present and non-empty, only these entries are extracted, and an allowlisted name missing from the archive aborts the install. Empty/absent = legacy extract-everything. |
 | `requires` | string[] | No | Plugin IDs that must be declared in config and are loaded first. Missing deps or dependency cycles refuse the plugin. |
+
+Delivery data (`archive_url`, `sha256`, `signature`) lives in the **registry**, never in the
+manifest — the manifest describes what the plugin *is*, the registry describes how to *get* it.
+
+> **Manifest v2 note.** `actions` objects, `config_schema`, and `files` are Manifest v2 fields.
+> The kernel parses them leniently and keeps accepting the legacy string-form `actions` array and
+> manifests without `files` (which extract the whole archive, as before).
 
 ---
 
@@ -210,6 +237,17 @@ Unknown permission:
 Refusing to load plugin '<plugin_id>': unknown permission '<perm>'
 ```
 
+### Step 3b — Per-action permission validation (Manifest v2)
+
+Every `actions[].permission` (v2 object-form actions) must also resolve to a known
+`PermissionType` (both the lowercase and `PERMISSION_`-prefixed proto forms are accepted).
+This is **fail-closed**: an unknown per-action permission refuses the whole plugin, so a typo
+can't silently downgrade the action to unrestricted:
+
+```
+Refusing to load plugin '<plugin_id>': unknown action permission '<perm>' for action '<action>'
+```
+
 ### Step 4 — Config-granted permission cross-check
 
 Each declared permission must be granted for this plugin in `config.yaml`. Permission declared
@@ -218,6 +256,15 @@ but not granted:
 ```
 Plugin '<plugin_id>' requests permission '<perm>' which is not granted in config
 ```
+
+### Action-routing authorization (data-driven anti-laundering)
+
+At action-routing time, the kernel resolves the permission a caller must hold to invoke an
+action from the **provider-declared per-action permission** (`actions[].permission`, Manifest v2),
+falling back to the built-in map (`required_permission_for_action`) for legacy string-form
+manifests and plugins without a `plugin.json`. When a requirement exists, **both** the provider
+and the requester must hold the permission — checking the provider alone would let an
+unprivileged plugin launder the action through a permitted provider (T-19).
 
 ---
 
