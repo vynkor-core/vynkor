@@ -471,7 +471,7 @@ pub fn extract_zip(
     let mut total_extracted: u64 = 0;
 
     // Allowlisted names not yet seen in the archive; empty when no allowlist.
-    let mut missing: HashSet<String> = allowlist.map(|a| a.clone()).unwrap_or_default();
+    let mut missing: HashSet<String> = allowlist.cloned().unwrap_or_default();
 
     for i in 0..zip.len() {
         let mut entry = zip
