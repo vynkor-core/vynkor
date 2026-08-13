@@ -21,7 +21,7 @@ name = "integration"
 path = "tests/integration/mod.rs"
 
 [dependencies]
-veyron-wire = "0.2.0"
+veyron-wire = "0.2.1"
 tokio = { version = "1", features = ["full"] }
 
 axum = { version = "0.8", features = ["ws"] }
@@ -89,7 +89,7 @@ otel = ["tracing-opentelemetry", "opentelemetry", "opentelemetry_sdk", "opentele
 tokio = { version = "1", features = ["test-util"] }
 clap_complete = "4"
 crc32fast = "1"
-veyron-sdk = "0.1.2"
+veyron-sdk = "0.1.3"
 tower = "0.5"
 tokio-tungstenite = "0.24"
 futures-util = "0.3"
@@ -97,3 +97,11 @@ mockito = "1"
 tempfile = "3"
 tracing-test = "0.2"
 temp-env = "0.3.6"
+
+# veyron-wire 0.2.1 and veyron-sdk 0.1.3 are not yet published to crates.io
+# (wire protocol v1.4 — new PermissionType values 15-19). Resolve them from
+# git until the crates release; drop this section once published. See
+# README.md → "Consuming unpublished veyron crates".
+[patch.crates-io]
+veyron-wire = { git = "https://github.com/veyron-core/veyron-wire", branch = "feat/wire-housekeeping-v1.4" }
+veyron-sdk = { git = "https://github.com/veyron-core/veyron-sdk-rust", branch = "feat/wire-housekeeping-v1.4" }

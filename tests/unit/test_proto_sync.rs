@@ -53,7 +53,17 @@ fn generated_python_binding_is_not_stale() {
 
     // PERMISSION_STORAGE=14 and PERMISSION_EVENT_PUBLISH=13 must be present in
     // the enum; the proto stores them verbatim in the serialized descriptor.
-    for marker in ["PERMISSION_EVENT_PUBLISH", "PERMISSION_STORAGE"] {
+    for marker in [
+        "PERMISSION_EVENT_PUBLISH",
+        "PERMISSION_STORAGE",
+        // v1.4 additions — the five new PermissionType values for the planned
+        // secrets/clipboard/launcher/screenshot/home plugins.
+        "PERMISSION_SECRETS",
+        "PERMISSION_CLIPBOARD",
+        "PERMISSION_LAUNCH",
+        "PERMISSION_SCREEN",
+        "PERMISSION_HOME",
+    ] {
         assert!(
             source.contains(marker),
             "generated {pb2_path:?} is missing {marker}; run scripts/gen_proto_python.py"
