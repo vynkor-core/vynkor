@@ -623,10 +623,10 @@ surfaces cover every planned plugin).
     (`899bf8d`), regen'ed prost types consumed by the kernel
     (`0b98dac`, merged via PR #13 `31f2cd4`); R8-02's drift test stays
     green. Note: `veyron-wire` published as **0.2.1** (not 0.3.0). The
-    `[patch.crates-io]` override is still in place: it now pins wire
-    **0.2.2** (`feat/wire-v1.5-status-renumber`, the P11-03 renumber below)
-    and `veyron-sdk 0.1.3` (not yet on crates.io — 0.1.2 is). Both entries
-    drop once the pinned versions publish.
+    `[patch.crates-io]` override pinned wire **0.2.2**
+    (`feat/wire-v1.5-status-renumber`, the P11-03 renumber below) and
+    `veyron-sdk 0.1.3` until both published (2026-08-13); the override was
+    then dropped — see P11-03.
 
 - [x] P11-02 — **Sync all six proto copies (fixes pre-existing v1.2
   drift):** the three in-repo copies (`wire/proto`,
@@ -740,13 +740,12 @@ surfaces cover every planned plugin).
   (OK/ERROR → 1/2). Header + `PROTOCOL_VERSION` + `Cargo.toml` moved in one
   commit; the python/cpp proto copies were re-synced byte-identical and
   `veyron_protocol_pb2.py` regenerated (deliberate — R8-05 asserts symbol
-  *names*, not values). **Deviation from the plan:** `veyron-wire` stays at
-  **0.2.2** (not 0.3.0) and the crates.io publish is deferred until the PRs
-  merge — the kernel consumes the branch via the `[patch.crates-io]`
-  override; `veyron-sdk-rust` needed no bump (its `0.2.1` req is satisfied by
-  the 0.2.2 patch). No source edits anywhere — every status construction and
-  comparison site uses named variants (re-grepped across kernel + all three
-  SDKs; the C++ `echo_plugin` was rebuilt against the v1.5 bindings). R8-02 /
+  *names*, not values). **Deviation from the plan:** `veyron-wire` stayed at
+  **0.2.2** (not 0.3.0); `veyron-sdk-rust` needed no bump (its `0.2.1` req
+  was satisfied by the 0.2.2 patch). No source edits anywhere — every status
+  construction and comparison site uses named variants (re-grepped across
+  kernel + all three SDKs; the C++ `echo_plugin` was rebuilt against the
+  v1.5 bindings). R8-02 /
   R8-05 and the T-16 interim lint stay green; full suite passes (91 unit +
   84 integration + 260 api), clippy `-D warnings` and `fmt --check` clean.
 
@@ -763,10 +762,10 @@ surfaces cover every planned plugin).
   side is unblocked; P11-03 (M9) shipped on v1.5 and does not gate plugins.
 - **veyron-wire** (`veyron-wire/`): 0.2.0 publish (R8-07) shipped; the
   protocol v1.4 bump (P11-01) shipped as **0.2.1** on crates.io; the v1.5
-  status-enum renumber (P11-03) is **0.2.2** on
-  `feat/wire-v1.5-status-renumber`, consumed by the kernel via a
-  `[patch.crates-io]` override — the wire patch entry drops once 0.2.2
-  publishes, the `veyron-sdk 0.1.3` entry must stay until 0.1.3 publishes.
+  status-enum renumber (P11-03) shipped as **0.2.2** on crates.io
+  (2026-08-13). `veyron-sdk` **0.1.3** (wire req 0.2.2) published the same
+  day; the kernel's `[patch.crates-io]` override was dropped — everything
+  resolves from the registry.
 - **veyron-sdk-python / veyron-sdk-cpp** (standalone repos): proto copies
   synced to v1.4 (P11-02) and guarded — the R8-05 drift test reads the
   sibling-repo paths directly and now also checks the generated Python
@@ -815,7 +814,7 @@ surfaces cover every planned plugin).
 | R10-02 | installed-plugin state store (`installed.json`) — shipped: XDG data-dir ledger, atomic writes, reinstall-skip, missing-dir-tolerant remove, offline `list --installed` | none |
 | R10-03 | `registry.json` cache rework — shipped: versioned `registry-cache.json` in the state dir, verified-entries-only stale policy, `revoked` status blocks install, registry v2 map-form parsing | R10-02 |
 | R10-04 | `vyn plugin enable\|disable` toggle — shipped: drop-in rename to `<slug>.yaml.disabled` (skipped by the `*.yaml` glob at boot + SIGHUP), content preserved on re-enable, slug/path hardening, inline-`plugins:` note | R10-01 |
-| P11-01 | protocol v1.4 — `PermissionType` additions 15–19 (`SECRETS`/`CLIPBOARD`/`LAUNCH`/`SCREEN`/`HOME`), header bump, wire regeneration — shipped (`899bf8d` + `31f2cd4`); `veyron-wire` published as 0.2.1; `[patch.crates-io]` still needed for `veyron-sdk 0.1.3` (not yet on crates.io) | `secrets` plugin (veyron-plugins) needs it |
+| P11-01 | protocol v1.4 — `PermissionType` additions 15–19 (`SECRETS`/`CLIPBOARD`/`LAUNCH`/`SCREEN`/`HOME`), header bump, wire regeneration — shipped (`899bf8d` + `31f2cd4`); `veyron-wire` published as 0.2.1; `veyron-sdk 0.1.3` published 2026-08-13, `[patch.crates-io]` dropped | `secrets` plugin (veyron-plugins) needs it |
 | P11-02 | proto-copy sync — all sibling copies byte-identical at v1.4 + Python-binding staleness check — shipped | P11-01 |
 | P11-03 | M9 zero-value enum renumber — SHIPPED on protocol v1.5 (2026-08-13): `*_UNKNOWN = 0` for ActionStatus/CommandStatus, header + `PROTOCOL_VERSION` 1.5, `veyron-wire` 0.2.2 consumed via patch branch (crates.io publish deferred), python/cpp copies synced + pb2 regenerated, no source edits anywhere | v1.5 wire bump |
 
@@ -834,9 +833,9 @@ independent of Phase 9 — it can land before or after hard isolation.
 Phase 11 shipped (2026-08-13): P11-01 (protocol v1.4 permission values 15–19,
 `veyron-wire` 0.2.1 published) and P11-02 (proto-copy sync + drift guard) are
 done; P11-03 (M9 zero-value enum renumber) shipped on protocol **v1.5** —
-`veyron-wire` 0.2.2 consumed via the `[patch.crates-io]` override on
-`feat/wire-v1.5-status-renumber` (crates.io publish deferred until the PRs
-merge; the `veyron-sdk 0.1.3` patch entry stays until 0.1.3 publishes).
+`veyron-wire` **0.2.2** and `veyron-sdk` **0.1.3** published to crates.io the
+same day; the `[patch.crates-io]` override in `Cargo.toml` was dropped and the
+workspace resolves both from the registry.
 
 ## Definition of Done
 
