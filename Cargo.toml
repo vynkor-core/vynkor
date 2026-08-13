@@ -21,7 +21,7 @@ name = "integration"
 path = "tests/integration/mod.rs"
 
 [dependencies]
-veyron-wire = "0.2.1"
+veyron-wire = "0.2.2"
 tokio = { version = "1", features = ["full"] }
 
 axum = { version = "0.8", features = ["ws"] }
@@ -98,10 +98,10 @@ tempfile = "3"
 tracing-test = "0.2"
 temp-env = "0.3.6"
 
-# veyron-wire 0.2.1 and veyron-sdk 0.1.3 are not yet published to crates.io
-# (wire protocol v1.4 — new PermissionType values 15-19). Resolve them from
-# git until the crates release; drop this section once published. See
-# README.md → "Consuming unpublished veyron crates".
+# veyron-wire 0.2.2 (status-enum renumber, wire protocol v1.5 — M9) and
+# veyron-sdk 0.1.3 (wire req 0.2.2) are not yet published to crates.io.
+# Resolve them from git until the crates release; drop this section once
+# published. See README.md → "Consuming unpublished veyron crates".
 [patch.crates-io]
-veyron-wire = { git = "https://github.com/veyron-core/veyron-wire", branch = "feat/wire-housekeeping-v1.4" }
+veyron-wire = { git = "https://github.com/veyron-core/veyron-wire", branch = "feat/wire-v1.5-status-renumber" }
 veyron-sdk = { git = "https://github.com/veyron-core/veyron-sdk-rust", branch = "feat/wire-housekeeping-v1.4" }

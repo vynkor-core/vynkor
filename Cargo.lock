@@ -3363,8 +3363,8 @@ dependencies = [
 
 [[package]]
 name = "veyron-wire"
-version = "0.2.1"
-source = "git+https://github.com/veyron-core/veyron-wire?branch=feat%2Fwire-housekeeping-v1.4#899bf8d9f312577d53bdac07c96f53320896b7f1"
+version = "0.2.2"
+source = "git+https://github.com/veyron-core/veyron-wire?branch=feat%2Fwire-v1.5-status-renumber#fa15185bce40f2ebb0cc979f7a0c96da73870176"
 dependencies = [
  "crc32fast",
  "hkdf",

@@ -223,7 +223,10 @@ Method: three parallel read-only code-audit passes. Findings below are deduplica
 | Low      | 2 |
 | **Original total** | **20** |
 
-Fixed: **18/20**. Deferred: M7, M9.
+Fixed: **19/20**. Deferred: M7.
+M9 (zero-value enum renumber) shipped with the protocol v1.5 bump
+(P11-03, 2026-08-13) — `ActionStatus`/`CommandStatus` now have
+`*_UNKNOWN = 0`, see ROADMAP.
 New (2026-08-11): N1 (moderate), N2–N5 (low) — **all resolved**: N1 closed as
 non-issue (wire v0.2.0 already shares the payload via `Arc<[u8]>`; sharing
 locked in by regression tests), N2–N5 fixed with tests/evidence above.
@@ -239,4 +242,4 @@ Original-priority ordering for the 2026-08-11 findings (all now shipped):
 
 Remaining open:
 1. **M7** (C++/Python fuzz harness) — the only remaining substantive coverage gap; libFuzzer for `framing.cpp` + Python header/frame fuzz.
-2. **M9** (zero-value enum renumber) — bundle into the next wire-breaking protocol version bump; do not fix piecemeal.
+2. **M9** (zero-value enum renumber) — **FIXED (P11-03, 2026-08-13)** via the protocol v1.5 bump: `ACTION_UNKNOWN = 0` added, `COMMAND_UNKNOWN` moved to 0, OK/ERROR shifted. The interim lint (T-16) remains as a construction-site guard.
