@@ -494,6 +494,33 @@ pub async fn fetch_registry_with_url(
     .await
 }
 
+/// Resolve relative `archive_url` values against the registry's own base URL.
+///
+/// Registry v2 entries may use relative URLs (e.g.
+/// `dist/ai/versions/0.1.0/ai-0.1.0.zip`) so the artifact store can move
+/// hosts (GitHub → own VPS → R2, or a community marketplace) with a
+/// one-line `registry_url` change and nothing re-published. `base_url` is
+/// the URL the registry document was fetched from; entries that already
+/// carry an absolute URL are left untouched. Entries whose URL cannot be
+/// resolved (malformed base or unjoinable path) are left as-is — the
+/// install path surfaces the resulting download error.
+fn resolve_relative_archive_urls(entries: &mut [RegistryEntry], base_url: &str) {
+    let Ok(base) = url::Url::parse(base_url) else {
+        tracing::warn!(
+            "registry: cannot resolve relative archive_urls against non-URL base {base_url:?}"
+        );
+        return;
+    };
+    for entry in entries {
+        // Url::parse fails for relative references — that error IS the signal.
+        if url::Url::parse(&entry.archive_url).is_err() {
+            if let Ok(resolved) = base.join(&entry.archive_url) {
+                entry.archive_url = resolved.to_string();
+            }
+        }
+    }
+}
+
 /// Internal implementation — separated so tests can inject a URL, cache path,
 /// and installed-state snapshot.
 pub(crate) async fn fetch_registry_from(
@@ -516,7 +543,8 @@ pub(crate) async fn fetch_registry_from(
 
     match fetch_from_network(url).await {
         Ok(body) => {
-            let doc = parse_registry_document(&body)?;
+            let mut doc = parse_registry_document(&body)?;
+            resolve_relative_archive_urls(&mut doc.entries, url);
             let (verified, dropped) = verify_entries(&doc.entries, public_key);
             if !dropped.is_empty() {
                 if verified.is_empty() {
@@ -1180,6 +1208,114 @@ mod tests {
         assert_eq!(meta.api_version, Some(2));
         assert_eq!(meta.last_updated.as_deref(), Some("2026-08-13"));
         assert!(parsed.entries.is_empty(), "no versions → no entries");
+    }
+
+    #[test]
+    fn resolves_relative_archive_urls_against_base_url() {
+        let mut entries = vec![RegistryEntry {
+            archive_url: "dist/ai/versions/0.1.0/ai-0.1.0.zip".into(),
+            ..make_entry("0.1.0", "*")
+        }];
+        resolve_relative_archive_urls(
+            &mut entries,
+            "https://raw.githubusercontent.com/veyron-core/veyron-plugins/main/registry.json",
+        );
+        assert_eq!(
+            entries[0].archive_url,
+            "https://raw.githubusercontent.com/veyron-core/veyron-plugins/main/dist/ai/versions/0.1.0/ai-0.1.0.zip"
+        );
+    }
+
+    #[test]
+    fn resolves_relative_archive_urls_against_trailing_slash_base() {
+        let mut entries = vec![RegistryEntry {
+            archive_url: "ai.zip".into(),
+            ..make_entry("0.1.0", "*")
+        }];
+        resolve_relative_archive_urls(&mut entries, "https://example.com/marketplace/");
+        assert_eq!(
+            entries[0].archive_url,
+            "https://example.com/marketplace/ai.zip"
+        );
+    }
+
+    #[test]
+    fn leaves_absolute_archive_urls_untouched() {
+        let mut entries = vec![RegistryEntry {
+            archive_url: "https://cdn.example.com/ai.zip".into(),
+            ..make_entry("0.1.0", "*")
+        }];
+        resolve_relative_archive_urls(&mut entries, "https://example.com/registry.json");
+        assert_eq!(entries[0].archive_url, "https://cdn.example.com/ai.zip");
+    }
+
+    #[test]
+    fn non_url_base_leaves_relative_entries_untouched() {
+        let mut entries = vec![RegistryEntry {
+            archive_url: "dist/ai.zip".into(),
+            ..make_entry("0.1.0", "*")
+        }];
+        resolve_relative_archive_urls(&mut entries, "not-a-url");
+        assert_eq!(entries[0].archive_url, "dist/ai.zip");
+    }
+
+    #[tokio::test]
+    async fn fetch_resolves_relative_archive_urls_against_registry_base() {
+        let mut server = mockito::Server::new_async().await;
+        let body = format!(
+            r#"{{
+              "meta": {{ "apiVersion": 2, "lastUpdated": "2026-08-13" }},
+              "revoked": [],
+              "stt-whisper": {{
+                "name": "Whisper STT",
+                "status": "stable",
+                "versions": {{
+                  "1.0.0": {{
+                    "archive_url": "dist/stt-whisper/versions/1.0.0/stt-whisper-1.0.0.zip",
+                    "sha256": "deadbeef",
+                    "signature": "{sig}",
+                    "min_kernel_version": "0.1.0",
+                    "max_kernel_version": "*"
+                  }}
+                }}
+              }}
+            }}"#,
+            sig = TEST_SIG_HEX
+        );
+
+        let mock = server
+            .mock("GET", "/registry.json")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(&body)
+            .expect(1)
+            .create_async()
+            .await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = tmp.path().join("registry-cache.json");
+        let url = format!("{}/registry.json", server.url());
+
+        let result = fetch_registry_from(
+            &url,
+            false,
+            &cache,
+            3600,
+            Some(TEST_PUB_HEX),
+            &InstalledState::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            result[0].archive_url,
+            format!(
+                "{}/dist/stt-whisper/versions/1.0.0/stt-whisper-1.0.0.zip",
+                server.url()
+            )
+        );
+
+        mock.assert_async().await;
     }
 
     #[tokio::test]
