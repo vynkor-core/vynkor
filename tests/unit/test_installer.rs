@@ -5,7 +5,7 @@ use std::path::Path;
 use semver::Version;
 use tempfile::tempdir;
 
-use veyron::marketplace::installer::{extract_zip, install, validate_manifest};
+use veyron::marketplace::installer::{extract_zip, install, validate_manifest, ActionSpec};
 use veyron::marketplace::registry::{check_kernel_compatibility, RegistryEntry};
 use veyron::proto::veyron::PermissionType;
 
@@ -129,7 +129,7 @@ fn zip_slip_dotdot_rejected() {
 
     make_zip(&archive, &[("../../evil.txt", b"pwned")]);
 
-    let err = extract_zip(&archive, &dest, 1024 * 1024 * 1024, 10_000).unwrap_err();
+    let err = extract_zip(&archive, &dest, 1024 * 1024 * 1024, 10_000, None).unwrap_err();
     assert!(err.to_string().contains("path traversal"), "{err}");
     assert!(!tmp.path().join("evil.txt").exists());
 }
@@ -144,7 +144,7 @@ fn zip_slip_absolute_path_rejected() {
 
     make_zip(&archive, &[("/etc/evil.txt", b"pwned")]);
 
-    let err = extract_zip(&archive, &dest, 1024 * 1024 * 1024, 10_000).unwrap_err();
+    let err = extract_zip(&archive, &dest, 1024 * 1024 * 1024, 10_000, None).unwrap_err();
     assert!(err.to_string().contains("path traversal"), "{err}");
 }
 
@@ -164,7 +164,7 @@ fn clean_zip_extracts() {
         ],
     );
 
-    extract_zip(&archive, &dest, 1024 * 1024 * 1024, 10_000).unwrap();
+    extract_zip(&archive, &dest, 1024 * 1024 * 1024, 10_000, None).unwrap();
     assert!(dest.join("plugin.json").exists());
     assert!(dest.join("bin/foo").exists());
 }
@@ -191,7 +191,7 @@ fn extraction_restores_exec_bit() {
     zip.write_all(b"ELF").unwrap();
     zip.finish().unwrap();
 
-    extract_zip(&archive, &dest, 1024 * 1024 * 1024, 10_000).unwrap();
+    extract_zip(&archive, &dest, 1024 * 1024 * 1024, 10_000, None).unwrap();
 
     let mode = fs::metadata(dest.join("database"))
         .unwrap()
@@ -213,7 +213,7 @@ fn archive_with_excess_entries_rejected() {
     let entries: Vec<(&str, &[u8])> = names.iter().map(|n| (n.as_str(), b"x".as_ref())).collect();
     make_zip(&archive, &entries);
 
-    let err = extract_zip(&archive, &dest, 1024 * 1024 * 1024, 10_000).unwrap_err();
+    let err = extract_zip(&archive, &dest, 1024 * 1024 * 1024, 10_000, None).unwrap_err();
     assert!(err.to_string().contains("exceeds max"), "{err}");
     assert!(!dest.join("f0").exists(), "no entry should be extracted");
 }
@@ -244,7 +244,7 @@ fn zip_bomb_decompressed_size_capped() {
     }
     zip.finish().unwrap();
 
-    let err = extract_zip(&archive, &dest, 1024 * 1024 * 1024, 10_000).unwrap_err();
+    let err = extract_zip(&archive, &dest, 1024 * 1024 * 1024, 10_000, None).unwrap_err();
     assert!(
         err.to_string().contains("decompressed size exceeds max"),
         "{err}"
@@ -379,6 +379,170 @@ fn manifest_not_found_errors() {
     let kernel = Version::parse("0.1.0").unwrap();
     let err = validate_manifest(&tmp.path().join("plugin.json"), &kernel).unwrap_err();
     assert!(err.to_string().contains("Invalid plugin.json"));
+}
+
+// Manifest v2: legacy string-form actions still parse.
+#[test]
+fn manifest_legacy_actions_parse() {
+    let tmp = tempdir().unwrap();
+    write_manifest(
+        tmp.path(),
+        r#"{
+            "plugin_id": "legacy",
+            "version": "1.0.0",
+            "permissions": [],
+            "binary": "legacy",
+            "kernel_compatibility_range": {"min": "0.1.0", "max": "*"},
+            "actions": ["transcribe_audio", "get_weather"]
+        }"#,
+    );
+    let kernel = Version::parse("0.1.0").unwrap();
+    let manifest = validate_manifest(&tmp.path().join("plugin.json"), &kernel).unwrap();
+    let actions = manifest.actions.unwrap();
+    assert_eq!(actions.len(), 2);
+    for spec in &actions {
+        assert!(matches!(spec, ActionSpec::Legacy(_)));
+        assert!(spec.permission().is_none());
+    }
+    assert_eq!(actions[0].name(), "transcribe_audio");
+    assert_eq!(actions[1].name(), "get_weather");
+}
+
+// Manifest v2: object-form actions parse, with and without optional fields.
+#[test]
+fn manifest_v2_actions_parse() {
+    let tmp = tempdir().unwrap();
+    write_manifest(
+        tmp.path(),
+        r#"{
+            "plugin_id": "db",
+            "version": "1.0.0",
+            "permissions": ["storage"],
+            "binary": "db",
+            "kernel_compatibility_range": {"min": "0.1.0", "max": "*"},
+            "actions": [
+                {"name": "db_get", "permission": "storage", "input": {"type": "object"}, "output": {"type": "object"}},
+                {"name": "db_health"}
+            ]
+        }"#,
+    );
+    let kernel = Version::parse("0.1.0").unwrap();
+    let manifest = validate_manifest(&tmp.path().join("plugin.json"), &kernel).unwrap();
+    let actions = manifest.actions.unwrap();
+    assert_eq!(actions.len(), 2);
+    assert!(matches!(&actions[0], ActionSpec::V2(_)));
+    assert_eq!(actions[0].name(), "db_get");
+    assert_eq!(actions[0].permission(), Some("storage"));
+    assert!(matches!(&actions[1], ActionSpec::V2(_)));
+    assert_eq!(actions[1].name(), "db_health");
+    assert_eq!(actions[1].permission(), None);
+}
+
+// Manifest v2: unknown per-action permission refuses the plugin (fail-closed).
+#[test]
+fn manifest_unknown_action_permission_errors() {
+    let tmp = tempdir().unwrap();
+    write_manifest(
+        tmp.path(),
+        r#"{
+            "plugin_id": "bad-action",
+            "version": "1.0.0",
+            "permissions": [],
+            "binary": "bad-action",
+            "kernel_compatibility_range": {"min": "0.1.0", "max": "*"},
+            "actions": [{"name": "db_get", "permission": "teleport"}]
+        }"#,
+    );
+    let kernel = Version::parse("0.1.0").unwrap();
+    let err = validate_manifest(&tmp.path().join("plugin.json"), &kernel).unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("unknown action permission")
+            && msg.contains("teleport")
+            && msg.contains("db_get"),
+        "unexpected: {msg}"
+    );
+}
+
+// Manifest v2: per-action permission accepts both the lowercase and proto forms.
+#[test]
+fn manifest_action_permission_resolves_both_forms() {
+    let kernel = Version::parse("0.1.0").unwrap();
+    for perm in ["storage", "PERMISSION_STORAGE"] {
+        let tmp = tempdir().unwrap();
+        write_manifest(
+            tmp.path(),
+            &format!(
+                r#"{{
+                    "plugin_id": "db",
+                    "version": "1.0.0",
+                    "permissions": ["storage"],
+                    "binary": "db",
+                    "kernel_compatibility_range": {{"min": "0.1.0", "max": "*"}},
+                    "actions": [{{"name": "db_get", "permission": "{perm}"}}]
+                }}"#
+            ),
+        );
+        assert!(
+            validate_manifest(&tmp.path().join("plugin.json"), &kernel).is_ok(),
+            "permission {perm} should be accepted"
+        );
+    }
+}
+
+// Manifest v2 `files`: only allowlisted entries are extracted.
+#[test]
+fn extract_zip_respects_files_allowlist() {
+    use std::collections::HashSet;
+
+    let tmp = tempdir().unwrap();
+    let archive = tmp.path().join("plugin.zip");
+    let dest = tmp.path().join("extracted");
+    fs::create_dir_all(&dest).unwrap();
+
+    make_zip(
+        &archive,
+        &[
+            ("plugin.json", b"{\"plugin_id\":\"foo\"}"),
+            ("bin/foo", b"ELF"),
+            ("extra/secret.txt", b"should-not-extract"),
+        ],
+    );
+
+    let allowlist: HashSet<String> = ["plugin.json".to_string(), "bin/foo".to_string()]
+        .into_iter()
+        .collect();
+    extract_zip(&archive, &dest, 1024 * 1024 * 1024, 10_000, Some(&allowlist)).unwrap();
+
+    assert!(dest.join("plugin.json").exists());
+    assert!(dest.join("bin/foo").exists());
+    assert!(
+        !dest.join("extra/secret.txt").exists(),
+        "non-allowlisted entry must not be extracted"
+    );
+}
+
+// Manifest v2 `files`: an allowlisted name absent from the archive errors.
+#[test]
+fn extract_zip_errors_on_missing_allowlisted_file() {
+    use std::collections::HashSet;
+
+    let tmp = tempdir().unwrap();
+    let archive = tmp.path().join("plugin.zip");
+    let dest = tmp.path().join("extracted");
+    fs::create_dir_all(&dest).unwrap();
+
+    make_zip(&archive, &[("plugin.json", b"{}")]);
+
+    let allowlist: HashSet<String> = ["plugin.json".to_string(), "bin/missing".to_string()]
+        .into_iter()
+        .collect();
+    let err =
+        extract_zip(&archive, &dest, 1024 * 1024 * 1024, 10_000, Some(&allowlist)).unwrap_err();
+    assert!(
+        err.to_string().contains("bin/missing"),
+        "missing allowlisted file must be named, got: {err}"
+    );
 }
 
 // write_plugin_config: writes a per-plugin drop-in with binary path + id
