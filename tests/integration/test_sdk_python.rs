@@ -65,12 +65,13 @@ import sys
 import asyncio
 sys.path.insert(0, "{sdk_dir}")
 from veyron.client import VeyronClient
+from veyron.veyron_protocol_pb2 import PluginManifest
 
 async def main():
     c = VeyronClient("{socket}")
     await c.connect()
     try:
-        await c.register("sdk-python-test")
+        await c.register("sdk-python-test", PluginManifest())
         await c.ping()
         print("ok")
     finally:
@@ -135,13 +136,14 @@ import sys
 import asyncio
 sys.path.insert(0, "{sdk_dir}")
 from veyron.client import VeyronClient
+from veyron.veyron_protocol_pb2 import PluginManifest
 
 PAYLOAD = bytes((i % 256 for i in range(100_000)))
 
 async def main():
     c = VeyronClient("{socket}")
     await c.connect()
-    await c.register("sdk-python-large-recv")
+    await c.register("sdk-python-large-recv", PluginManifest())
     await c.subscribe(["large.event"])
     print("subscribed", flush=True)
 
