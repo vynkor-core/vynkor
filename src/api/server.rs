@@ -17,8 +17,8 @@ use tracing::info;
 use crate::api::middleware::{auth_middleware, require_kernel_admin};
 use crate::api::rate_limit::{build_rate_limiter, rate_limit_middleware};
 use crate::api::routes::{
-    get_plugin, get_plugin_logs, health_check, list_plugins, restart_plugin, start_plugin,
-    stop_plugin, AppState,
+    get_plugin, get_plugin_logs, health_check, list_devices, list_plugins, restart_plugin,
+    start_plugin, stop_plugin, AppState,
 };
 use crate::api::websocket::{ws_handler, WsGateway};
 use crate::auth::jwt::JwtValidator;
@@ -84,6 +84,7 @@ pub fn create_router_full(
         .route("/plugins", get(list_plugins))
         .route("/plugins/{id}", get(get_plugin))
         .route("/plugins/{id}/logs", get(get_plugin_logs))
+        .route("/devices", get(list_devices))
         .merge(admin);
 
     // Per-token rate limiting: only active when JWT auth is configured. Layered

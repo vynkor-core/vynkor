@@ -3,7 +3,7 @@ use clap::Parser;
 use std::fs;
 use std::process::Command;
 use tracing::{info, warn};
-use veyron::cli::{complete, plugin};
+use veyron::cli::{complete, devices, plugin};
 use veyron::cli::{Cli, Commands};
 use veyron::kernel;
 use veyron::utils;
@@ -139,6 +139,11 @@ async fn run_kernel(cli: Cli) -> Result<()> {
                 &plugins_dir,
             )
             .await?;
+        }
+        Commands::Devices { config, token } => {
+            let cfg = load_config(&config).unwrap_or_default();
+            let token = token.or_else(|| std::env::var("VEYRON_JWT_TOKEN").ok());
+            devices::handle(cfg.port, cfg.tls_cert_path.is_some(), token.as_deref()).await?;
         }
         Commands::Completions { shell } => {
             complete::generate_completions(shell);

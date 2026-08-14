@@ -464,8 +464,9 @@ impl MessageRouter {
                             Event {
                                 event_id: format!("sys-joined-{plugin_id}-{now_ms}"),
                                 event_type: "system.plugin_joined".to_string(),
-                                payload_json: format!(r#"{{"plugin_id":"{plugin_id}"}}"#)
-                                    .into_bytes(),
+                                payload_json: crate::events::bus::plugin_lifecycle_payload(
+                                    registry, &plugin_id,
+                                ),
                                 retry_count: 0,
                             },
                             registry,

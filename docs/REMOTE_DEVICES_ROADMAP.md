@@ -109,7 +109,7 @@
     large-variant threshold). Full suite green (281 unit + 86 integration,
     `clippy -D warnings`, `fmt --check`).
 
-- [ ] **D-04 — Discovery surface: enriched events + `list_devices` + `/devices` + `vyn devices`.**
+- [x] **D-04 — Discovery surface: enriched events + `list_devices` + `/devices` + `vyn devices`.**
   - Enrich `system.plugin_joined` / `system.plugin_left` payloads with
     `device_id`/`os`/`capabilities`.
   - Admin action `list_devices` (or extend `list_plugins`) returning `DeviceInfo`.
@@ -119,6 +119,17 @@
     `src/cli/`.
   - Acceptance: joined event carries device fields; `/devices` returns the map
     with `last_seen`/`state`; `vyn devices` prints it.
+  - **Status (2026-08-14): SHIPPED** — this PR
+    (`feat/d-04-discovery-surface`). `system.plugin_joined`/`plugin_left`
+    payloads now carry `device_id`/`os`/`capabilities`, built via
+    `plugin_lifecycle_payload` (`src/events/bus.rs`) with `serde_json` (never
+    `format!`) because device fields arrive off the wire unvalidated — a raw
+    splice would be a JSON-injection vector. New IPC admin command
+    `list_devices` (`src/kernel/commands.rs`, `PERMISSION_KERNEL_ADMIN`)
+    returns the device map; REST gains `GET /devices` and `GET /plugins`
+    entries now include `device_id` + `last_seen` (the owning device's).
+    `vyn devices` prints the table. Full suite green (470 tests, `clippy -D
+    warnings`, `fmt --check`).
 
 ---
 

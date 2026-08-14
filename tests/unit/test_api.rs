@@ -42,6 +42,27 @@ fn register(registry: &PluginRegistry, plugin_id: &str, conn_id: u64) {
         .unwrap();
 }
 
+// D-04: register like a remote device agent would off the wire
+fn register_with_device(registry: &PluginRegistry, plugin_id: &str, conn_id: u64) {
+    let (tx, _rx) = mpsc::channel::<veyron::ipc::connection::Outbound>(1);
+    registry
+        .register_with_device(
+            plugin_id.to_string(),
+            conn_id,
+            PluginManifest::default(),
+            tx,
+            veyron::plugins::registry::DeviceMeta {
+                device_id: "phone-1".to_string(),
+                user_id: "default".to_string(),
+                os: veyron::proto::veyron::DeviceOs::Android,
+                arch: "aarch64".to_string(),
+                os_version: "14".to_string(),
+                capabilities: vec!["geo".to_string(), "battery".to_string()],
+            },
+        )
+        .unwrap();
+}
+
 async fn body_string(body: axum::body::Body) -> String {
     let bytes = axum::body::to_bytes(body, usize::MAX).await.unwrap();
     String::from_utf8(bytes.to_vec()).unwrap()
@@ -149,6 +170,113 @@ async fn get_plugin_by_id_returns_plugin() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = body_string(response.into_body()).await;
     assert!(body.contains("echo"), "body: {body}");
+}
+
+// ── devices (D-04) ─────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn devices_returns_empty_array_when_no_devices() {
+    let app = create_router(make_manager(make_registry(), make_supervisor()), None);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/devices")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_string(response.into_body()).await.trim(), "[]");
+}
+
+#[tokio::test]
+async fn devices_returns_registered_device_fields() {
+    let registry = make_registry();
+    register_with_device(&registry, "geo", 1);
+
+    let app = create_router(make_manager(registry, make_supervisor()), None);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/devices")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_string(response.into_body()).await;
+    assert!(body.contains("\"device_id\":\"phone-1\""), "body: {body}");
+    assert!(body.contains("\"os\":\"android\""), "body: {body}");
+    assert!(body.contains("\"arch\":\"aarch64\""), "body: {body}");
+    assert!(body.contains("\"os_version\":\"14\""), "body: {body}");
+    assert!(
+        body.contains("\"capabilities\":[\"geo\",\"battery\"]"),
+        "body: {body}"
+    );
+    assert!(body.contains("\"state\":\"online\""), "body: {body}");
+    assert!(body.contains("\"last_seen\":"), "body: {body}");
+}
+
+#[tokio::test]
+async fn plugins_include_device_id_and_last_seen() {
+    let registry = make_registry();
+    register_with_device(&registry, "geo", 1);
+
+    let app = create_router(make_manager(registry, make_supervisor()), None);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/plugins")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_string(response.into_body()).await;
+    assert!(body.contains("\"device_id\":\"phone-1\""), "body: {body}");
+    assert!(body.contains("\"last_seen\":"), "body: {body}");
+}
+
+#[tokio::test]
+async fn devices_requires_auth_when_jwt_set() {
+    const SECRET: &[u8] = b"test-secret";
+    let validator = Arc::new(JwtValidator::new(SECRET));
+
+    // No token → 401
+    let app = create_router(
+        make_manager(make_registry(), make_supervisor()),
+        Some(validator.clone()),
+    );
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/devices")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    // Valid token → 200
+    let token = create_test_token("admin", vec![], SECRET, 3600);
+    let res2 = create_router(
+        make_manager(make_registry(), make_supervisor()),
+        Some(validator),
+    )
+    .oneshot(
+        Request::builder()
+            .uri("/devices")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(res2.status(), StatusCode::OK);
 }
 
 #[tokio::test]

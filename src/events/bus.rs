@@ -1,7 +1,7 @@
 use crate::events::store::EventStore;
 use crate::ipc::connection::out_frame;
 use crate::ipc::framing::Frame;
-use crate::plugins::registry::PluginRegistry;
+use crate::plugins::registry::{device_os_str, PluginRegistry};
 use crate::proto::veyron::{envelope, Envelope, Event};
 use dashmap::DashMap;
 use metrics::counter;
@@ -194,6 +194,29 @@ fn build_frame(payload: Arc<[u8]>, target: &str) -> Frame {
         payload,
         mac: None,
     }
+}
+
+// D-04: payload for system.plugin_joined/plugin_left. serde_json (not format!)
+// because device_id/capabilities arrive off the wire unvalidated — a raw
+// format! splice would be a JSON-injection vector. Looked up via the registry
+// because the caller still holds the entry at publish time.
+pub fn plugin_lifecycle_payload(registry: &PluginRegistry, plugin_id: &str) -> Vec<u8> {
+    let device_id = registry
+        .get(plugin_id)
+        .map(|e| e.device_id)
+        .unwrap_or_default();
+    let (os, capabilities) = match registry.get_device(&device_id) {
+        Some(dev) => (device_os_str(dev.os).to_string(), dev.capabilities),
+        None => ("unspecified".to_string(), vec![]),
+    };
+    serde_json::json!({
+        "plugin_id": plugin_id,
+        "device_id": device_id,
+        "os": os,
+        "capabilities": capabilities,
+    })
+    .to_string()
+    .into_bytes()
 }
 
 impl Default for EventBus {
