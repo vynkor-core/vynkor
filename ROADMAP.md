@@ -844,6 +844,8 @@ workspace resolves both from the registry.
 - `cargo clippy --all-targets --all-features -- -D warnings` clean; `cargo fmt --check` clean.
 - C++: existing CMake test targets stay green; new tests follow the
   `sdk/cpp/tests/test_*.cpp` naming/registration pattern in `CMakeLists.txt`.
-- Python: new tests follow the `tests/python/test_*.py` pattern.
+- Python: new tests follow the `tests/test_*.py` pattern in the
+  `veyron-sdk-python` repo (unit tests live in the SDK, not the kernel;
+  kernel-side cross-SDK integration tests stay in `tests/integration/`).
 - Docs updated in the same PR (README for operator-visible changes; no
   `docs/FRAMING.md` changes expected since the wire format doesn't change).
