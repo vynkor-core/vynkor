@@ -12,7 +12,7 @@ fn registry_with(plugin_id: &str, permissions: Vec<&str>) -> Arc<PluginRegistry>
         ..Default::default()
     };
     registry
-        .register(plugin_id.to_string(), 1, manifest, tx)
+        .register(plugin_id.to_string(), 1, manifest, tx, "", "")
         .unwrap();
     registry
 }
@@ -30,7 +30,7 @@ fn registry_with_ipc(
         ..Default::default()
     };
     registry
-        .register(plugin_id.to_string(), conn_id, manifest, tx)
+        .register(plugin_id.to_string(), conn_id, manifest, tx, "", "")
         .unwrap();
 }
 

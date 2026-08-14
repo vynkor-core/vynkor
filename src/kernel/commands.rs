@@ -122,6 +122,8 @@ mod tests {
                 1,
                 PluginManifest::default(),
                 dummy_tx(),
+                "",
+                "",
             )
             .unwrap();
         let out = CommandHandler::dispatch("health_check", &registry, Instant::now(), None);

@@ -35,6 +35,8 @@ fn register_plugin(
             conn_id,
             PluginManifest::default(),
             tx,
+            "",
+            "",
         )
         .unwrap();
     rx
@@ -76,7 +78,14 @@ async fn slow_subscriber_does_not_block_publish_to_others() {
         .await
         .unwrap();
     registry
-        .register("slow".to_string(), 1, PluginManifest::default(), slow_tx)
+        .register(
+            "slow".to_string(),
+            1,
+            PluginManifest::default(),
+            slow_tx,
+            "",
+            "",
+        )
         .unwrap();
 
     // healthy subscriber
@@ -202,7 +211,14 @@ async fn publish_to_many_stuck_subscribers_does_not_multiply_delay() {
             .await
             .unwrap();
         registry
-            .register(format!("stuck{i}"), i, PluginManifest::default(), stuck_tx)
+            .register(
+                format!("stuck{i}"),
+                i,
+                PluginManifest::default(),
+                stuck_tx,
+                "",
+                "",
+            )
             .unwrap();
         bus.subscribe(&format!("stuck{i}"), vec!["e".to_string()]);
     }
