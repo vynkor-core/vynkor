@@ -55,6 +55,41 @@ fn default_max_restarts() -> u32 {
     5
 }
 
+/// Kernel role (D-06). `Client` turns this kernel into a remote device: it
+/// mirrors configured plugins to a host kernel over WebSocket, where they
+/// register as `device.<cap>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    #[default]
+    Host,
+    Client,
+}
+
+/// Bridge settings for `role: client`. The client kernel connects to the host
+/// kernel's WS gateway (`host_url` + `/ws`), registers each mirrored capability
+/// as `device.<cap>`, and relays traffic between its local plugins and the host.
+/// `token` is the JWT the client presents (host gateway auth); `secret` is the
+/// host kernel's `jwt_secret` value, needed to derive the per-session frame MAC
+/// key (the token alone cannot — the nonce is derived from the shared secret).
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct BridgeConfig {
+    /// Host kernel base URL (`http://`/`https://` or full `ws://`/`wss://`).
+    /// A base URL gets `/ws` appended; a ws(s) URL is used verbatim.
+    pub host_url: String,
+    /// JWT for the host's WS gateway. Optional when the host runs
+    /// `allow_no_auth: true`.
+    #[serde(default)]
+    pub token: Option<String>,
+    /// Host kernel's `jwt_secret`. Required on a secured host.
+    #[serde(default)]
+    pub secret: Option<String>,
+    /// Local plugin ids to mirror to the host (each becomes `device.<cap>`).
+    /// Must be a subset of `plugins`.
+    #[serde(default)]
+    pub mirror: Vec<String>,
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
     pub port: u16,
@@ -72,6 +107,15 @@ pub struct Config {
     /// any local process can register as any plugin. Must be set deliberately.
     #[serde(default)]
     pub allow_no_auth: bool,
+    /// Kernel role (D-06). Host by default; `client` enables the bridge.
+    #[serde(default)]
+    pub role: Role,
+    /// Bridge settings, required when `role: client`.
+    #[serde(default)]
+    pub bridge: Option<BridgeConfig>,
+    /// Stable device identifier advertised to the host. Defaults to `$HOSTNAME`.
+    #[serde(default)]
+    pub device_id: Option<String>,
     /// Plugins to auto-spawn on kernel start. Empty by default.
     #[serde(default)]
     pub plugins: Vec<PluginDef>,
@@ -298,6 +342,9 @@ impl Default for Config {
             socket_path: default_socket_path(),
             jwt_secret: None,
             allow_no_auth: false,
+            role: Role::Host,
+            bridge: None,
+            device_id: None,
             plugins: vec![],
             plugins_dir: None,
             watchdog_interval_secs: default_watchdog_interval(),
@@ -419,6 +466,15 @@ fn clamp_invalid_numerics(config: &mut Config) {
         warn!("watchdog_timeout_secs: 0 is invalid, clamping to default ({d})");
         config.watchdog_timeout_secs = d;
     }
+}
+
+/// Stable device identifier for the client role: explicit `device_id` config
+/// wins, else `$HOSTNAME` (systemd sets it), else "unknown".
+pub fn resolve_device_id(config: &Config) -> String {
+    config
+        .device_id
+        .clone()
+        .unwrap_or_else(|| std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown".to_string()))
 }
 
 #[cfg(test)]
@@ -659,5 +715,55 @@ mod tests {
         assert_eq!(p.max_fs_access.as_deref(), Some("read-only"));
         assert_eq!(p.readonly_paths, [PathBuf::from("/usr/share/foo")]);
         assert_eq!(p.writable_paths, [PathBuf::from("/var/lib/veyron/foo")]);
+    }
+
+    #[test]
+    fn load_config_defaults_to_host_role() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_minimal_config(&dir, "");
+        let config = load_config(&path).unwrap();
+        assert_eq!(config.role, Role::Host);
+        assert!(config.bridge.is_none());
+    }
+
+    #[test]
+    fn load_config_parses_client_role_with_bridge() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_minimal_config(
+            &dir,
+            "role: client\ndevice_id: laptop-7\nbridge:\n  host_url: https://hub.example.com\n  token: abc.def.ghi\n  secret: host-jwt-secret\n  mirror: [stt, kairo]\n",
+        );
+        let config = load_config(&path).unwrap();
+        assert_eq!(config.role, Role::Client);
+        assert_eq!(config.device_id.as_deref(), Some("laptop-7"));
+        let bridge = config.bridge.unwrap();
+        assert_eq!(bridge.host_url, "https://hub.example.com");
+        assert_eq!(bridge.token.as_deref(), Some("abc.def.ghi"));
+        assert_eq!(bridge.secret.as_deref(), Some("host-jwt-secret"));
+        assert_eq!(bridge.mirror, ["stt", "kairo"]);
+    }
+
+    #[test]
+    fn load_config_rejects_unknown_role() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_minimal_config(&dir, "role: satellite\n");
+        assert!(load_config(&path).is_err());
+    }
+
+    #[test]
+    fn resolve_device_id_priority() {
+        let mut config = Config {
+            device_id: Some("named".into()),
+            ..Default::default()
+        };
+        assert_eq!(resolve_device_id(&config), "named");
+
+        config.device_id = None;
+        temp_env::with_var("HOSTNAME", Some("box-1"), || {
+            assert_eq!(resolve_device_id(&config), "box-1");
+        });
+        temp_env::with_var_unset("HOSTNAME", || {
+            assert_eq!(resolve_device_id(&config), "unknown");
+        });
     }
 }

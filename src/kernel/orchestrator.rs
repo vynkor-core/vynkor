@@ -6,10 +6,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use prost::Message;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::mpsc;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::api::server::ApiServer;
 use crate::auth::jwt::JwtValidator;
+use crate::bridge::{Bridge, BridgeHandle};
 use crate::events::bus::{run_retry_worker, EventBus};
 use crate::events::store::EventStore;
 use crate::ipc::connection::out_frame;
@@ -21,7 +22,7 @@ use crate::plugins::manager::PluginManager;
 use crate::plugins::registry::PluginRegistry;
 use crate::plugins::supervisor::PluginSupervisor;
 use crate::proto::veyron::{envelope, Envelope, Event, PluginShutdown};
-use crate::utils::config::Config;
+use crate::utils::config::{resolve_device_id, Config, Role};
 
 pub struct Kernel;
 
@@ -161,6 +162,28 @@ impl Kernel {
                 .map(|d| (d.id.clone(), d.permissions.clone()))
                 .collect::<std::collections::HashMap<_, _>>(),
         );
+        // D-06: in client role, mirror the configured capabilities to the host
+        // and hand the router the relay handle (frames whose target is not in
+        // the local registry fall through to the host).
+        let bridge_handle = if config.role == Role::Client {
+            if let Some(bridge_cfg) = &config.bridge {
+                let handle = BridgeHandle::new();
+                let bridge = Bridge::new(
+                    bridge_cfg.clone(),
+                    resolve_device_id(&config),
+                    Arc::clone(&registry),
+                    ws_router_tx.clone(),
+                    handle.clone(),
+                );
+                tokio::spawn(bridge.run());
+                Some(handle)
+            } else {
+                warn!("role: client without a bridge block — running host-local only");
+                None
+            }
+        } else {
+            None
+        };
         tokio::spawn(MessageRouter::run_with_context(
             router_rx,
             Arc::clone(&registry),
@@ -178,6 +201,7 @@ impl Kernel {
             config.max_conn_errors,
             config.max_tracked_error_conns,
             config.session_idle_timeout_secs,
+            bridge_handle,
         ));
 
         // disconnect handler: unregister plugin + publish system.plugin_left

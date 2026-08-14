@@ -188,7 +188,7 @@ async fn handle_socket(
     let _ = disconnect_tx.send(conn_id).await;
 }
 
-fn parse_frame(data: &[u8]) -> Result<Frame, &'static str> {
+pub(crate) fn parse_frame(data: &[u8]) -> Result<Frame, &'static str> {
     if data.len() < FRAME_HEADER_SIZE {
         return Err("frame too short");
     }
@@ -243,7 +243,7 @@ fn parse_frame(data: &[u8]) -> Result<Frame, &'static str> {
     })
 }
 
-fn frame_to_bytes(frame: &Frame) -> Vec<u8> {
+pub(crate) fn frame_to_bytes(frame: &Frame) -> Vec<u8> {
     let mac_len = if frame.mac.is_some() { 32 } else { 0 };
     let mut out = Vec::with_capacity(FRAME_HEADER_SIZE + frame.payload.len() + mac_len);
     out.extend_from_slice(&frame.magic.to_be_bytes());

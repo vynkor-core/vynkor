@@ -3,6 +3,7 @@ use crate::auth::permissions::{
     check_ipc_send, check_ipc_target, check_permission, normalize_permission,
     required_permission_for_action,
 };
+use crate::bridge::BridgeHandle;
 use crate::events::bus::EventBus;
 use crate::events::store::EventStore;
 use crate::ipc::connection::{out_frame, Outbound};
@@ -57,6 +58,7 @@ impl MessageRouter {
             defaults.max_conn_errors,
             defaults.max_tracked_error_conns,
             defaults.session_idle_timeout_secs,
+            None,
         )
         .await
     }
@@ -89,6 +91,9 @@ impl MessageRouter {
         // R6-04: idle-timeout bound for accepted streaming sessions. None =
         // disabled, matching action_caller_rate_limit_rps's unlimited convention.
         session_idle_timeout_secs: Option<u32>,
+        // D-06: relay for `role: client` kernels — frames whose target is not
+        // in the local registry fall through to the remote host.
+        bridge: Option<BridgeHandle>,
     ) {
         // Per-connection protocol-error budget. A connection that produces a burst
         // of malformed/denied/unhandled messages (which each generate an error
@@ -234,7 +239,7 @@ impl MessageRouter {
                 }
                 plugin_id => {
                     counter!("messages_routed_total", "routing" => "forward").increment(1);
-                    Self::forward(msg, plugin_id, &registry).await
+                    Self::forward(msg, plugin_id, &registry, bridge.as_ref()).await
                 }
             };
 
@@ -974,7 +979,12 @@ impl MessageRouter {
         }
     }
 
-    async fn forward(msg: IncomingMessage, plugin_id: &str, registry: &PluginRegistry) -> bool {
+    async fn forward(
+        msg: IncomingMessage,
+        plugin_id: &str,
+        registry: &PluginRegistry,
+        bridge: Option<&BridgeHandle>,
+    ) -> bool {
         let sender_id = match registry.get_by_conn_id(msg.conn_id) {
             Some(entry) => entry.plugin_id.clone(),
             None => {
@@ -1051,6 +1061,14 @@ impl MessageRouter {
                 false
             }
             None => {
+                // D-06: a `role: client` kernel relays unresolvable targets to
+                // the remote host before failing — the frame's target may live
+                // on the host (or behind another bridged device).
+                if let Some(b) = bridge {
+                    if b.relay_to_host(&msg.frame) {
+                        return false;
+                    }
+                }
                 warn!(target = %plugin_id, "forward: unknown target");
                 Self::send_error(&msg.write_tx, ErrorCode::ErrUnknown, "plugin not found").await;
                 true
