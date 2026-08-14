@@ -63,6 +63,18 @@ fn generated_python_binding_is_not_stale() {
         "PERMISSION_LAUNCH",
         "PERMISSION_SCREEN",
         "PERMISSION_HOME",
+        // v1.6 (D-01) additions — device identity, versioning, user_id, tool
+        // schema. Field/message names whose leading bytes protoc escapes are
+        // matched via stable tails; the rest are matched verbatim.
+        "ActionSpec",
+        "DeviceInfo",
+        "device_id",
+        "protocol_version",
+        "user_id",
+        "platforms",
+        "os_version",
+        "requires_confirmation",
+        "params_schema",
     ] {
         assert!(
             source.contains(marker),
@@ -77,5 +89,45 @@ fn generated_python_binding_is_not_stale() {
         source.contains("ller_plugin_id"),
         "generated {pb2_path:?} is missing ActionRequest.caller_plugin_id; \
          run scripts/gen_proto_python.py"
+    );
+
+    // v1.6 field names with escaped leading bytes — match stable tails (see
+    // caller_plugin_id above).
+    for marker in ["tion_specs", "pabilities"] {
+        assert!(
+            source.contains(marker),
+            "generated {pb2_path:?} is missing v1.6 field {marker}; \
+             run scripts/gen_proto_python.py"
+        );
+    }
+}
+
+// D-01: the proto header comment (`// v 1.x`) and veyron_wire::PROTOCOL_VERSION
+// must agree — the wire README mandates bumping both in the same commit. Both
+// live in sibling ../veyron-wire; guard the pairing here so a one-sided bump
+// fails loudly.
+#[test]
+fn proto_header_matches_wire_protocol_version() {
+    let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let proto = fs::read_to_string(repo_root.join("../veyron-wire/proto/veyron_protocol.proto"))
+        .unwrap_or_else(|e| panic!("failed to read wire proto: {e}"));
+    let lib = fs::read_to_string(repo_root.join("../veyron-wire/src/lib.rs"))
+        .unwrap_or_else(|e| panic!("failed to read wire lib.rs: {e}"));
+
+    let header = proto
+        .lines()
+        .find(|l| l.trim_start().starts_with("// v "))
+        .and_then(|l| l.split_whitespace().nth(2))
+        .unwrap_or_else(|| panic!("no `// v x.y` header in wire proto"));
+    let const_ver = lib
+        .lines()
+        .find(|l| l.contains("PROTOCOL_VERSION"))
+        .and_then(|l| l.split('"').nth(1))
+        .unwrap_or_else(|| panic!("no PROTOCOL_VERSION const in wire lib.rs"));
+
+    assert_eq!(
+        header, const_ver,
+        "wire proto header v{header} != veyron_wire::PROTOCOL_VERSION {const_ver}; \
+         bump both in the same commit (D-01)"
     );
 }
