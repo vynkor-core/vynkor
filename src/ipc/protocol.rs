@@ -9,10 +9,10 @@ use crate::ipc::connection::{out_frame, Outbound};
 use crate::ipc::framing::{target_as_str, Frame, FLAG_RAW_BINARY};
 use crate::ipc::messages::IncomingMessage;
 use crate::kernel::commands::{CommandHandler, CommandOutcome};
-use crate::plugins::registry::{ActionLookup, PendingAction, PluginRegistry};
+use crate::plugins::registry::{ActionLookup, DeviceMeta, PendingAction, PluginRegistry};
 use crate::proto::veyron::{
     envelope, ActionRequest, ActionRequestChunk, ActionResponse, ActionResponseChunk, ActionStatus,
-    ActionStreamAbort, Envelope, ErrorCode, ErrorMessage, Event, EventPublishAck,
+    ActionStreamAbort, DeviceOs, Envelope, ErrorCode, ErrorMessage, Event, EventPublishAck,
     EventPublishStatus, KernelCommandAck, PermissionType, PluginRegisterAck, Pong, SessionClose,
 };
 use governor::{DefaultKeyedRateLimiter, Quota, RateLimiter};
@@ -302,11 +302,38 @@ impl MessageRouter {
                 let plugin_id = reg.plugin_id.clone();
                 let mut manifest = reg.manifest.unwrap_or_default();
 
+                // D-03: reject on protocol_version *major* mismatch (minor/
+                // patch accepted). Empty protocol_version = a v1.5 host
+                // plugin (or a stale SDK) — accept, it predates the field.
+                let wire_major = veyron_wire::PROTOCOL_VERSION
+                    .split('.')
+                    .next()
+                    .unwrap_or("");
+                let plugin_major = reg.protocol_version.split('.').next().unwrap_or(wire_major);
+                if !reg.protocol_version.is_empty() && plugin_major != wire_major {
+                    Self::send_error(
+                        &msg.write_tx,
+                        ErrorCode::ErrProtocolMismatch,
+                        &format!(
+                            "protocol version {} incompatible with kernel {}",
+                            reg.protocol_version,
+                            veyron_wire::PROTOCOL_VERSION
+                        ),
+                    )
+                    .await;
+                    return true;
+                }
+
                 // JWT validation (only when kernel has jwt_secret configured)
                 if let Some(validator) = jwt_validator {
                     match validator.validate(&reg.jwt_token) {
                         Ok(claims) => {
-                            if claims.sub != plugin_id {
+                            // D-03: a device-scoped token (sub == device_id)
+                            // authorizes every plugin of that device; a
+                            // plugin-scoped token (sub == plugin_id) as before.
+                            let device_match =
+                                !reg.device_id.is_empty() && claims.sub == reg.device_id;
+                            if claims.sub != plugin_id && !device_match {
                                 Self::send_register_reject(
                                     &msg.write_tx,
                                     "token plugin_id mismatch",
@@ -350,15 +377,19 @@ impl MessageRouter {
                     }
                 }
 
-                let result = registry.register(
+                let result = registry.register_with_device(
                     plugin_id.clone(),
                     msg.conn_id,
                     manifest,
                     msg.write_tx.clone(),
-                    // D-03 parses device_id/user_id off the wire; host plugins
-                    // (proto v1.5) register as the default "local"/"default" device
-                    "",
-                    "",
+                    DeviceMeta {
+                        device_id: reg.device_id.clone(),
+                        user_id: reg.user_id.clone(),
+                        os: DeviceOs::try_from(reg.os).unwrap_or(DeviceOs::Unspecified),
+                        arch: reg.arch.clone(),
+                        os_version: reg.os_version.clone(),
+                        capabilities: reg.capabilities.clone(),
+                    },
                 );
 
                 // When auth is on, mint a per-registration nonce; the plugin and

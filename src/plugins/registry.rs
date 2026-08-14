@@ -6,51 +6,34 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 
+// D-03: registry now stores the wire DeviceInfo/DeviceState/DeviceOs (proto
+// v1.6) directly — re-exported so callers keep the registry:: path.
+pub use crate::proto::veyron::{DeviceInfo, DeviceOs, DeviceState};
+
+/// Device identity + metadata parsed off `PluginRegister` (D-03). The
+/// registry falls back to the single-user defaults (`"local"`/`"default"`)
+/// for host plugins that don't declare device/user identity.
+#[derive(Debug, Clone, Default)]
+pub struct DeviceMeta {
+    pub device_id: String,
+    pub user_id: String,
+    pub os: DeviceOs,
+    pub arch: String,
+    pub os_version: String,
+    pub capabilities: Vec<String>,
+}
+
 #[derive(Debug, Clone)]
 pub enum PluginState {
     Registered,
 }
 
-/// Kernel-local device record (D-02). Kernel runs `veyron-wire` 0.2.2 (proto
-/// v1.5) with no `DeviceInfo` message yet — D-03 bumps to 0.2.3 and swaps this
-/// for the wire type; kept shape-compatible so the swap is mechanical.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DeviceInfo {
-    pub device_id: String,
-    /// free-form until D-03 wires the `DeviceOs` enum
-    pub os: String,
-    pub arch: String,
-    pub os_version: String,
-    pub capabilities: Vec<String>,
-    /// unix millis of the last ping/pong (reuses `pong_times`)
-    pub last_seen: u64,
-    pub state: DeviceState,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DeviceState {
-    Online,
-    Offline,
-}
-
-impl DeviceInfo {
-    fn new(device_id: &str, now_ms: u64) -> Self {
-        DeviceInfo {
-            device_id: device_id.to_string(),
-            os: String::new(),
-            arch: String::new(),
-            os_version: String::new(),
-            capabilities: Vec::new(),
-            last_seen: now_ms,
-            state: DeviceState::Online,
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub enum ActionLookup {
     NotFound,
-    Found(PluginEntry),
+    // boxed: PluginEntry carries the full manifest, and wire v1.6 grew it
+    // (platforms/action_specs) past clippy's large-enum-variant threshold
+    Found(Box<PluginEntry>),
     /// Colliding plugin ids, for the caller to log.
     Ambiguous(Vec<String>),
 }
@@ -134,6 +117,30 @@ impl PluginRegistry {
         device_id: &str,
         user_id: &str,
     ) -> Result<(), VeyronError> {
+        self.register_with_device(
+            plugin_id,
+            conn_id,
+            manifest,
+            write_tx,
+            DeviceMeta {
+                device_id: device_id.to_string(),
+                user_id: user_id.to_string(),
+                ..Default::default()
+            },
+        )
+    }
+
+    /// D-03: registration carrying full device identity + metadata parsed off
+    /// `PluginRegister` (os/arch/os_version/capabilities). Empty device/user
+    /// fall back to the single-user defaults.
+    pub fn register_with_device(
+        &self,
+        plugin_id: String,
+        conn_id: u64,
+        manifest: PluginManifest,
+        write_tx: mpsc::Sender<Outbound>,
+        meta: DeviceMeta,
+    ) -> Result<(), VeyronError> {
         use dashmap::mapref::entry::Entry;
 
         validate_plugin_id(&plugin_id)?;
@@ -163,17 +170,17 @@ impl PluginRegistry {
             Entry::Vacant(v) => v,
         };
 
-        // D-02: host plugins (no device identity on the wire until D-03) fall
-        // back to the local single-user deployment.
-        let device_id = if device_id.is_empty() {
+        // host plugins (no device identity on the wire) fall back to the
+        // local single-user deployment
+        let device_id = if meta.device_id.is_empty() {
             "local"
         } else {
-            device_id
+            &meta.device_id
         };
-        let user_id = if user_id.is_empty() {
+        let user_id = if meta.user_id.is_empty() {
             "default"
         } else {
-            user_id
+            &meta.user_id
         };
 
         let registered_at = SystemTime::now()
@@ -198,11 +205,26 @@ impl PluginRegistry {
         // a registering plugin proves its device is alive — upsert the record
         match self.devices.entry(device_id.to_string()) {
             Entry::Occupied(mut occ) => {
-                occ.get_mut().last_seen = now_ms;
-                occ.get_mut().state = DeviceState::Online;
+                let dev = occ.get_mut();
+                dev.last_seen = now_ms;
+                dev.state = DeviceState::Online as i32;
+                // D-03: refresh the device metadata off the wire on every
+                // registration (a device may re-register with new info)
+                dev.os = meta.os as i32;
+                dev.arch = meta.arch.clone();
+                dev.os_version = meta.os_version.clone();
+                dev.capabilities = meta.capabilities.clone();
             }
             Entry::Vacant(v) => {
-                v.insert(DeviceInfo::new(device_id, now_ms));
+                v.insert(DeviceInfo {
+                    device_id: device_id.to_string(),
+                    os: meta.os as i32,
+                    arch: meta.arch.clone(),
+                    os_version: meta.os_version.clone(),
+                    capabilities: meta.capabilities.clone(),
+                    last_seen: now_ms,
+                    state: DeviceState::Online as i32,
+                });
             }
         }
         plugin_slot.insert(entry);
@@ -219,7 +241,7 @@ impl PluginRegistry {
             let still_registered = self.by_plugin_id.iter().any(|e| e.device_id == *device_id);
             if !still_registered {
                 if let Some(mut dev) = self.devices.get_mut(device_id) {
-                    dev.state = DeviceState::Offline;
+                    dev.state = DeviceState::Offline as i32;
                 }
             }
         }
@@ -232,7 +254,7 @@ impl PluginRegistry {
         if let Some(entry) = self.by_plugin_id.get(plugin_id) {
             if let Some(mut dev) = self.devices.get_mut(&entry.device_id) {
                 dev.last_seen = unix_millis();
-                dev.state = DeviceState::Online;
+                dev.state = DeviceState::Online as i32;
             }
         }
     }
@@ -307,7 +329,7 @@ impl PluginRegistry {
 
         match matches.len() {
             0 => ActionLookup::NotFound,
-            1 => ActionLookup::Found(matches.into_iter().next().unwrap()),
+            1 => ActionLookup::Found(Box::new(matches.into_iter().next().unwrap())),
             _ => ActionLookup::Ambiguous(matches.into_iter().map(|e| e.plugin_id).collect()),
         }
     }

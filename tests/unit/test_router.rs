@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
+use veyron::auth::jwt::JwtValidator;
 use veyron::events::bus::EventBus;
 use veyron::ipc::connection::{out_frame, Outbound};
 use veyron::ipc::framing::{target_as_str, Frame, FLAG_MAC_PRESENT};
@@ -1392,4 +1393,271 @@ async fn broadcast_shares_payload_without_copy() {
         "broadcast() must share the payload Arc with every recipient, not deep-copy it (N1)"
     );
     assert_eq!(&*fb.payload, &*fc.payload);
+}
+
+// ── D-03: protocol version + device metadata on the wire ────────────────────
+
+#[tokio::test]
+async fn router_accepts_matching_protocol_major() {
+    let reg = Arc::new(PluginRegistry::new());
+    let bus = Arc::new(EventBus::new());
+    let router_tx = spawn_router(Arc::clone(&reg), bus);
+
+    let (write_tx, mut write_rx) = make_write_pair();
+
+    let env = Envelope {
+        payload: Some(envelope::Payload::PluginRegister(PluginRegister {
+            plugin_id: "weather".to_string(),
+            version: "1.0.0".to_string(),
+            manifest: Some(dummy_manifest()),
+            protocol_version: "1.6".to_string(),
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+
+    router_tx
+        .send(incoming(1, kernel_frame(env), write_tx))
+        .await
+        .unwrap();
+
+    let frame = recv_frame(&mut write_rx).await;
+    let ack_env = decode_envelope(&frame);
+    match ack_env.payload {
+        Some(envelope::Payload::PluginRegisterAck(PluginRegisterAck { accepted, .. })) => {
+            assert!(accepted, "v1.6 register must be accepted");
+        }
+        other => panic!("expected PluginRegisterAck, got {:?}", other),
+    }
+}
+
+#[tokio::test]
+async fn router_accepts_minor_variant_of_protocol_major() {
+    let reg = Arc::new(PluginRegistry::new());
+    let bus = Arc::new(EventBus::new());
+    let router_tx = spawn_router(Arc::clone(&reg), bus);
+
+    let (write_tx, mut write_rx) = make_write_pair();
+
+    let env = Envelope {
+        payload: Some(envelope::Payload::PluginRegister(PluginRegister {
+            plugin_id: "weather".to_string(),
+            version: "1.0.0".to_string(),
+            manifest: Some(dummy_manifest()),
+            protocol_version: "1.5.2".to_string(),
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+
+    router_tx
+        .send(incoming(1, kernel_frame(env), write_tx))
+        .await
+        .unwrap();
+
+    let frame = recv_frame(&mut write_rx).await;
+    let ack_env = decode_envelope(&frame);
+    match ack_env.payload {
+        Some(envelope::Payload::PluginRegisterAck(PluginRegisterAck { accepted, .. })) => {
+            assert!(accepted, "minor/patch variant must be accepted");
+        }
+        other => panic!("expected PluginRegisterAck, got {:?}", other),
+    }
+}
+
+#[tokio::test]
+async fn router_rejects_protocol_major_mismatch() {
+    let reg = Arc::new(PluginRegistry::new());
+    let bus = Arc::new(EventBus::new());
+    let router_tx = spawn_router(Arc::clone(&reg), bus);
+
+    let (write_tx, mut write_rx) = make_write_pair();
+
+    let env = Envelope {
+        payload: Some(envelope::Payload::PluginRegister(PluginRegister {
+            plugin_id: "weather".to_string(),
+            version: "1.0.0".to_string(),
+            manifest: Some(dummy_manifest()),
+            protocol_version: "2.0".to_string(),
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+
+    router_tx
+        .send(incoming(1, kernel_frame(env), write_tx))
+        .await
+        .unwrap();
+
+    let frame = recv_frame(&mut write_rx).await;
+    let ack_env = decode_envelope(&frame);
+    match ack_env.payload {
+        Some(envelope::Payload::Error(err)) => {
+            assert_eq!(
+                err.code,
+                veyron::proto::veyron::ErrorCode::ErrProtocolMismatch as i32,
+                "major mismatch must use ERR_PROTOCOL_MISMATCH"
+            );
+            assert!(
+                err.message.contains("2.0") && err.message.contains("1.6"),
+                "message must carry both versions, got: {}",
+                err.message
+            );
+        }
+        other => panic!("expected Error payload, got {:?}", other),
+    }
+    assert!(
+        !reg.is_registered(1),
+        "major-mismatch register must not leave a registry entry"
+    );
+}
+
+#[tokio::test]
+async fn router_stores_device_metadata_from_wire() {
+    let reg = Arc::new(PluginRegistry::new());
+    let bus = Arc::new(EventBus::new());
+    let router_tx = spawn_router(Arc::clone(&reg), bus);
+
+    let (write_tx, mut write_rx) = make_write_pair();
+
+    let env = Envelope {
+        payload: Some(envelope::Payload::PluginRegister(PluginRegister {
+            plugin_id: "geo".to_string(),
+            version: "1.0.0".to_string(),
+            manifest: Some(dummy_manifest()),
+            device_id: "phone-7f3a".to_string(),
+            os: veyron::proto::veyron::DeviceOs::Android as i32,
+            arch: "aarch64".to_string(),
+            os_version: "14".to_string(),
+            capabilities: vec!["geo".to_string()],
+            user_id: "behzod".to_string(),
+            protocol_version: "1.6".to_string(),
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+
+    router_tx
+        .send(incoming(1, kernel_frame(env), write_tx))
+        .await
+        .unwrap();
+
+    let frame = recv_frame(&mut write_rx).await;
+    let ack_env = decode_envelope(&frame);
+    match ack_env.payload {
+        Some(envelope::Payload::PluginRegisterAck(PluginRegisterAck { accepted, .. })) => {
+            assert!(accepted, "device register must be accepted");
+        }
+        other => panic!("expected PluginRegisterAck, got {:?}", other),
+    }
+
+    let dev = reg.get_device("phone-7f3a").expect("device must exist");
+    assert_eq!(dev.os, veyron::proto::veyron::DeviceOs::Android as i32);
+    assert_eq!(dev.arch, "aarch64");
+    assert_eq!(dev.capabilities, vec!["geo".to_string()]);
+    let entry = reg.get("geo").expect("plugin must exist");
+    assert_eq!(entry.device_id, "phone-7f3a");
+    assert_eq!(entry.user_id, "behzod");
+}
+
+#[tokio::test]
+async fn router_accepts_device_scoped_jwt() {
+    let reg = Arc::new(PluginRegistry::new());
+    let bus = Arc::new(EventBus::new());
+    let (tx, rx) = mpsc::channel::<IncomingMessage>(64);
+    let validator = Arc::new(JwtValidator::new(b"test-secret"));
+    tokio::spawn(MessageRouter::run(
+        rx,
+        Arc::clone(&reg),
+        bus,
+        Some(validator),
+    ));
+
+    let (write_tx, mut write_rx) = make_write_pair();
+    let token = crate::jwt_helper::create_test_token(
+        "phone-7f3a", // device-scoped: sub == device_id, not plugin_id
+        vec!["PERMISSION_IPC_SEND".to_string()],
+        b"test-secret",
+        3600,
+    );
+
+    let env = Envelope {
+        payload: Some(envelope::Payload::PluginRegister(PluginRegister {
+            plugin_id: "geo".to_string(),
+            version: "1.0.0".to_string(),
+            manifest: Some(dummy_manifest()),
+            jwt_token: token,
+            device_id: "phone-7f3a".to_string(),
+            user_id: "behzod".to_string(),
+            protocol_version: "1.6".to_string(),
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+
+    tx.send(incoming(1, kernel_frame(env), write_tx))
+        .await
+        .unwrap();
+
+    let frame = recv_frame(&mut write_rx).await;
+    let ack_env = decode_envelope(&frame);
+    match ack_env.payload {
+        Some(envelope::Payload::PluginRegisterAck(PluginRegisterAck { accepted, .. })) => {
+            assert!(accepted, "device-scoped token must authorize its plugins");
+        }
+        other => panic!("expected PluginRegisterAck, got {:?}", other),
+    }
+    let entry = reg.get("geo").expect("plugin must exist");
+    assert_eq!(
+        entry.manifest.permissions,
+        vec!["PERMISSION_IPC_SEND".to_string()],
+        "device token claims must override the manifest"
+    );
+}
+
+#[tokio::test]
+async fn router_rejects_cross_device_token() {
+    let reg = Arc::new(PluginRegistry::new());
+    let bus = Arc::new(EventBus::new());
+    let (tx, rx) = mpsc::channel::<IncomingMessage>(64);
+    let validator = Arc::new(JwtValidator::new(b"test-secret"));
+    tokio::spawn(MessageRouter::run(
+        rx,
+        Arc::clone(&reg),
+        bus,
+        Some(validator),
+    ));
+
+    let (write_tx, mut write_rx) = make_write_pair();
+    let token = crate::jwt_helper::create_test_token("other-phone", vec![], b"test-secret", 3600);
+
+    let env = Envelope {
+        payload: Some(envelope::Payload::PluginRegister(PluginRegister {
+            plugin_id: "geo".to_string(),
+            version: "1.0.0".to_string(),
+            manifest: Some(dummy_manifest()),
+            jwt_token: token,
+            device_id: "phone-7f3a".to_string(),
+            protocol_version: "1.6".to_string(),
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+
+    tx.send(incoming(1, kernel_frame(env), write_tx))
+        .await
+        .unwrap();
+
+    let frame = recv_frame(&mut write_rx).await;
+    let ack_env = decode_envelope(&frame);
+    match ack_env.payload {
+        Some(envelope::Payload::PluginRegisterAck(PluginRegisterAck { accepted, .. })) => {
+            assert!(
+                !accepted,
+                "another device's token must not register plugins here"
+            );
+        }
+        other => panic!("expected PluginRegisterAck, got {:?}", other),
+    }
+    assert!(!reg.is_registered(1));
 }
