@@ -160,7 +160,7 @@
     kernel WS gateway incl. a hand-minted HS256 JWT path, `clippy -D
     warnings`, `fmt --check`).
 
-- [ ] **D-06 — `role: client` + bridge/mirror component + local-first routing.**
+- [x] **D-06 — `role: client` + bridge/mirror component + local-first routing.**
   - Config: `role: host|client` + `bridge:` section (host URL, token, mirror list).
   - Bridge: one WS connection per mirrored capability, registering as
     `device.<cap>` on the host, shuttling frames both ways.
@@ -170,6 +170,20 @@
     `src/ipc/protocol.rs`.
   - Acceptance: `vyn --client` runs, hosts a local plugin, that plugin appears
     on the host as `device.<cap>`; local-to-local traffic stays local.
+  - **Status (2026-08-14): SHIPPED** — merged via PR veyron-core/veyron#26
+    (this branch, `feat/d-06-role-client-bridge`, commit `a073c20`).
+    `role: client` + `bridge:` config (host_url/token/secret/mirror) plus
+    `--role/--bridge-*` CLI overrides; `src/bridge` runs one WS client per
+    mirrored capability, registers as `device.<cap>` (JWT via
+    `Sec-WebSocket-Protocol: veyron, <token>`, per-session frame MAC derived
+    from the host's `jwt_secret` + ack nonce), and shuttles frames both ways
+    with target rewriting (`client → kernel` outbound; inbound re-addressed
+    to `"kernel"` or `"<cap>"` by payload class). Router's `forward()` miss
+    path falls through to the bridge relay before failing, so local-to-local
+    traffic never round-trips the host. Known limits: client→host SDK
+    actions targeting `"kernel"` fail locally with `ActionNotFound` (D-10),
+    relay uses the first live connection only. Full suite green (478 tests
+    incl. 4 new bridge tests; `clippy -D warnings`, `fmt --check`).
 
 - [ ] **D-07 — Auth: per-device JWT minting + TLS by default + close the WS no-MAC gap.**
   - `vyn token mint --device …` → per-device JWT (`sub=device_id`, restricted
