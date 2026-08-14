@@ -1043,9 +1043,27 @@ D-04** (identity + versioning + discovery, one proto bump), then D-05 → D-07
     value-lock tests), sdk-python #3 (proto + regenerated pb2), sdk-cpp #3
     (proto), kernel PR #22 (R8-05 v1.6 markers + new header/const pairing
     test). All merged 2026-08-14; full kernel suite green (444 tests),
-    `clippy -D warnings` + `fmt --check` clean. Kernel still consumes
-    published wire **0.2.2** — D-03 wires the fields up and bumps the dep
-    (via `[patch.crates-io]` until 0.2.3 publishes).
+    `clippy -D warnings` + `fmt --check` clean. `veyron-wire` **0.2.3
+    published to crates.io 2026-08-14**. Kernel still consumes published
+    wire **0.2.2** — D-03 wires the fields up and bumps the dep to 0.2.3
+    (registry resolve, no `[patch.crates-io]` needed).
+
+- [x] **D-02 — Registry: device/user identity + `devices` map + `last_seen`.**
+  `PluginEntry` += `device_id`/`user_id` (defaults `"local"`/`"default"`);
+  new `devices: DashMap<device_id, DeviceInfo>` populated at registration;
+  `last_seen` advances on ping/pong (reuses `pong_times`); a device flips
+  `Offline` when its last plugin leaves; `get_device`/`list_devices`
+  exposed for the D-04 discovery surface.
+  - Files: `src/plugins/registry.rs`.
+  - Acceptance: registration stores device/user; `devices` populated;
+    `last_seen` advances on ping/pong.
+  - **Status (2026-08-14): SHIPPED** — kernel PR #23 (`543c758`), merged
+    into develop. Full suite green (450 tests, `clippy -D warnings`,
+    `fmt --check`). `DeviceInfo` is a kernel-local record shape-compatible
+    with proto v1.6 — the kernel still runs wire 0.2.2 (proto v1.5), so
+    D-03 bumps the dep to 0.2.3 and swaps in the wire type; the router
+    still passes `""`/`""` (host plugins → default device) until D-03
+    parses the wire fields.
 
 **Delta audit (2026-08-14):** 13 new findings, all kernel-local, with
 priorities P0–P3 (see "Immediate — Delta audit findings" above): S1 (P0 —

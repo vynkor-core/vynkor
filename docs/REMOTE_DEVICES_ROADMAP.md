@@ -49,7 +49,7 @@
     `PROTOCOL_VERSION`/header/`Cargo.toml` bumped in one commit.
   - **Status (2026-08-14): SHIPPED** — proto v1.6 landed in `veyron-wire`
     (`657b528`, merged via PR veyron-core/veyron-wire#4) as **0.2.3** (patch —
-    additive per the release rule; publish to crates.io deferred like P11-03);
+    additive per the release rule); **published to crates.io 2026-08-14**.
     `PROTOCOL_VERSION` 1.6 + header + `Cargo.toml` in **one commit**. Vendored
     copies re-synced byte-identical in `veyron-sdk-python#3` (+ regenerated
     `veyron_protocol_pb2.py`) and `veyron-sdk-cpp#3`; both SDK READMEs bumped
@@ -59,16 +59,29 @@
     test enforces the one-commit bump convention. Full kernel suite green
     (444 tests, `clippy -D warnings`, `fmt --check`). Kernel still consumes
     published `veyron-wire 0.2.2` — D-01 is proto-only; D-03 wires the new
-    fields up and bumps the dependency (via `[patch.crates-io]` branch until
-    0.2.3 publishes).
+    fields up and bumps the dependency to 0.2.3 (resolves from crates.io, no
+    `[patch.crates-io]` needed — 0.2.3 is published).
 
-- [ ] **D-02 — Registry: device/user identity + `devices` map + `last_seen`.**
+- [x] **D-02 — Registry: device/user identity + `devices` map + `last_seen`.**
   - `PluginEntry` += `device_id`, `user_id` (defaults `"local"` / `"default"`).
   - New `devices: DashMap<device_id, DeviceInfo>`; update `last_seen` on
     Ping/Pong (reuse existing `pong_times`).
   - Files: `src/plugins/registry.rs`.
   - Acceptance: registration stores device/user; `devices` populated;
     `last_seen` advances on ping/pong.
+  - **Status (2026-08-14): SHIPPED** — merged via PR veyron-core/veyron#23
+    (`543c758`). `PluginEntry` gains `device_id`/`user_id` (empty →
+    `"local"`/`"default"`); `devices: DashMap<device_id, DeviceInfo>` is
+    populated at registration and `last_seen` advances on ping/pong (reuses
+    `pong_times`); a device flips `Offline` once its last plugin
+    unregisters; `get_device`/`list_devices` exposed for D-04. `DeviceInfo`
+    is a kernel-local record shape-compatible with proto v1.6 — the kernel
+    still runs `veyron-wire` 0.2.2 (proto v1.5), so **D-03** bumps the dep
+    to 0.2.3 and swaps in the wire type (mechanical). The router currently
+    passes `""`/`""` (host plugins → default device); D-03 parses
+    `device_id`/`user_id`/`os`/`capabilities`/`protocol_version` off the
+    wire. Full suite green (450 tests, `clippy -D warnings`,
+    `fmt --check`).
 
 - [ ] **D-03 — Registration: parse new fields + device/user clamp + major-version reject + same-user IPC.**
   - Parse `device_id`/`user_id`/`os`/`capabilities`/`protocol_version` on
