@@ -289,7 +289,9 @@ impl Kernel {
                     Event {
                         event_id: format!("sys-left-{plugin_id}-{now_ms}"),
                         event_type: "system.plugin_left".to_string(),
-                        payload_json: format!(r#"{{"plugin_id":"{plugin_id}"}}"#).into_bytes(),
+                        payload_json: crate::events::bus::plugin_lifecycle_payload(
+                            &registry, &plugin_id,
+                        ),
                         retry_count: 0,
                     },
                     &registry,

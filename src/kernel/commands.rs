@@ -55,6 +55,26 @@ impl CommandHandler {
                     r#"{{"uptime_secs":{uptime_secs},"plugin_count":{plugin_count}}}"#
                 ))
             }
+            // D-04: discovery surface — same data as GET /devices, served over
+            // the IPC KernelCommand path for PERMISSION_KERNEL_ADMIN holders.
+            "list_devices" => {
+                let devices: Vec<serde_json::Value> = registry
+                    .list_devices()
+                    .iter()
+                    .map(|d| {
+                        serde_json::json!({
+                            "device_id": d.device_id,
+                            "os": crate::plugins::registry::device_os_str(d.os),
+                            "arch": d.arch,
+                            "os_version": d.os_version,
+                            "capabilities": d.capabilities,
+                            "last_seen": d.last_seen,
+                            "state": crate::plugins::registry::device_state_str(d.state),
+                        })
+                    })
+                    .collect();
+                CommandOutcome::ok(serde_json::Value::Array(devices).to_string())
+            }
             "reload_config" => match config_path {
                 Some(path) => match load_config(path) {
                     Ok(cfg) => {
@@ -95,11 +115,31 @@ impl CommandHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugins::registry::{DeviceMeta, DeviceOs};
     use crate::proto::veyron::PluginManifest;
     use tokio::sync::mpsc;
 
     fn dummy_tx() -> mpsc::Sender<crate::ipc::connection::Outbound> {
         mpsc::channel(1).0
+    }
+
+    fn register_device(registry: &PluginRegistry, plugin_id: &str, conn_id: u64, device_id: &str) {
+        registry
+            .register_with_device(
+                plugin_id.to_string(),
+                conn_id,
+                PluginManifest::default(),
+                dummy_tx(),
+                DeviceMeta {
+                    device_id: device_id.to_string(),
+                    user_id: "default".to_string(),
+                    os: DeviceOs::Android,
+                    arch: "aarch64".to_string(),
+                    os_version: "14".to_string(),
+                    capabilities: vec!["geo".to_string(), "battery".to_string()],
+                },
+            )
+            .unwrap();
     }
 
     #[test]
@@ -185,5 +225,32 @@ mod tests {
         let out = CommandHandler::dispatch("does_not_exist", &registry, Instant::now(), None);
         assert_eq!(out.status, CommandStatus::CommandUnknown);
         assert_eq!(out.error, "unknown command: does_not_exist");
+    }
+
+    #[test]
+    fn list_devices_returns_empty_array_when_no_devices() {
+        let registry = PluginRegistry::new();
+        let out = CommandHandler::dispatch("list_devices", &registry, Instant::now(), None);
+        assert_eq!(out.status, CommandStatus::CommandOk);
+        assert_eq!(String::from_utf8(out.data_json).unwrap(), "[]");
+    }
+
+    #[test]
+    fn list_devices_returns_registered_device_fields() {
+        let registry = PluginRegistry::new();
+        register_device(&registry, "geo", 1, "phone-1");
+        let out = CommandHandler::dispatch("list_devices", &registry, Instant::now(), None);
+        assert_eq!(out.status, CommandStatus::CommandOk);
+        let json = String::from_utf8(out.data_json).unwrap();
+        assert!(json.contains("\"device_id\":\"phone-1\""), "json={json}");
+        assert!(json.contains("\"os\":\"android\""), "json={json}");
+        assert!(json.contains("\"arch\":\"aarch64\""), "json={json}");
+        assert!(json.contains("\"os_version\":\"14\""), "json={json}");
+        assert!(
+            json.contains("\"capabilities\":[\"geo\",\"battery\"]"),
+            "json={json}"
+        );
+        assert!(json.contains("\"state\":\"online\""), "json={json}");
+        assert!(json.contains("\"last_seen\":"), "json={json}");
     }
 }

@@ -381,7 +381,7 @@ fn print_table(entries: &[RegistryEntry]) {
     }
 }
 
-async fn api_get(base: &str, path: &str, token: Option<&str>) -> anyhow::Result<String> {
+pub(crate) async fn api_get(base: &str, path: &str, token: Option<&str>) -> anyhow::Result<String> {
     let url = format!("{base}{path}");
     let client = reqwest::Client::new();
     let mut req = client.get(&url);

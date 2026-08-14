@@ -96,6 +96,74 @@ async fn wildcard_subscriber_receives_system_plugin_joined() {
 }
 
 #[tokio::test]
+async fn joined_event_carries_device_fields() {
+    // D-04: system.plugin_joined must enrich its payload with the newcomer's
+    // device identity so discovery subscribers can key on device without a
+    // follow-up /devices call.
+    let (shutdown_tx, _registry, _bus) =
+        start_kernel("/tmp/veyron_integ_joined_dev.sock", 19204).await;
+
+    let mut observer = VeyronClient::connect("/tmp/veyron_integ_joined_dev.sock")
+        .await
+        .unwrap();
+    observer
+        .register("observer", PluginManifest::default())
+        .await
+        .unwrap();
+    observer.subscribe(vec!["*".to_string()]).await.unwrap();
+
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    // a device agent registers with its identity off the wire (v1.6 fields)
+    let mut newcomer = VeyronClient::connect("/tmp/veyron_integ_joined_dev.sock")
+        .await
+        .unwrap();
+    let reg = veyron::proto::veyron::PluginRegister {
+        plugin_id: "device-agent".to_string(),
+        manifest: Some(PluginManifest::default()),
+        device_id: "phone-1".to_string(),
+        os: veyron::proto::veyron::DeviceOs::Android as i32,
+        arch: "aarch64".to_string(),
+        os_version: "14".to_string(),
+        capabilities: vec!["geo".to_string(), "battery".to_string()],
+        ..Default::default()
+    };
+    let env = veyron::proto::veyron::Envelope {
+        payload: Some(envelope::Payload::PluginRegister(reg)),
+        ..Default::default()
+    };
+    newcomer.send("kernel", env).await.unwrap();
+
+    let received = timeout(Duration::from_secs(2), observer.recv())
+        .await
+        .expect("recv timed out")
+        .expect("recv failed");
+
+    match received.payload {
+        Some(envelope::Payload::Event(e)) => {
+            assert_eq!(e.event_type, "system.plugin_joined");
+            let payload = String::from_utf8(e.payload_json).expect("joined payload must be JSON");
+            assert!(
+                payload.contains("\"plugin_id\":\"device-agent\""),
+                "payload={payload}"
+            );
+            assert!(
+                payload.contains("\"device_id\":\"phone-1\""),
+                "payload={payload}"
+            );
+            assert!(payload.contains("\"os\":\"android\""), "payload={payload}");
+            assert!(
+                payload.contains("\"capabilities\":[\"geo\",\"battery\"]"),
+                "payload={payload}"
+            );
+        }
+        other => panic!("expected system.plugin_joined, got: {:?}", other),
+    }
+
+    let _ = shutdown_tx.send(());
+}
+
+#[tokio::test]
 async fn publish_without_permission_is_denied() {
     let (shutdown_tx, _registry, _bus) =
         start_kernel("/tmp/veyron_integ_evpub_denied.sock", 19700).await;

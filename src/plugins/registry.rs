@@ -506,6 +506,28 @@ fn unix_millis() -> u64 {
         .as_millis() as u64
 }
 
+// D-04: display strings for wire DeviceOs/DeviceState values; unknown values
+// read back as "unspecified" so the discovery surface never panics
+pub fn device_os_str(os: i32) -> &'static str {
+    match DeviceOs::try_from(os) {
+        Ok(DeviceOs::Linux) => "linux",
+        Ok(DeviceOs::Macos) => "macos",
+        Ok(DeviceOs::Windows) => "windows",
+        Ok(DeviceOs::Android) => "android",
+        Ok(DeviceOs::Ios) => "ios",
+        Ok(DeviceOs::Freebsd) => "freebsd",
+        _ => "unspecified",
+    }
+}
+
+pub fn device_state_str(state: i32) -> &'static str {
+    match DeviceState::try_from(state) {
+        Ok(DeviceState::Online) => "online",
+        Ok(DeviceState::Offline) => "offline",
+        _ => "unspecified",
+    }
+}
+
 /// Validate an incoming plugin id. Rejecting bad ids at registration prevents:
 /// JSON injection (ids are embedded into event payloads), routing confusion
 /// (reserved "kernel"/"*" targets), and silent truncation (ids must fit the

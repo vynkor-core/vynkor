@@ -1,4 +1,5 @@
 pub mod complete;
+pub mod devices;
 pub mod plugin;
 
 use clap::{Parser, Subcommand};
@@ -20,6 +21,16 @@ pub enum Commands {
         #[command(subcommand)]
         cmd: PluginCmd,
 
+        #[arg(short, long, default_value = "config.yaml")]
+        config: String,
+
+        /// JWT bearer token for a secured kernel. Falls back to VEYRON_JWT_TOKEN.
+        #[arg(long)]
+        token: Option<String>,
+    },
+    /// List devices ever seen by the kernel (D-04) — identity, os, state,
+    /// last seen, capabilities.
+    Devices {
         #[arg(short, long, default_value = "config.yaml")]
         config: String,
 

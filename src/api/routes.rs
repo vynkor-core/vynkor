@@ -47,6 +47,10 @@ pub struct PluginInfo {
     pub state: String,
     pub registered_at: u64,
     pub permissions: Vec<String>,
+    /// owning device (D-02); "local" for host plugins
+    pub device_id: String,
+    /// last ping/pong of the owning device, unix millis (D-04)
+    pub last_seen: u64,
 }
 
 pub async fn list_plugins(State(state): State<Arc<AppState>>) -> Json<Vec<PluginInfo>> {
@@ -54,11 +58,21 @@ pub async fn list_plugins(State(state): State<Arc<AppState>>) -> Json<Vec<Plugin
         .manager
         .list()
         .into_iter()
-        .map(|e| PluginInfo {
-            plugin_id: e.plugin_id,
-            state: format!("{:?}", e.state),
-            registered_at: e.registered_at,
-            permissions: e.manifest.permissions,
+        .map(|e| {
+            let last_seen = state
+                .manager
+                .registry()
+                .get_device(&e.device_id)
+                .map(|d| d.last_seen)
+                .unwrap_or(0);
+            PluginInfo {
+                plugin_id: e.plugin_id,
+                state: format!("{:?}", e.state),
+                registered_at: e.registered_at,
+                permissions: e.manifest.permissions,
+                device_id: e.device_id,
+                last_seen,
+            }
         })
         .collect();
     Json(plugins)
@@ -72,14 +86,53 @@ pub async fn get_plugin(
         .manager
         .get(&id)
         .map(|e| {
+            let last_seen = state
+                .manager
+                .registry()
+                .get_device(&e.device_id)
+                .map(|d| d.last_seen)
+                .unwrap_or(0);
             Json(PluginInfo {
                 plugin_id: e.plugin_id,
                 state: format!("{:?}", e.state),
                 registered_at: e.registered_at,
                 permissions: e.manifest.permissions,
+                device_id: e.device_id,
+                last_seen,
             })
         })
         .ok_or(StatusCode::NOT_FOUND)
+}
+
+#[derive(Serialize)]
+pub struct DeviceInfoView {
+    pub device_id: String,
+    pub os: String,
+    pub arch: String,
+    pub os_version: String,
+    pub capabilities: Vec<String>,
+    /// unix millis of the last ping/pong from any plugin on the device
+    pub last_seen: u64,
+    pub state: String,
+}
+
+// D-04: discovery surface — the registry's device map as a serializable view.
+pub async fn list_devices(State(state): State<Arc<AppState>>) -> Json<Vec<DeviceInfoView>> {
+    let devices = state.manager.registry().list_devices();
+    Json(
+        devices
+            .into_iter()
+            .map(|d| DeviceInfoView {
+                device_id: d.device_id,
+                os: crate::plugins::registry::device_os_str(d.os).to_string(),
+                arch: d.arch,
+                os_version: d.os_version,
+                capabilities: d.capabilities,
+                last_seen: d.last_seen,
+                state: crate::plugins::registry::device_state_str(d.state).to_string(),
+            })
+            .collect(),
+    )
 }
 
 /// Spawn a plugin declared under `plugins:` in config.yaml. 404 when `id`
