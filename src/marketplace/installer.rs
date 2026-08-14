@@ -12,7 +12,8 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 use crate::marketplace::registry::{
-    check_kernel_compatibility, verify_entry_signature, RegistryEntry,
+    check_kernel_compatibility, resolve_relative_archive_urls, verify_entry_signature,
+    RegistryEntry,
 };
 use crate::marketplace::state::{load_state, record_install, InstalledEntry};
 use crate::proto::veyron::PermissionType;
@@ -211,7 +212,23 @@ pub async fn install(
     let _ = fs::remove_dir_all(&stage_dir);
     fs::create_dir_all(&stage_dir).map_err(VeyronError::Io)?;
 
-    // Step 3 — Download to $TMPDIR
+    // Step 3 — Maintainer signature check (T-11). S1 binds the full entry:
+    // slug/version/sha256/status/archive_url (as served)/min/max_kernel_version
+    // are all signed, so a compromised channel can't flip `revoked → stable`,
+    // redirect `archive_url` to an arbitrary URL, or loosen the compat range
+    // without breaking the signature. Runs before the download so a forged
+    // archive_url can never trigger a request (request forgery).
+    if let Err(e) = verify_entry_signature(entry, marketplace_public_key) {
+        let _ = fs::remove_dir_all(&stage_dir);
+        return Err(e);
+    }
+
+    // The signature binds the archive_url as served — a relative URL (registry
+    // v2) is resolved against the registry base only now, after verification.
+    let mut entry = entry.clone();
+    resolve_relative_archive_urls(std::slice::from_mut(&mut entry), source_url);
+
+    // Step 4 — Download to $TMPDIR
     let bytes =
         match download_with_progress(&entry.archive_url, &entry.slug, max_archive_bytes).await {
             Ok(b) => b,
@@ -227,7 +244,7 @@ pub async fn install(
         return Err(VeyronError::Io(e));
     }
 
-    // Step 4 — SHA-256 integrity check
+    // Step 5 — SHA-256 integrity check
     let actual_hash = hex_encode(&Sha256::digest(&bytes));
     if actual_hash != entry.sha256 {
         let _ = fs::remove_dir_all(&stage_dir);
@@ -237,15 +254,7 @@ pub async fn install(
         )));
     }
 
-    // Step 4b — Maintainer signature check (T-11). Independent of the sha256
-    // above: a compromised registry-serving channel controls both the
-    // archive and its hash, but not the offline maintainer signing key.
-    if let Err(e) = verify_entry_signature(entry, marketplace_public_key) {
-        let _ = fs::remove_dir_all(&stage_dir);
-        return Err(e);
-    }
-
-    // Step 5 — Extract to temporary folder (zip-slip protection)
+    // Step 6 — Extract to temporary folder (zip-slip protection)
     let extract_dir = stage_dir.join("extracted");
     if let Err(e) = fs::create_dir_all(&extract_dir) {
         let _ = fs::remove_dir_all(&stage_dir);
@@ -268,7 +277,7 @@ pub async fn install(
         return Err(e);
     }
 
-    // Step 6 — Atomic move to plugin directory
+    // Step 7 — Atomic move to plugin directory
     if let Err(e) = fs::create_dir_all(&plugin_base) {
         let _ = fs::remove_dir_all(&stage_dir);
         return Err(VeyronError::Io(e));
@@ -295,7 +304,7 @@ pub async fn install(
         return Err(VeyronError::Io(e));
     }
 
-    // Step 7 — Final validation of plugin.json
+    // Step 8 — Final validation of plugin.json
     let manifest_path = dest.join("plugin.json");
     let manifest = match validate_manifest(&manifest_path, &kernel_ver) {
         Ok(m) => m,
@@ -330,7 +339,7 @@ pub async fn install(
         },
     )?;
 
-    // Step 8 — Success output
+    // Step 9 — Success output
     let dest_str = dest.display();
     println!(
         "✓ Installed {} v{} to {dest_str}/\n   Auto-spawn entry: plugins.d/{}.yaml",

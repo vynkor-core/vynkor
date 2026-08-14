@@ -119,6 +119,79 @@ async fn install_refuses_revoked_entry() {
     );
 }
 
+// S1 regression test vector: signs the canonical stable entry
+// `stt-whisper:1.0.0:deadbeef:stable::0.1.0:*` (empty archive_url). Mirrors
+// the constants in `registry.rs::tests` — never a real signing key.
+const TEST_SIG_STABLE_HEX: &str =
+    "bf705a101881df3974d3ee3b497bce053d5a12d51fca4e2011fe4a07b8006525b8cb793c10cdea0418a9f2b7640fcd70b9346accf38ba3e1a39079938f550c05";
+
+/// An entry whose signature is valid for the exact `TEST_SIG_STABLE_HEX`
+/// message — mutating any bound field must fail verification.
+fn signed_stable_entry() -> RegistryEntry {
+    let mut entry = make_entry("stt-whisper", "0.1.0", "*");
+    entry.sha256 = "deadbeef".into();
+    entry.signature = TEST_SIG_STABLE_HEX.into();
+    entry
+}
+
+#[tokio::test]
+async fn install_rejects_unverified_entry_before_any_download() {
+    // Empty signature + a URL that would fail fast if a download were
+    // attempted — the signature check must run first (S1), so the error is
+    // the signature one, never a download error.
+    let mut entry = make_entry("unverified-plugin", "0.1.0", "*");
+    entry.sha256 = "deadbeef".into();
+    let err = match install(
+        &[entry],
+        "unverified-plugin",
+        tempdir().unwrap().path(),
+        1024 * 1024,
+        1024 * 1024,
+        10_000,
+        None,
+        "https://registry.example",
+    )
+    .await
+    {
+        Ok(_) => panic!("unverified install must fail"),
+        Err(e) => e,
+    };
+    let msg = err.to_string();
+    assert!(
+        msg.contains("signature") && msg.contains("do not proceed"),
+        "expected a signature error before download, got: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn install_rejects_archive_url_tamper_before_download() {
+    // S1 regression at the install level: a compromised channel redirects
+    // archive_url; the signature no longer binds it, so install fails at the
+    // signature check — the forged URL is never requested.
+    let mut entry = signed_stable_entry();
+    entry.archive_url = "http://127.0.0.1:1/evil.zip".into();
+    let err = match install(
+        &[entry],
+        "stt-whisper",
+        tempdir().unwrap().path(),
+        1024 * 1024,
+        1024 * 1024,
+        10_000,
+        None,
+        "https://registry.example",
+    )
+    .await
+    {
+        Ok(_) => panic!("tampered install must fail"),
+        Err(e) => e,
+    };
+    let msg = err.to_string();
+    assert!(
+        msg.contains("signature") && msg.contains("do not proceed"),
+        "expected a signature error for the tampered URL, got: {msg}"
+    );
+}
+
 // Step 5: zip-slip via ".." rejected
 #[test]
 fn zip_slip_dotdot_rejected() {

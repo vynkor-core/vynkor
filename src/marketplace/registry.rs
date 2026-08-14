@@ -17,7 +17,13 @@ pub const DEFAULT_REGISTRY_URL: &str =
 
 /// Bump whenever the on-disk cache layout changes incompatibly — a cache
 /// written by an older kernel must be read as empty, never misread.
-pub const REGISTRY_CACHE_SCHEMA_VERSION: u32 = 1;
+///
+/// v2 (S1): entries now store the archive_url exactly as served (relative
+/// URLs are no longer resolved at fetch time — resolution moved to install,
+/// after signature verification, because the signature binds the as-served
+/// URL). A v1 cache holds resolved URLs whose signatures were computed over
+/// the old message and would fail verification under the new one.
+pub const REGISTRY_CACHE_SCHEMA_VERSION: u32 = 2;
 
 /// Ed25519 public key (hex, 32 bytes) pinned at compile time. `sha256` alone
 /// (T-11) proves nothing about publisher trust if the channel serving
@@ -62,8 +68,10 @@ pub struct RegistryEntry {
     pub min_kernel_version: String,
     #[serde(default)]
     pub max_kernel_version: String,
-    /// Ed25519 signature (hex, 64 bytes) over `"{slug}:{version}:{sha256}"`,
-    /// produced by the maintainer key whose public half is pinned in
+    /// Ed25519 signature (hex, 64 bytes) over the full canonical entry
+    /// `"{slug}:{version}:{sha256}:{status}:{archive_url}:{min_kernel_version}:
+    /// {max_kernel_version}"` (see [`signed_message`]), produced by the
+    /// maintainer key whose public half is pinned in
     /// [`MAINTAINER_PUBLIC_KEY_HEX`] (or an operator-configured override for
     /// private registries). Defaults empty for old cached/serialized entries
     /// — `verify_entry_signature` rejects an empty or malformed signature
@@ -155,9 +163,23 @@ fn hex_decode(s: &str) -> Result<Vec<u8>, VeyronError> {
 /// The message a maintainer signature is computed over. Binding `slug` and
 /// `version` (not just `sha256`) prevents an attacker who controls the
 /// serving channel from splicing a valid signature from one entry onto a
-/// different entry that happens to share the same archive hash.
+/// different entry that happens to share the same archive hash. Binding the
+/// full canonical entry — `status`, `archive_url` (as served, relative URLs
+/// included), and the kernel-compat bounds — closes the S1 gaps: a
+/// compromised channel can no longer flip `revoked → stable` (the entry still
+/// verifies), redirect `archive_url` to an arbitrary URL, or loosen the
+/// compat range without breaking the signature.
 fn signed_message(entry: &RegistryEntry) -> String {
-    format!("{}:{}:{}", entry.slug, entry.version, entry.sha256)
+    format!(
+        "{}:{}:{}:{}:{}:{}:{}",
+        entry.slug,
+        entry.version,
+        entry.sha256,
+        entry.status,
+        entry.archive_url,
+        entry.min_kernel_version,
+        entry.max_kernel_version,
+    )
 }
 
 /// Verify `entry.signature` against `public_key_hex` (pass `None` to use the
@@ -194,7 +216,8 @@ pub fn verify_entry_signature(
         .map_err(|_| {
             VeyronError::Internal(format!(
                 "Plugin '{}' failed signature verification — the maintainer signature does not \
-                 match slug/version/sha256. Aborting — do not proceed.",
+                 match the entry (slug/version/sha256/status/archive_url/kernel-compat). \
+                 Aborting — do not proceed.",
                 entry.slug
             ))
         })
@@ -504,7 +527,11 @@ pub async fn fetch_registry_with_url(
 /// carry an absolute URL are left untouched. Entries whose URL cannot be
 /// resolved (malformed base or unjoinable path) are left as-is — the
 /// install path surfaces the resulting download error.
-fn resolve_relative_archive_urls(entries: &mut [RegistryEntry], base_url: &str) {
+///
+/// S1: resolution happens only at install time, after `verify_entry_signature`
+/// — the signature binds the archive_url exactly as served, so a relative URL
+/// must be verified in that raw form and resolved afterwards.
+pub(crate) fn resolve_relative_archive_urls(entries: &mut [RegistryEntry], base_url: &str) {
     let Ok(base) = url::Url::parse(base_url) else {
         tracing::warn!(
             "registry: cannot resolve relative archive_urls against non-URL base {base_url:?}"
@@ -543,8 +570,10 @@ pub(crate) async fn fetch_registry_from(
 
     match fetch_from_network(url).await {
         Ok(body) => {
-            let mut doc = parse_registry_document(&body)?;
-            resolve_relative_archive_urls(&mut doc.entries, url);
+            // Entries stay as served — relative archive_urls are resolved at
+            // install time, after signature verification (S1: the signature
+            // binds the as-served URL; resolving here would break it).
+            let doc = parse_registry_document(&body)?;
             let (verified, dropped) = verify_entries(&doc.entries, public_key);
             if !dropped.is_empty() {
                 if verified.is_empty() {
@@ -655,13 +684,21 @@ mod tests {
         }
     }
 
-    // A `make_entry` whose signature verifies under TEST_PUB_HEX (the fixed
-    // test vector signs "stt-whisper:1.0.0:deadbeef").
+    // A `make_entry` whose signature verifies under TEST_PUB_HEX. Each fixed
+    // test vector signs the full canonical message
+    // `slug:version:sha256:status:archive_url:min:max` (S1) — see the
+    // constants at the bottom of this module.
     fn signed_entry(status: &str) -> RegistryEntry {
         let mut entry = make_entry("0.1.0", "*");
         entry.sha256 = "deadbeef".into();
-        entry.signature = TEST_SIG_HEX.into();
         entry.status = status.into();
+        entry.signature = match status {
+            "stable" => TEST_SIG_STABLE_HEX.into(),
+            "revoked" => TEST_SIG_REVOKED_HEX.into(),
+            // other statuses are only ever checked for is_revoked(), never
+            // signature-verified — any non-empty value is fine
+            _ => TEST_SIG_STABLE_HEX.into(),
+        };
         entry
     }
 
@@ -1006,7 +1043,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(result[0].slug, "stt-whisper");
-        assert_eq!(result[0].signature, TEST_SIG_HEX);
+        assert_eq!(result[0].signature, TEST_SIG_STABLE_HEX);
     }
 
     #[tokio::test]
@@ -1260,7 +1297,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fetch_resolves_relative_archive_urls_against_registry_base() {
+    async fn fetch_keeps_relative_archive_url_as_served() {
+        // S1: the signature binds the as-served (relative) archive_url, so
+        // fetch must not resolve it — install resolves after verification.
         let mut server = mockito::Server::new_async().await;
         let body = format!(
             r#"{{
@@ -1280,7 +1319,7 @@ mod tests {
                 }}
               }}
             }}"#,
-            sig = TEST_SIG_HEX
+            sig = TEST_SIG_RELATIVE_HEX
         );
 
         let mock = server
@@ -1307,12 +1346,17 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(result.len(), 1);
+        // the relative URL survives fetch untouched — and the entry verified
+        // (it made it into the cache in its raw form)
         assert_eq!(
             result[0].archive_url,
-            format!(
-                "{}/dist/stt-whisper/versions/1.0.0/stt-whisper-1.0.0.zip",
-                server.url()
-            )
+            "dist/stt-whisper/versions/1.0.0/stt-whisper-1.0.0.zip"
+        );
+        let parsed = read_cache_file(&cache).unwrap();
+        assert_eq!(parsed.entries.len(), 1);
+        assert_eq!(
+            parsed.entries[0].archive_url,
+            "dist/stt-whisper/versions/1.0.0/stt-whisper-1.0.0.zip"
         );
 
         mock.assert_async().await;
@@ -1371,17 +1415,29 @@ mod tests {
         mock.assert_async().await;
     }
 
-    // Fixed Ed25519 test vector: signs `"stt-whisper:1.0.0:deadbeef"`.
-    // Independent of MAINTAINER_PUBLIC_KEY_HEX — never reuse a real signing
-    // key in tests.
-    const TEST_PUB_HEX: &str = "6c4850b5614a1b4d91591408aff0cf9c40e9f00f845a7371506689851d82a864";
-    const TEST_SIG_HEX: &str = "9b9700219f9ed1a2b5ade515a3c130b20e096c42d5f5e39d1a06b1975065e59dabf25827147842f51794a635c29849f6cca2f28933a96bd750db56a298b09e0f";
+    // Fixed Ed25519 test vectors. Each signature signs the FULL canonical
+    // message (S1): `{slug}:{version}:{sha256}:{status}:{archive_url}:{min}:
+    // {max}`. Independent of MAINTAINER_PUBLIC_KEY_HEX — never reuse a real
+    // signing key in tests. Generated offline; the vector tests below pin the
+    // exact message format (a runtime-signing helper would share
+    // `signed_message` with the verifier and mask a format bug).
+    const TEST_PUB_HEX: &str = "f739009793489cbdcdc85b4e1c7ea240ba5b7d77c063dde74ba5fc276141e05a";
+    // signs "stt-whisper:1.0.0:deadbeef:stable::0.1.0:*" (archive_url empty)
+    const TEST_SIG_STABLE_HEX: &str = "bf705a101881df3974d3ee3b497bce053d5a12d51fca4e2011fe4a07b8006525b8cb793c10cdea0418a9f2b7640fcd70b9346accf38ba3e1a39079938f550c05";
+    // signs "stt-whisper:1.0.0:deadbeef:revoked::0.1.0:*"
+    const TEST_SIG_REVOKED_HEX: &str = "fe5e4d32772345c35fc808219c938ce317047177e4e6530c8a5c4aeccd522f6e8658cdec082c48bf0c8da19039586b0e96f225e8c45eedd79951d0ef9a3ac60e";
+    // signs "stt-whisper:1.0.0:deadbeef:stable:dist/stt-whisper/versions/1.0.0/stt-whisper-1.0.0.zip:0.1.0:*"
+    const TEST_SIG_RELATIVE_HEX: &str = "f46ace42954edf4e5648aafef24e076224bf6187f4adbce9204c66a81ad170adadadab3395067dc3ba57a7c9aaf50cf6fe045f9383acce4ea4d30d8823e73b06";
+
+    /// A `signed_entry` with `status`/`archive_url`/compat bounds exactly as
+    /// the stable vector signed them — mutating any bound field must break it.
+    fn signed_stable_entry() -> RegistryEntry {
+        signed_entry("stable")
+    }
 
     #[test]
     fn signature_verifies_with_matching_key_and_message() {
-        let mut entry = make_entry("0.1.0", "*");
-        entry.sha256 = "deadbeef".into();
-        entry.signature = TEST_SIG_HEX.into();
+        let entry = signed_stable_entry();
         assert!(verify_entry_signature(&entry, Some(TEST_PUB_HEX)).is_ok());
     }
 
@@ -1390,10 +1446,50 @@ mod tests {
         // Same signature, but sha256 no longer matches what was signed —
         // simulates a compromised registry host swapping the archive/hash
         // while leaving an old valid-looking signature in place.
-        let mut entry = make_entry("0.1.0", "*");
+        let mut entry = signed_stable_entry();
         entry.sha256 = "cafebabe".into();
-        entry.signature = TEST_SIG_HEX.into();
         assert!(verify_entry_signature(&entry, Some(TEST_PUB_HEX)).is_err());
+    }
+
+    #[test]
+    fn signature_rejected_when_status_tampered() {
+        // S1 regression: a compromised channel flips revoked → stable; the
+        // signature must no longer verify, so the is_revoked gate can't be
+        // bypassed by an attacker who controls the serving channel.
+        let mut entry = signed_stable_entry();
+        entry.status = "revoked".into();
+        assert!(verify_entry_signature(&entry, Some(TEST_PUB_HEX)).is_err());
+    }
+
+    #[test]
+    fn signature_rejected_when_archive_url_tampered() {
+        // S1 regression: a compromised channel redirects archive_url to an
+        // arbitrary URL (request forgery) — the signature must break.
+        let mut entry = signed_stable_entry();
+        entry.archive_url = "https://evil.example/plugin.zip".into();
+        assert!(verify_entry_signature(&entry, Some(TEST_PUB_HEX)).is_err());
+    }
+
+    #[test]
+    fn signature_rejected_when_kernel_bounds_tampered() {
+        // S1: loosening min/max_kernel_version must break the signature too.
+        let mut entry = signed_stable_entry();
+        entry.min_kernel_version = "0.0.1".into();
+        assert!(verify_entry_signature(&entry, Some(TEST_PUB_HEX)).is_err());
+        let mut entry = signed_stable_entry();
+        entry.max_kernel_version = "9.9.9".into();
+        assert!(verify_entry_signature(&entry, Some(TEST_PUB_HEX)).is_err());
+    }
+
+    #[test]
+    fn relative_archive_url_verifies_in_as_served_form() {
+        // The stable vector's relative-URL sibling: a registry v2 entry whose
+        // archive_url is relative verifies in that raw form (S1) — install
+        // resolves it after verification.
+        let mut entry = signed_stable_entry();
+        entry.archive_url = "dist/stt-whisper/versions/1.0.0/stt-whisper-1.0.0.zip".into();
+        entry.signature = TEST_SIG_RELATIVE_HEX.into();
+        assert!(verify_entry_signature(&entry, Some(TEST_PUB_HEX)).is_ok());
     }
 
     #[test]
@@ -1406,9 +1502,7 @@ mod tests {
 
     #[test]
     fn signature_rejected_with_wrong_public_key() {
-        let mut entry = make_entry("0.1.0", "*");
-        entry.sha256 = "deadbeef".into();
-        entry.signature = TEST_SIG_HEX.into();
+        let entry = signed_stable_entry();
         // Pinned maintainer key, not the test key that actually signed this.
         assert!(verify_entry_signature(&entry, None).is_err());
     }
