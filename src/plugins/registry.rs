@@ -11,6 +11,42 @@ pub enum PluginState {
     Registered,
 }
 
+/// Kernel-local device record (D-02). Kernel runs `veyron-wire` 0.2.2 (proto
+/// v1.5) with no `DeviceInfo` message yet — D-03 bumps to 0.2.3 and swaps this
+/// for the wire type; kept shape-compatible so the swap is mechanical.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceInfo {
+    pub device_id: String,
+    /// free-form until D-03 wires the `DeviceOs` enum
+    pub os: String,
+    pub arch: String,
+    pub os_version: String,
+    pub capabilities: Vec<String>,
+    /// unix millis of the last ping/pong (reuses `pong_times`)
+    pub last_seen: u64,
+    pub state: DeviceState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceState {
+    Online,
+    Offline,
+}
+
+impl DeviceInfo {
+    fn new(device_id: &str, now_ms: u64) -> Self {
+        DeviceInfo {
+            device_id: device_id.to_string(),
+            os: String::new(),
+            arch: String::new(),
+            os_version: String::new(),
+            capabilities: Vec::new(),
+            last_seen: now_ms,
+            state: DeviceState::Online,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum ActionLookup {
     NotFound,
@@ -58,12 +94,18 @@ pub struct PluginEntry {
     pub write_tx: mpsc::Sender<Outbound>,
     pub registered_at: u64,
     pub state: PluginState,
+    /// owning device (D-02); "local" for host plugins that don't declare one
+    pub device_id: String,
+    /// owning user (D-02); "default" for single-user deployments
+    pub user_id: String,
 }
 
 pub struct PluginRegistry {
     by_plugin_id: DashMap<String, PluginEntry>,
     by_conn_id: DashMap<u64, String>,
     pong_times: DashMap<String, Instant>,
+    /// one record per device_id (D-02); `last_seen` advances on ping/pong
+    devices: DashMap<String, DeviceInfo>,
     pending_actions: DashMap<String, PendingAction>,
     /// Manifest v2 per-action requirements: provider plugin_id → (action name →
     /// required PermissionType). Populated at load time from the manifest; the
@@ -77,6 +119,7 @@ impl PluginRegistry {
             by_plugin_id: DashMap::new(),
             by_conn_id: DashMap::new(),
             pong_times: DashMap::new(),
+            devices: DashMap::new(),
             pending_actions: DashMap::new(),
             action_requirements: DashMap::new(),
         }
@@ -88,6 +131,8 @@ impl PluginRegistry {
         conn_id: u64,
         manifest: PluginManifest,
         write_tx: mpsc::Sender<Outbound>,
+        device_id: &str,
+        user_id: &str,
     ) -> Result<(), VeyronError> {
         use dashmap::mapref::entry::Entry;
 
@@ -118,10 +163,24 @@ impl PluginRegistry {
             Entry::Vacant(v) => v,
         };
 
+        // D-02: host plugins (no device identity on the wire until D-03) fall
+        // back to the local single-user deployment.
+        let device_id = if device_id.is_empty() {
+            "local"
+        } else {
+            device_id
+        };
+        let user_id = if user_id.is_empty() {
+            "default"
+        } else {
+            user_id
+        };
+
         let registered_at = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
+        let now_ms = unix_millis();
 
         let entry = PluginEntry {
             plugin_id: plugin_id.clone(),
@@ -130,10 +189,22 @@ impl PluginRegistry {
             write_tx,
             registered_at,
             state: PluginState::Registered,
+            device_id: device_id.to_string(),
+            user_id: user_id.to_string(),
         };
 
         conn_slot.insert(plugin_id.clone());
         self.pong_times.insert(plugin_id, Instant::now());
+        // a registering plugin proves its device is alive — upsert the record
+        match self.devices.entry(device_id.to_string()) {
+            Entry::Occupied(mut occ) => {
+                occ.get_mut().last_seen = now_ms;
+                occ.get_mut().state = DeviceState::Online;
+            }
+            Entry::Vacant(v) => {
+                v.insert(DeviceInfo::new(device_id, now_ms));
+            }
+        }
         plugin_slot.insert(entry);
         Ok(())
     }
@@ -143,12 +214,27 @@ impl PluginRegistry {
             self.by_conn_id.remove(&entry.conn_id);
             self.pong_times.remove(plugin_id);
             self.clear_action_requirements(plugin_id);
+            // D-02: a device is offline once none of its plugins remain
+            let device_id = &entry.device_id;
+            let still_registered = self.by_plugin_id.iter().any(|e| e.device_id == *device_id);
+            if !still_registered {
+                if let Some(mut dev) = self.devices.get_mut(device_id) {
+                    dev.state = DeviceState::Offline;
+                }
+            }
         }
     }
 
     pub fn record_pong(&self, plugin_id: &str) {
         self.pong_times
             .insert(plugin_id.to_string(), Instant::now());
+        // D-02: a pong proves the owning device is alive — advance last_seen
+        if let Some(entry) = self.by_plugin_id.get(plugin_id) {
+            if let Some(mut dev) = self.devices.get_mut(&entry.device_id) {
+                dev.last_seen = unix_millis();
+                dev.state = DeviceState::Online;
+            }
+        }
     }
 
     pub fn last_pong(&self, plugin_id: &str) -> Option<Instant> {
@@ -157,6 +243,16 @@ impl PluginRegistry {
 
     pub fn get(&self, plugin_id: &str) -> Option<PluginEntry> {
         self.by_plugin_id.get(plugin_id).map(|e| e.clone())
+    }
+
+    /// Device record for `device_id`, if any plugin ever registered from it.
+    pub fn get_device(&self, device_id: &str) -> Option<DeviceInfo> {
+        self.devices.get(device_id).map(|d| d.clone())
+    }
+
+    /// All known devices (D-02), for the discovery surface (D-04).
+    pub fn list_devices(&self) -> Vec<DeviceInfo> {
+        self.devices.iter().map(|d| d.value().clone()).collect()
     }
 
     /// Manifest v2: store the provider-declared per-action permission
@@ -379,6 +475,13 @@ impl Default for PluginRegistry {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn unix_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 /// Validate an incoming plugin id. Rejecting bad ids at registration prevents:

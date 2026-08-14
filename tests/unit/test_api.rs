@@ -36,6 +36,8 @@ fn register(registry: &PluginRegistry, plugin_id: &str, conn_id: u64) {
             conn_id,
             PluginManifest::default(),
             tx,
+            "",
+            "",
         )
         .unwrap();
 }

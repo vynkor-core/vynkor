@@ -142,8 +142,15 @@ async fn router_forwards_frame_to_target_plugin() {
 
     // pre-register plugin B in registry
     let (b_write_tx, mut b_write_rx) = make_write_pair();
-    reg.register("plugin_b".to_string(), 2, dummy_manifest(), b_write_tx)
-        .unwrap();
+    reg.register(
+        "plugin_b".to_string(),
+        2,
+        dummy_manifest(),
+        b_write_tx,
+        "",
+        "",
+    )
+    .unwrap();
 
     // plugin A (conn_id=1): ipc_send + plugin_b in allowlist
     let (a_write_tx, _a_write_rx) = make_write_pair();
@@ -152,6 +159,8 @@ async fn router_forwards_frame_to_target_plugin() {
         1,
         ipc_manifest_with_targets(vec!["plugin_b"]),
         a_write_tx.clone(),
+        "",
+        "",
     )
     .unwrap();
 
@@ -182,12 +191,12 @@ async fn slow_target_does_not_stall_router() {
         .send(out_frame(make_frame("x", b"prefill".to_vec())))
         .await
         .unwrap();
-    reg.register("slow".to_string(), 2, dummy_manifest(), slow_tx)
+    reg.register("slow".to_string(), 2, dummy_manifest(), slow_tx, "", "")
         .unwrap();
 
     // fast target: drained normally
     let (fast_tx, mut fast_rx) = make_write_pair();
-    reg.register("fast".to_string(), 3, dummy_manifest(), fast_tx)
+    reg.register("fast".to_string(), 3, dummy_manifest(), fast_tx, "", "")
         .unwrap();
 
     // sender: ipc_send + both targets in allowlist
@@ -197,6 +206,8 @@ async fn slow_target_does_not_stall_router() {
         1,
         ipc_manifest_with_targets(vec!["slow", "fast"]),
         a_tx.clone(),
+        "",
+        "",
     )
     .unwrap();
 
@@ -239,7 +250,7 @@ async fn forward_to_full_channel_returns_without_waiting() {
         .send(out_frame(make_frame("x", b"prefill".to_vec())))
         .await
         .unwrap();
-    reg.register("stuck".to_string(), 2, dummy_manifest(), stuck_tx)
+    reg.register("stuck".to_string(), 2, dummy_manifest(), stuck_tx, "", "")
         .unwrap();
 
     let (a_tx, _a_rx) = make_write_pair();
@@ -248,6 +259,8 @@ async fn forward_to_full_channel_returns_without_waiting() {
         1,
         ipc_manifest_with_targets(vec!["stuck"]),
         a_tx.clone(),
+        "",
+        "",
     )
     .unwrap();
 
@@ -291,8 +304,15 @@ async fn router_denies_forward_without_ipc_permission() {
 
     // target plugin B registered
     let (b_write_tx, mut b_write_rx) = make_write_pair();
-    reg.register("plugin_b".to_string(), 2, dummy_manifest(), b_write_tx)
-        .unwrap();
+    reg.register(
+        "plugin_b".to_string(),
+        2,
+        dummy_manifest(),
+        b_write_tx,
+        "",
+        "",
+    )
+    .unwrap();
 
     // sender plugin A lacks PERMISSION_IPC_SEND (default-deny)
     let (a_write_tx, mut a_write_rx) = make_write_pair();
@@ -301,6 +321,8 @@ async fn router_denies_forward_without_ipc_permission() {
         1,
         dummy_manifest(),
         a_write_tx.clone(),
+        "",
+        "",
     )
     .unwrap();
 
@@ -334,11 +356,13 @@ async fn router_broadcasts_star_to_all_except_sender() {
         1,
         ipc_manifest_with_targets(vec!["plugin_b", "plugin_c"]),
         a_tx.clone(),
+        "",
+        "",
     )
     .unwrap();
-    reg.register("plugin_b".to_string(), 2, dummy_manifest(), b_tx)
+    reg.register("plugin_b".to_string(), 2, dummy_manifest(), b_tx, "", "")
         .unwrap();
-    reg.register("plugin_c".to_string(), 3, dummy_manifest(), c_tx)
+    reg.register("plugin_c".to_string(), 3, dummy_manifest(), c_tx, "", "")
         .unwrap();
 
     let router_tx = spawn_router(Arc::clone(&reg), bus);
@@ -372,9 +396,16 @@ async fn router_denies_broadcast_without_ipc_permission() {
     let (b_tx, mut b_rx) = make_write_pair();
 
     // sender plugin_a lacks PERMISSION_IPC_SEND (default-deny)
-    reg.register("plugin_a".to_string(), 1, dummy_manifest(), a_tx.clone())
-        .unwrap();
-    reg.register("plugin_b".to_string(), 2, dummy_manifest(), b_tx)
+    reg.register(
+        "plugin_a".to_string(),
+        1,
+        dummy_manifest(),
+        a_tx.clone(),
+        "",
+        "",
+    )
+    .unwrap();
+    reg.register("plugin_b".to_string(), 2, dummy_manifest(), b_tx, "", "")
         .unwrap();
 
     let router_tx = spawn_router(Arc::clone(&reg), bus);
@@ -434,6 +465,8 @@ async fn router_resets_error_budget_on_success() {
         1,
         dummy_manifest(),
         make_write_pair().0,
+        "",
+        "",
     )
     .unwrap();
     let router_tx = spawn_router(Arc::clone(&reg), bus);
@@ -464,8 +497,15 @@ async fn router_responds_to_ping_with_pong() {
     let bus = Arc::new(EventBus::new());
 
     let (write_tx, mut write_rx) = make_write_pair();
-    reg.register("pinger".to_string(), 5, dummy_manifest(), write_tx.clone())
-        .unwrap();
+    reg.register(
+        "pinger".to_string(),
+        5,
+        dummy_manifest(),
+        write_tx.clone(),
+        "",
+        "",
+    )
+    .unwrap();
 
     let router_tx = spawn_router(Arc::clone(&reg), bus);
 
@@ -524,8 +564,15 @@ async fn router_sends_error_for_unknown_target_plugin() {
     let bus = Arc::new(EventBus::new());
 
     let (write_tx, mut write_rx) = make_write_pair();
-    reg.register("sender".to_string(), 7, dummy_manifest(), write_tx.clone())
-        .unwrap();
+    reg.register(
+        "sender".to_string(),
+        7,
+        dummy_manifest(),
+        write_tx.clone(),
+        "",
+        "",
+    )
+    .unwrap();
 
     let router_tx = spawn_router(Arc::clone(&reg), bus);
 
@@ -550,7 +597,7 @@ async fn router_denies_forward_with_empty_ipc_targets() {
     let bus = Arc::new(EventBus::new());
 
     let (b_tx, mut b_rx) = make_write_pair();
-    reg.register("plugin_b".to_string(), 2, dummy_manifest(), b_tx)
+    reg.register("plugin_b".to_string(), 2, dummy_manifest(), b_tx, "", "")
         .unwrap();
 
     // sender: ipc_send granted but ipc_targets empty → deny-all
@@ -560,6 +607,8 @@ async fn router_denies_forward_with_empty_ipc_targets() {
         1,
         ipc_manifest_with_targets(vec![]),
         a_tx.clone(),
+        "",
+        "",
     )
     .unwrap();
 
@@ -585,7 +634,7 @@ async fn router_allows_forward_to_listed_ipc_target() {
     let bus = Arc::new(EventBus::new());
 
     let (b_tx, mut b_rx) = make_write_pair();
-    reg.register("plugin_b".to_string(), 2, dummy_manifest(), b_tx)
+    reg.register("plugin_b".to_string(), 2, dummy_manifest(), b_tx, "", "")
         .unwrap();
 
     // sender: ipc_send + plugin_b in allowlist
@@ -595,6 +644,8 @@ async fn router_allows_forward_to_listed_ipc_target() {
         1,
         ipc_manifest_with_targets(vec!["plugin_b"]),
         a_tx.clone(),
+        "",
+        "",
     )
     .unwrap();
 
@@ -615,10 +666,10 @@ async fn router_denies_forward_to_unlisted_ipc_target() {
     let bus = Arc::new(EventBus::new());
 
     let (b_tx, mut b_rx) = make_write_pair();
-    reg.register("plugin_b".to_string(), 2, dummy_manifest(), b_tx)
+    reg.register("plugin_b".to_string(), 2, dummy_manifest(), b_tx, "", "")
         .unwrap();
     let (c_tx, mut c_rx) = make_write_pair();
-    reg.register("plugin_c".to_string(), 3, dummy_manifest(), c_tx)
+    reg.register("plugin_c".to_string(), 3, dummy_manifest(), c_tx, "", "")
         .unwrap();
 
     // sender: ipc_send + only plugin_b allowed, not plugin_c
@@ -628,6 +679,8 @@ async fn router_denies_forward_to_unlisted_ipc_target() {
         1,
         ipc_manifest_with_targets(vec!["plugin_b"]),
         a_tx.clone(),
+        "",
+        "",
     )
     .unwrap();
 
@@ -763,7 +816,7 @@ async fn broadcast_denied_with_empty_ipc_targets() {
     let bus = Arc::new(EventBus::new());
 
     let (b_tx, mut b_rx) = make_write_pair();
-    reg.register("plugin_b".to_string(), 2, dummy_manifest(), b_tx)
+    reg.register("plugin_b".to_string(), 2, dummy_manifest(), b_tx, "", "")
         .unwrap();
 
     // sender: ipc_send granted but ipc_targets empty → deny-all
@@ -773,6 +826,8 @@ async fn broadcast_denied_with_empty_ipc_targets() {
         1,
         ipc_manifest_with_targets(vec![]),
         a_tx.clone(),
+        "",
+        "",
     )
     .unwrap();
 
@@ -797,7 +852,7 @@ async fn broadcast_strips_flag_mac_present() {
     let bus = Arc::new(EventBus::new());
 
     let (b_tx, mut b_rx) = make_write_pair();
-    reg.register("plugin_b".to_string(), 2, dummy_manifest(), b_tx)
+    reg.register("plugin_b".to_string(), 2, dummy_manifest(), b_tx, "", "")
         .unwrap();
 
     // sender: ipc_send + plugin_b in allowlist
@@ -807,6 +862,8 @@ async fn broadcast_strips_flag_mac_present() {
         1,
         ipc_manifest_with_targets(vec!["plugin_b"]),
         a_tx.clone(),
+        "",
+        "",
     )
     .unwrap();
 
@@ -835,7 +892,7 @@ async fn forward_strips_flag_mac_present() {
     let bus = Arc::new(EventBus::new());
 
     let (b_tx, mut b_rx) = make_write_pair();
-    reg.register("plugin_b".to_string(), 2, dummy_manifest(), b_tx)
+    reg.register("plugin_b".to_string(), 2, dummy_manifest(), b_tx, "", "")
         .unwrap();
 
     let (a_tx, _a_rx) = make_write_pair();
@@ -844,6 +901,8 @@ async fn forward_strips_flag_mac_present() {
         1,
         ipc_manifest_with_targets(vec!["plugin_b"]),
         a_tx.clone(),
+        "",
+        "",
     )
     .unwrap();
 
@@ -1141,8 +1200,15 @@ async fn broadcast_to_many_stuck_targets_does_not_multiply_delay() {
             .send(out_frame(make_frame("x", b"prefill".to_vec())))
             .await
             .unwrap();
-        reg.register(format!("stuck{i}"), 100 + i, dummy_manifest(), stuck_tx)
-            .unwrap();
+        reg.register(
+            format!("stuck{i}"),
+            100 + i,
+            dummy_manifest(),
+            stuck_tx,
+            "",
+            "",
+        )
+        .unwrap();
         _stuck_rxs.push(stuck_rx);
     }
 
@@ -1158,12 +1224,14 @@ async fn broadcast_to_many_stuck_targets_does_not_multiply_delay() {
             ..Default::default()
         },
         a_tx.clone(),
+        "",
+        "",
     )
     .unwrap();
 
     // Register a separate "pong" target that is NOT in sender's broadcast allowlist.
     let (pong_tx, mut pong_rx) = make_write_pair();
-    reg.register("pong".to_string(), 50, dummy_manifest(), pong_tx)
+    reg.register("pong".to_string(), 50, dummy_manifest(), pong_tx, "", "")
         .unwrap();
 
     // Sender2 (conn_id=2): a second plugin with IPC permission, ipc_targets=[pong].
@@ -1178,6 +1246,8 @@ async fn broadcast_to_many_stuck_targets_does_not_multiply_delay() {
             ..Default::default()
         },
         sender2_tx.clone(),
+        "",
+        "",
     )
     .unwrap();
 
@@ -1237,8 +1307,15 @@ async fn forward_shares_payload_without_copy() {
     let bus = Arc::new(EventBus::new());
 
     let (b_write_tx, mut b_write_rx) = make_write_pair();
-    reg.register("plugin_b".to_string(), 2, dummy_manifest(), b_write_tx)
-        .unwrap();
+    reg.register(
+        "plugin_b".to_string(),
+        2,
+        dummy_manifest(),
+        b_write_tx,
+        "",
+        "",
+    )
+    .unwrap();
 
     let (a_write_tx, _a_write_rx) = make_write_pair();
     reg.register(
@@ -1246,6 +1323,8 @@ async fn forward_shares_payload_without_copy() {
         1,
         ipc_manifest_with_targets(vec!["plugin_b"]),
         a_write_tx.clone(),
+        "",
+        "",
     )
     .unwrap();
 
@@ -1287,11 +1366,13 @@ async fn broadcast_shares_payload_without_copy() {
         1,
         ipc_manifest_with_targets(vec!["plugin_b", "plugin_c"]),
         a_tx.clone(),
+        "",
+        "",
     )
     .unwrap();
-    reg.register("plugin_b".to_string(), 2, dummy_manifest(), b_tx)
+    reg.register("plugin_b".to_string(), 2, dummy_manifest(), b_tx, "", "")
         .unwrap();
-    reg.register("plugin_c".to_string(), 3, dummy_manifest(), c_tx)
+    reg.register("plugin_c".to_string(), 3, dummy_manifest(), c_tx, "", "")
         .unwrap();
 
     let router_tx = spawn_router(Arc::clone(&reg), bus);

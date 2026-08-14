@@ -1,6 +1,7 @@
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc;
-use veyron::plugins::registry::{PluginRegistry, PluginState};
+use veyron::plugins::registry::{DeviceState, PluginRegistry, PluginState};
 use veyron::proto::veyron::PluginManifest;
 use veyron::utils::errors::VeyronError;
 
@@ -26,6 +27,8 @@ fn register_then_get_returns_entry() {
         42,
         dummy_manifest(),
         dummy_write_tx(),
+        "",
+        "",
     )
     .expect("register must succeed");
 
@@ -33,6 +36,9 @@ fn register_then_get_returns_entry() {
     assert_eq!(entry.plugin_id, "weather");
     assert_eq!(entry.conn_id, 42);
     assert!(matches!(entry.state, PluginState::Registered));
+    // D-02: a plugin that declares no device identity is a host plugin
+    assert_eq!(entry.device_id, "local");
+    assert_eq!(entry.user_id, "default");
 }
 
 #[test]
@@ -51,7 +57,14 @@ fn register_rejects_invalid_plugin_ids() {
     ];
 
     for id in bad {
-        let res = reg.register(id.to_string(), 1, dummy_manifest(), dummy_write_tx());
+        let res = reg.register(
+            id.to_string(),
+            1,
+            dummy_manifest(),
+            dummy_write_tx(),
+            "",
+            "",
+        );
         assert!(
             matches!(res, Err(VeyronError::InvalidPluginId(_))),
             "id {id:?} must be rejected, got {res:?}"
@@ -64,6 +77,8 @@ fn register_rejects_invalid_plugin_ids() {
         1,
         dummy_manifest(),
         dummy_write_tx(),
+        "",
+        "",
     )
     .expect("a well-formed id must register");
 }
@@ -72,10 +87,24 @@ fn register_rejects_invalid_plugin_ids() {
 fn duplicate_plugin_id_rejected() {
     let reg = PluginRegistry::new();
 
-    reg.register("dup".to_string(), 1, dummy_manifest(), dummy_write_tx())
-        .expect("first register must succeed");
+    reg.register(
+        "dup".to_string(),
+        1,
+        dummy_manifest(),
+        dummy_write_tx(),
+        "",
+        "",
+    )
+    .expect("first register must succeed");
 
-    let result = reg.register("dup".to_string(), 2, dummy_manifest(), dummy_write_tx());
+    let result = reg.register(
+        "dup".to_string(),
+        2,
+        dummy_manifest(),
+        dummy_write_tx(),
+        "",
+        "",
+    );
 
     assert!(
         matches!(result, Err(VeyronError::PluginAlreadyRegistered(_))),
@@ -88,11 +117,25 @@ fn duplicate_plugin_id_rejected() {
 fn second_registration_on_same_conn_rejected_without_orphaning() {
     let reg = PluginRegistry::new();
 
-    reg.register("first".to_string(), 7, dummy_manifest(), dummy_write_tx())
-        .expect("first register must succeed");
+    reg.register(
+        "first".to_string(),
+        7,
+        dummy_manifest(),
+        dummy_write_tx(),
+        "",
+        "",
+    )
+    .expect("first register must succeed");
 
     // same conn_id, different plugin_id — must be rejected
-    let result = reg.register("second".to_string(), 7, dummy_manifest(), dummy_write_tx());
+    let result = reg.register(
+        "second".to_string(),
+        7,
+        dummy_manifest(),
+        dummy_write_tx(),
+        "",
+        "",
+    );
     assert!(
         matches!(result, Err(VeyronError::PluginAlreadyRegistered(_))),
         "re-registration on a live conn must be rejected, got {:?}",
@@ -121,8 +164,15 @@ fn second_registration_on_same_conn_rejected_without_orphaning() {
 fn unregister_removes_from_both_indexes() {
     let reg = PluginRegistry::new();
 
-    reg.register("gone".to_string(), 99, dummy_manifest(), dummy_write_tx())
-        .unwrap();
+    reg.register(
+        "gone".to_string(),
+        99,
+        dummy_manifest(),
+        dummy_write_tx(),
+        "",
+        "",
+    )
+    .unwrap();
 
     reg.unregister("gone");
 
@@ -140,12 +190,33 @@ fn unregister_removes_from_both_indexes() {
 fn list_returns_all_registered_plugins() {
     let reg = PluginRegistry::new();
 
-    reg.register("a".to_string(), 1, dummy_manifest(), dummy_write_tx())
-        .unwrap();
-    reg.register("b".to_string(), 2, dummy_manifest(), dummy_write_tx())
-        .unwrap();
-    reg.register("c".to_string(), 3, dummy_manifest(), dummy_write_tx())
-        .unwrap();
+    reg.register(
+        "a".to_string(),
+        1,
+        dummy_manifest(),
+        dummy_write_tx(),
+        "",
+        "",
+    )
+    .unwrap();
+    reg.register(
+        "b".to_string(),
+        2,
+        dummy_manifest(),
+        dummy_write_tx(),
+        "",
+        "",
+    )
+    .unwrap();
+    reg.register(
+        "c".to_string(),
+        3,
+        dummy_manifest(),
+        dummy_write_tx(),
+        "",
+        "",
+    )
+    .unwrap();
 
     let list = reg.list();
     assert_eq!(list.len(), 3);
@@ -160,8 +231,15 @@ fn list_returns_all_registered_plugins() {
 fn is_registered_returns_true_for_known_conn_id() {
     let reg = PluginRegistry::new();
 
-    reg.register("ping".to_string(), 77, dummy_manifest(), dummy_write_tx())
-        .unwrap();
+    reg.register(
+        "ping".to_string(),
+        77,
+        dummy_manifest(),
+        dummy_write_tx(),
+        "",
+        "",
+    )
+    .unwrap();
 
     assert!(reg.is_registered(77));
     assert!(!reg.is_registered(999));
@@ -171,8 +249,15 @@ fn is_registered_returns_true_for_known_conn_id() {
 fn get_by_conn_id_returns_correct_entry() {
     let reg = PluginRegistry::new();
 
-    reg.register("alarm".to_string(), 55, dummy_manifest(), dummy_write_tx())
-        .unwrap();
+    reg.register(
+        "alarm".to_string(),
+        55,
+        dummy_manifest(),
+        dummy_write_tx(),
+        "",
+        "",
+    )
+    .unwrap();
 
     let entry = reg.get_by_conn_id(55).expect("must find by conn_id");
     assert_eq!(entry.plugin_id, "alarm");
@@ -194,7 +279,7 @@ fn registry_is_thread_safe() {
         let reg = Arc::clone(&reg);
         handles.push(std::thread::spawn(move || {
             let id = format!("plugin_{}", i);
-            let _ = reg.register(id, i, dummy_manifest(), dummy_write_tx());
+            let _ = reg.register(id, i, dummy_manifest(), dummy_write_tx(), "", "");
         }));
     }
 
@@ -222,6 +307,8 @@ fn concurrent_registration_of_same_plugin_id_has_exactly_one_winner() {
                 conn_id,
                 dummy_manifest(),
                 dummy_write_tx(),
+                "",
+                "",
             )
             .is_ok()
         }));
@@ -241,8 +328,15 @@ fn concurrent_registration_of_same_plugin_id_has_exactly_one_winner() {
 fn entry_has_registered_at_timestamp() {
     let reg = PluginRegistry::new();
 
-    reg.register("ts".to_string(), 1, dummy_manifest(), dummy_write_tx())
-        .unwrap();
+    reg.register(
+        "ts".to_string(),
+        1,
+        dummy_manifest(),
+        dummy_write_tx(),
+        "",
+        "",
+    )
+    .unwrap();
 
     let entry = reg.get("ts").unwrap();
     // registered_at should be non-zero (Unix timestamp in seconds)
@@ -266,6 +360,8 @@ fn find_action_provider_returns_not_found_when_no_provider() {
         1,
         manifest_with_actions(&["get_forecast"]),
         dummy_write_tx(),
+        "",
+        "",
     )
     .unwrap();
 
@@ -285,6 +381,8 @@ fn find_action_provider_returns_found_for_single_provider() {
         1,
         manifest_with_actions(&["get_weather"]),
         dummy_write_tx(),
+        "",
+        "",
     )
     .unwrap();
 
@@ -304,6 +402,8 @@ fn find_action_provider_returns_ambiguous_for_multiple_providers() {
         1,
         manifest_with_actions(&["get_weather"]),
         dummy_write_tx(),
+        "",
+        "",
     )
     .unwrap();
     reg.register(
@@ -311,6 +411,8 @@ fn find_action_provider_returns_ambiguous_for_multiple_providers() {
         2,
         manifest_with_actions(&["get_weather"]),
         dummy_write_tx(),
+        "",
+        "",
     )
     .unwrap();
 
@@ -323,7 +425,7 @@ fn find_action_provider_returns_ambiguous_for_multiple_providers() {
     }
 }
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use veyron::plugins::registry::PendingAction;
 
 fn dummy_pending(original_action_id: &str, deadline: Instant) -> PendingAction {
@@ -783,4 +885,184 @@ fn sweep_expired_actions_skips_accepted_sessions() {
     assert!(registry
         .get_pending_action("kact-accepted-past-deadline")
         .is_some());
+}
+
+// ── D-02: device/user identity + devices map ──────────────────────────────
+
+#[test]
+fn register_stores_declared_device_and_user() {
+    let reg = PluginRegistry::new();
+
+    reg.register(
+        "weather".to_string(),
+        42,
+        dummy_manifest(),
+        dummy_write_tx(),
+        "phone-7f3a",
+        "behzod",
+    )
+    .expect("register must succeed");
+
+    let entry = reg.get("weather").expect("get must return entry");
+    assert_eq!(entry.device_id, "phone-7f3a");
+    assert_eq!(entry.user_id, "behzod");
+}
+
+#[test]
+fn register_populates_devices_map() {
+    let reg = PluginRegistry::new();
+    let before = unix_millis_now();
+
+    reg.register(
+        "weather".to_string(),
+        1,
+        dummy_manifest(),
+        dummy_write_tx(),
+        "phone-7f3a",
+        "behzod",
+    )
+    .expect("register must succeed");
+
+    let dev = reg.get_device("phone-7f3a").expect("device must exist");
+    assert_eq!(dev.device_id, "phone-7f3a");
+    assert_eq!(dev.state, DeviceState::Online);
+    assert!(
+        dev.last_seen >= before,
+        "last_seen must be set at registration"
+    );
+    assert_eq!(reg.list_devices().len(), 1);
+}
+
+#[test]
+fn register_upserts_existing_device_last_seen() {
+    let reg = PluginRegistry::new();
+
+    reg.register(
+        "a".to_string(),
+        1,
+        dummy_manifest(),
+        dummy_write_tx(),
+        "phone-7f3a",
+        "behzod",
+    )
+    .expect("first register must succeed");
+    std::thread::sleep(Duration::from_millis(10));
+    let first_seen = reg.get_device("phone-7f3a").unwrap().last_seen;
+
+    // a second plugin from the same device must update, not duplicate
+    reg.register(
+        "b".to_string(),
+        2,
+        dummy_manifest(),
+        dummy_write_tx(),
+        "phone-7f3a",
+        "behzod",
+    )
+    .expect("second register must succeed");
+
+    assert_eq!(reg.list_devices().len(), 1, "one record per device");
+    let dev = reg.get_device("phone-7f3a").unwrap();
+    assert!(dev.last_seen > first_seen, "last_seen must advance");
+    assert_eq!(dev.state, DeviceState::Online);
+}
+
+#[test]
+fn record_pong_advances_device_last_seen() {
+    let reg = PluginRegistry::new();
+
+    reg.register(
+        "pinger".to_string(),
+        1,
+        dummy_manifest(),
+        dummy_write_tx(),
+        "phone-7f3a",
+        "behzod",
+    )
+    .expect("register must succeed");
+
+    std::thread::sleep(Duration::from_millis(10));
+    let before = reg.get_device("phone-7f3a").unwrap().last_seen;
+
+    reg.record_pong("pinger");
+
+    let dev = reg.get_device("phone-7f3a").unwrap();
+    assert!(dev.last_seen > before, "pong must advance last_seen");
+    assert_eq!(dev.state, DeviceState::Online);
+}
+
+#[test]
+fn unregister_marks_device_offline_only_when_last_plugin_leaves() {
+    let reg = PluginRegistry::new();
+
+    reg.register(
+        "a".to_string(),
+        1,
+        dummy_manifest(),
+        dummy_write_tx(),
+        "phone-7f3a",
+        "behzod",
+    )
+    .unwrap();
+    reg.register(
+        "b".to_string(),
+        2,
+        dummy_manifest(),
+        dummy_write_tx(),
+        "phone-7f3a",
+        "behzod",
+    )
+    .unwrap();
+
+    // one plugin leaving keeps the device online — the other is still there
+    reg.unregister("a");
+    assert_eq!(
+        reg.get_device("phone-7f3a").unwrap().state,
+        DeviceState::Online
+    );
+
+    reg.unregister("b");
+    assert_eq!(
+        reg.get_device("phone-7f3a").unwrap().state,
+        DeviceState::Offline,
+        "device must go offline when its last plugin leaves"
+    );
+}
+
+#[test]
+fn list_devices_returns_distinct_devices() {
+    let reg = PluginRegistry::new();
+
+    reg.register(
+        "a".to_string(),
+        1,
+        dummy_manifest(),
+        dummy_write_tx(),
+        "host",
+        "behzod",
+    )
+    .unwrap();
+    reg.register(
+        "b".to_string(),
+        2,
+        dummy_manifest(),
+        dummy_write_tx(),
+        "phone-7f3a",
+        "behzod",
+    )
+    .unwrap();
+
+    let mut ids: Vec<String> = reg
+        .list_devices()
+        .into_iter()
+        .map(|d| d.device_id)
+        .collect();
+    ids.sort();
+    assert_eq!(ids, vec!["host".to_string(), "phone-7f3a".to_string()]);
+}
+
+fn unix_millis_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }

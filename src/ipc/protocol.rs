@@ -355,6 +355,10 @@ impl MessageRouter {
                     msg.conn_id,
                     manifest,
                     msg.write_tx.clone(),
+                    // D-03 parses device_id/user_id off the wire; host plugins
+                    // (proto v1.5) register as the default "local"/"default" device
+                    "",
+                    "",
                 );
 
                 // When auth is on, mint a per-registration nonce; the plugin and
