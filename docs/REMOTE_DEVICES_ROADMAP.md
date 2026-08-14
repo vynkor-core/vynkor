@@ -170,8 +170,8 @@
     `src/ipc/protocol.rs`.
   - Acceptance: `vyn --client` runs, hosts a local plugin, that plugin appears
     on the host as `device.<cap>`; local-to-local traffic stays local.
-  - **Status (2026-08-14): SHIPPED** — merged via PR veyron-core/veyron#26
-    (this branch, `feat/d-06-role-client-bridge`, commit `a073c20`).
+  - **Status (2026-08-14): SHIPPED** — this PR
+    (`feat/d-06-role-client-bridge`, commits `a073c20`, `e29741b`).
     `role: client` + `bridge:` config (host_url/token/secret/mirror) plus
     `--role/--bridge-*` CLI overrides; `src/bridge` runs one WS client per
     mirrored capability, registers as `device.<cap>` (JWT via
