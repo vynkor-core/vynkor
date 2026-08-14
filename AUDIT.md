@@ -1,6 +1,6 @@
 # Veyron Codebase Audit
 
-Date: 2026-07-07 (initial) · **Reconciled: 2026-08-11** (full re-audit on `develop` @ `c93342b`)
+Date: 2026-07-07 (initial) · **Reconciled: 2026-08-11** (full re-audit on `develop` @ `c93342b`) · **Delta audit: 2026-08-14** (`develop` @ `2d16ebf` — post-reconciliation code + previously un-audited performance/UX surfaces)
 Scope: full repo — kernel/IPC/events/api (`src/kernel`, `src/ipc`, `src/events`, `src/api`, `src/utils`), auth/plugin-lifecycle/marketplace (`src/auth`, `src/plugins`, `src/cli`, `src/marketplace`), and cross-SDK/protocol (`sdk/rust`, `sdk/cpp`, `sdk/python`, `proto/`, `wire/`, `tests/`, `fuzz/`).
 
 Method: three parallel read-only code-audit passes. Findings below are deduplicated and grouped by severity. Each entry has file:line, concrete failure scenario, and fix direction. The 2026-08-11 reconciliation re-verified every finding against the current tree (codegraph + targeted reads) and annotated its status.
@@ -17,6 +17,21 @@ Method: three parallel read-only code-audit passes. Findings below are deduplica
 
 **New findings from the 2026-08-11 pass:** N1 (moderate), N2–N5 (low) — see below.
 **Still open:** M7 (C++/Python fuzz harness). M9 (zero-value enum renumber) shipped with protocol v1.5 (P11-03, 2026-08-13). Both tracked in `ROADMAP.md`.
+
+**Delta audit (2026-08-14):** 13 new findings, tracked in
+`ROADMAP.md` ("Immediate — Delta audit findings") with priorities P0–P3.
+Security: **S1** (Medium, P0 — registry signature doesn't bind `status`/
+`archive_url` → revocation bypass + download redirect) **— FIXED 2026-08-14**;
+**S2** (Low-Med, P1 —
+events DB in `/tmp/veyron`), **S3** (Low, P1 — RUSTSEC-2026-0204
+`crossbeam-epoch`), **S5** (Low, P2 — internals leak into plugin-facing
+errors), **S4** (Low, P3 — `anyhow`/`number_prefix` advisories) remain OPEN.
+Performance: **PERF-1**/**PERF-2** (Medium, P1 — router blocking sends; sync
+SQLite on the async runtime), **PERF-3** (Low-Med, P2 — per-message clones +
+O(n) scans), **PERF-4** (Low, P3 — double CRC / sync zstd / `/proc` reads /
+WS copies). UX: **UX-1** (Medium, P2 — body-less REST errors, 200-on-failure),
+**UX-2** (Low-Med, P2 — Debug repr leaks), **UX-3**/**UX-4** (Low, P3 —
+config validation, CLI polish). M7 remains deferred.
 
 ---
 
@@ -204,6 +219,173 @@ Method: three parallel read-only code-audit passes. Findings below are deduplica
 
 ---
 
+## Delta audit — 2026-08-14 (post-reconciliation)
+
+Fresh full-repo audit on `develop` @ `2d16ebf` (delta since `c93342b`: 84
+files, +7671/−1729 — marketplace registry v2 (R10-03), installed-state store
+(R10-02), plugin enable/disable (R10-04), manifest v2 per-action permissions,
+Landlock/seccomp/shim). Method: three parallel read-only passes (security
+surface / performance / API+UX) + `cargo audit` + targeted codegraph
+verification. The 2026-08-11 findings re-confirmed shipped; the new findings
+below are in post-audit code or previously un-audited surfaces (perf/UX).
+All 13 are **OPEN** — prioritized plan in `ROADMAP.md` ("Immediate — Delta
+audit findings", priorities P0–P3).
+
+### S1. Registry entry signature does not bind `status`/`archive_url` — revocation bypass + download redirect (Medium, P0)
+
+- **Files:** `src/marketplace/registry.rs:65-70` (`signature` field: signed
+  over `"{slug}:{version}:{sha256}"` only), `registry.rs:85-87`
+  (`is_revoked`), `installer.rs:181` (`is_revoked` gate),
+  `registry.rs:507-522` (`resolve_relative_archive_urls`)
+- **Issue:** `verify_entry_signature` verifies an Ed25519 signature over
+  `{slug}:{version}:{sha256}`. `status` (the revocation bit), `archive_url`,
+  `min/max_kernel_version` and `permissions` are NOT covered. A compromised
+  registry-serving channel (the exact threat model the signature was added
+  for — M4/T-11) can:
+  1. flip `status: revoked → stable` — the entry still verifies, the
+     `is_revoked` gate passes, and a revoked plugin installs (**revocation
+     bypass** — R10-03's "revocation outlives the TTL" is defeated by the
+     same channel compromise it was built to survive);
+  2. redirect `archive_url` to an arbitrary URL — the kernel fetches it before
+     the sha256 check fails (request forgery / internal-network scanning;
+     content integrity survives via the signed sha256, so no code execution);
+  3. loosen `min/max_kernel_version` and `permissions` on the entry.
+- **Impact:** revoked plugins install; SSRF-class request forgery from the
+  operator's host; compat/permission gates weakened.
+- **Fix:** sign the full canonical entry (at minimum
+  `slug:version:sha256:status:archive_url:min_kernel_version:max_kernel_version`).
+- **Regression check:** flipping `status` or `archive_url` on a signed entry
+  fails `verify_entry_signature`.
+- **Status (2026-08-14): FIXED** — `signed_message` covers the full canonical
+  entry, as served (relative `archive_url` verifies in raw form); relative-URL
+  resolution moved from `fetch_registry_from` into `install()` (after
+  verification, before the download — a forged URL is never fetched); cache
+  schema bumped to v2. Tests:
+  `signature_rejected_when_{status,archive_url,kernel_bounds}_tampered`,
+  `relative_archive_url_verifies_in_as_served_form`,
+  `fetch_keeps_relative_archive_url_as_served`,
+  `install_rejects_{unverified,archive_url_tamper}_before_download`.
+
+### S2. `data_dir: /tmp/veyron` puts the events SQLite DB in world-writable /tmp (Low-Med, P1)
+
+- **Files:** `config.yaml:8`, `src/events/store.rs:13-16` (`EventStore::new`:
+  `create_dir_all` + symlink-following `Connection::open`), `src/utils/config.rs`
+- **Issue:** every other runtime path (socket, pid, log, marketplace
+  state/cache) was hardened to a per-user private dir (M-09); `data_dir` is
+  the one exception and contradicts the config file's own comment ("never the
+  shared /tmp").
+- **Impact:** on a multi-user host, a local user can pre-create `/tmp/veyron`
+  before the kernel starts, then read or modify the event store — including
+  forging `pending` events that the retry worker (`bus.rs:160-180`)
+  redelivers to subscribers — or symlink `events.db` elsewhere.
+- **Fix:** default `data_dir` to the per-user private runtime dir; create the
+  store dir 0o700 with an ownership check.
+
+### S3. RUSTSEC-2026-0204 `crossbeam-epoch` 0.9.18 (Low, P1)
+
+- **File:** `Cargo.lock:505` — invalid pointer dereference in the
+  `fmt::Pointer` impl; reached via `metrics-exporter-prometheus 0.15.3 →
+  metrics-util 0.17.0`.
+- **Fix:** `cargo update -p crossbeam-epoch` → 0.9.20 (verified, one package).
+
+### S4. Dependency advisories: `anyhow` unsoundness + `number_prefix` unmaintained (Low, P3)
+
+- **Files:** `Cargo.lock`
+- **Issue:** RUSTSEC-2026-0190 (`Error::downcast_mut` unsoundness, anyhow
+  1.0.102); RUSTSEC-2025-0119 (`number_prefix` unmaintained). Both warnings,
+  not vulnerabilities.
+
+### S5. Internals leak into plugin-facing errors (Low, P2)
+
+- **Files:** `src/ipc/protocol.rs:322` (`auth failed: {e}` — raw jsonwebtoken
+  error detail to the registering plugin), `src/ipc/protocol.rs:654`
+  (`ActionResponse.error = format!("{:?}", status)` — Debug enum name)
+- **Fix:** map to stable, documented wire error codes/messages.
+
+### PERF-1. Router kernel replies block on `.send().await` — one slow plugin stalls all IPC (Medium, P1)
+
+- **Files:** `src/ipc/protocol.rs:1145-1149` (`send_envelope` awaits the
+  target's write channel from the single shared router task), `:1011,1085`
+  (`try_send` on peer forwards — the T-03 fix), `src/ipc/connection.rs:135`
+  (64-slot write channel)
+- **Issue:** peer forwarding is non-blocking, but every kernel reply (Pong,
+  acks, error frames) still `.await`s a full 64-slot channel on the shared
+  router task. One plugin that stops draining its channel stalls the whole
+  IPC fabric.
+- **Fix:** `try_send` + bounded overflow handling, or a per-connection send
+  task.
+
+### PERF-2. Synchronous SQLite + std Mutex on the async runtime in the router path (Medium, P1)
+
+- **Files:** `src/events/store.rs:9,38` (`std::sync::Mutex<Connection>` held
+  during disk I/O), `src/events/bus.rs:85` (`store.persist` from the router
+  task via `EventBus::publish`), `src/ipc/protocol.rs:929` (`mark_delivered`),
+  `src/events/bus.rs:160-180` (retry worker)
+- **Impact:** blocking SQLite writes under a std mutex on tokio workers in
+  the hottest path (every event publish / ack).
+- **Fix:** `tokio::task::spawn_blocking` or a dedicated writer task.
+
+### PERF-3. Per-message full `PluginEntry` clones + O(n) registry scans (Low-Med, P2)
+
+- **Files:** `src/plugins/registry.rs:159` (`get` clones the entry incl. the
+  manifest proto; ~4 per forwarded message via `get_by_conn_id` +
+  `check_ipc_send` + `check_ipc_target` + `get`), `:204-217`
+  (`find_action_provider` O(P)), `:339-344` (`count_pending_actions_for`),
+  `:366-375` (`find_pending_internal_id` per chunk), `:185-190` (`list`
+  clone-all per broadcast)
+- **Fix:** `Arc<PluginEntry>` / split hot fields; action→provider index.
+
+### PERF-4. Hot-path constant-factor costs (Low, P3)
+
+- **Files:** `../veyron-wire/src/framing.rs:137-152,240` (synchronous zstd in
+  async tasks; double CRC32 per outbound frame), `src/plugins/supervisor.rs:852,864`
+  (sync `/proc` reads in the watchdog loop), `src/api/websocket.rs:220,246-258`
+  (double payload copy per WS frame)
+- **Fix:** drop the redundant second CRC; offload zstd; move `/proc` reads off
+  the async runtime.
+
+### UX-1. REST errors are bare `StatusCode` with no body; lie-prone statuses (Medium, P2)
+
+- **Files:** `src/api/routes.rs` (bare `StatusCode` returns; 422 collapses
+  invalid-manifest vs spawn-failure; `stop_plugin` returns 200 even when the
+  stop failed, `routes.rs:115`), `src/api/rate_limit.rs:38-43` (the only
+  body'd error), `src/api/websocket.rs:61,75` (plain-text upgrade failures)
+- **Fix:** JSON error envelope (code/message/retryable); honest stop status;
+  document the API (OpenAPI or README reference).
+
+### UX-2. Debug repr leaks into public API shapes (Low-Med, P2)
+
+- **Files:** `src/api/routes.rs:59` (`PluginInfo.state = format!("{:?}",
+  e.state)` — a Rust Debug enum name is the public field)
+- **Fix:** stable, documented string/enum values.
+
+### UX-3. Config validation gaps + silent parse-error swallowing (Low, P3)
+
+- **Files:** `src/plugins/loader.rs:19-23` (unknown `restart:` silently →
+  `on-failure`, while `max_fs_access` warns — two conventions), `src/utils/config.rs`
+  (bad `log_level` → EnvFilter matches nothing → silent no-logs; binary
+  defaults port 8000 vs shipped `config.yaml` 8888), `src/main.rs:85-123`
+  (non-start subcommands `.unwrap_or_default()` on config load errors)
+- **Fix:** consistent validation + warnings; surface load errors to all CLI
+  subcommands, not just `start`.
+
+### UX-4. CLI polish (Low, P3)
+
+- **Files:** `src/cli/mod.rs` (sparse subcommand `about` text, hardcoded
+  version string), `src/cli/plugin.rs:135` (`vyn plugin logs` prints the raw
+  JSON array; mixed ✓/⚠/plain output style)
+
+**Confirmed sound on re-check (delta):** MAC scheme + header coverage, fragment
+reassembly bounds, UDS 0o600 + non-socket refusal, JWT min-secret + HS256-only,
+T-04 clamp + form normalization, per-action permission dual-check (manifest v2
+fail-closed on unknown perms), zip-slip + sha256 + signature + atomic rename +
+revocation check in the installer, seccomp/Landlock fail-closed, WS frame
+parser bounds, rate-limit keyed on verified `sub`, no sensitive values logged
+(WS token withheld, `jwt_secret` only as length). No regressions in the
+previously-hardened areas.
+
+---
+
 ## Informational / Follow-ups
 
 - **Framing code relocated to `wire/` crate:** `src/ipc/framing.rs` is now a re-export shim; actual length-prefix/allocation logic lives in `wire/src/framing.rs`, which was out of scope for the kernel-focused pass but was covered by the SDK/proto pass (see H4, M6-M11) — no gap, just noting the split (`.worktrees/wire-crate-split` present in repo).
@@ -230,6 +412,8 @@ M9 (zero-value enum renumber) shipped with the protocol v1.5 bump
 New (2026-08-11): N1 (moderate), N2–N5 (low) — **all resolved**: N1 closed as
 non-issue (wire v0.2.0 already shares the payload via `Arc<[u8]>`; sharing
 locked in by regression tests), N2–N5 fixed with tests/evidence above.
+Delta (2026-08-14): 13 new findings, **all open** — prioritized P0–P3 in
+`ROADMAP.md`; see the "Delta audit — 2026-08-14" section above for details.
 
 ## Priority Recommendation
 
@@ -243,3 +427,9 @@ Original-priority ordering for the 2026-08-11 findings (all now shipped):
 Remaining open:
 1. **M7** (C++/Python fuzz harness) — the only remaining substantive coverage gap; libFuzzer for `framing.cpp` + Python header/frame fuzz.
 2. **M9** (zero-value enum renumber) — **FIXED (P11-03, 2026-08-13)** via the protocol v1.5 bump: `ACTION_UNKNOWN = 0` added, `COMMAND_UNKNOWN` moved to 0, OK/ERROR shifted. The interim lint (T-16) remains as a construction-site guard.
+
+Delta (2026-08-14) ordering (priorities P0–P3, tracked in `ROADMAP.md`):
+1. **P0 — S1** (registry signature must bind the full entry: `status`/`archive_url`/compat). Trust-anchor correctness; everything else waits. **FIXED 2026-08-14.**
+2. **P1 — S3** (one-command `crossbeam-epoch` CVE fix), **S2** (`data_dir` off shared /tmp), **PERF-1** (router kernel replies off the shared-task `.send().await`), **PERF-2** (event-store SQLite off the async runtime).
+3. **P2 — UX-1** (JSON error envelope + honest stop status), **S5** (stable wire error codes), **UX-2** (stable `PluginInfo.state`), **PERF-3** (`Arc<PluginEntry>` + action→provider index).
+4. **P3 — PERF-4** (double CRC / sync zstd / `/proc` reads / WS copies), **UX-3** (config validation consistency), **UX-4** (CLI polish), **S4** (dependency advisories).

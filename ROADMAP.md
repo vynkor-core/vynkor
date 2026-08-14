@@ -266,6 +266,168 @@ duplicate registration.
 
 ---
 
+## Immediate — Delta audit findings (2026-08-14)
+
+Fresh full-repo audit (see `AUDIT.md` → "Delta audit — 2026-08-14") on
+`develop` @ `2d16ebf` — everything added since the 2026-08-11 reconciliation
+(R10-02/R10-03/R10-04, manifest v2, Landlock/seccomp/shim) plus the
+previously un-audited performance and UX surfaces. Method: three parallel
+read-only passes + `cargo audit` + targeted verification. All items below are
+**OPEN** (2026-08-14).
+
+Priorities: **P0** do first (trust-anchor correctness) · **P1** immediate
+(security + hot-path perf) · **P2** this cycle (UX + moderate perf) · **P3**
+backlog (polish).
+
+### P0 — trust anchor
+
+- [x] S1 — **Registry entry signature does not bind `status`/`archive_url` —
+      revocation bypass + download redirect (Medium):**
+      `RegistryEntry.signature` covers only `"{slug}:{version}:{sha256}"`
+      (`registry.rs:65-70`); `status`, `archive_url`, `min/max_kernel_version`
+      and `permissions` are unsigned. A compromised registry channel (the
+      exact threat model the signature was added for, M4/T-11) can flip
+      `revoked → stable` — the entry still verifies, the `is_revoked` gate
+      (`installer.rs:181`) passes, and a revoked plugin installs. The same
+      channel can redirect `archive_url` to an arbitrary URL (request
+      forgery against internal services; content integrity survives via the
+      signed sha256) and loosen kernel-compat bounds.
+  - Files: `src/marketplace/registry.rs`, `src/marketplace/installer.rs`.
+  - Acceptance: `verify_entry_signature` binds the full canonical entry (at
+    minimum `slug:version:sha256:status:archive_url:min/max_kernel_version`);
+    flipping `status` or `archive_url` on a signed entry fails verification.
+  - **Status (2026-08-14): FIXED** — `signed_message` now covers the full
+    canonical entry `slug:version:sha256:status:archive_url:min/max_kernel_version`
+    (as served — a relative `archive_url` verifies in its raw form). Relative-URL
+    resolution moved out of `fetch_registry_from` into `install()`, after
+    verification and before the download, so the signature check runs before any
+    request to `archive_url` (a forged URL is never fetched). Cache schema bumped
+    to v2 (v1 caches hold resolved URLs + old-format signatures). Regression
+    tests: `signature_rejected_when_{status,archive_url,kernel_bounds}_tampered`,
+    `relative_archive_url_verifies_in_as_served_form`,
+    `fetch_keeps_relative_archive_url_as_served`,
+    `install_rejects_*_before_download` (install-level).
+
+### P1 — immediate
+
+- [ ] S3 — **RUSTSEC-2026-0204 `crossbeam-epoch` 0.9.18 (Low, one-command
+      fix):** invalid pointer dereference in the `fmt::Pointer` impl; reached
+      via `metrics-exporter-prometheus 0.15.3 → metrics-util 0.17.0`.
+  - Files: `Cargo.lock`.
+  - Acceptance: `cargo update -p crossbeam-epoch` → 0.9.20; `cargo audit`
+    reports zero vulnerabilities.
+  - **Status (2026-08-14): OPEN.**
+
+- [ ] S2 — **`data_dir: /tmp/veyron` puts the events SQLite DB in
+      world-writable /tmp (Low-Med):** `EventStore::new` (`events/store.rs:13-16`)
+      does `create_dir_all` + symlink-following `Connection::open`. On a
+      multi-user host a local user can pre-create `/tmp/veyron` and read or
+      forge the event store — fake pending events get redelivered to
+      subscribers by the retry worker. Contradicts the config file's own
+      M-09 claim ("never the shared /tmp").
+  - Files: `src/events/store.rs`, `src/utils/config.rs`, `config.yaml`.
+  - Acceptance: `data_dir` defaults to the per-user private runtime dir; the
+    store dir is created 0o700 with an ownership check.
+  - **Status (2026-08-14): OPEN.**
+
+- [ ] PERF-1 — **Router kernel replies block on `.send().await` — one slow
+      plugin stalls all IPC (Medium):** `send_envelope`
+      (`protocol.rs:1145-1149`) awaits the target's 64-slot write channel
+      from the single shared router task; peer forwards already use
+      `try_send` (`protocol.rs:1011,1085`), kernel replies (Pong, acks,
+      errors) do not.
+  - Files: `src/ipc/protocol.rs`.
+  - Acceptance: a plugin that stops draining its write channel delays only
+    its own kernel replies; other connections are unaffected.
+  - **Status (2026-08-14): OPEN.**
+
+- [ ] PERF-2 — **Synchronous SQLite + std Mutex on the async runtime in the
+      router path (Medium):** `EventBus::publish → store.persist`
+      (`bus.rs:85`), `mark_delivered` (`protocol.rs:929`) and the retry
+      worker (`bus.rs:160-180`) run blocking rusqlite under
+      `std::sync::Mutex<Connection>` (`events/store.rs:9,38`) on tokio
+      workers — disk I/O on the hottest path.
+  - Files: `src/events/store.rs`, `src/events/bus.rs`, `src/ipc/protocol.rs`.
+  - Acceptance: event persistence never blocks the router task
+    (`tokio::task::spawn_blocking` or a dedicated writer task).
+  - **Status (2026-08-14): OPEN.**
+
+### P2 — this cycle
+
+- [ ] UX-1 — **REST errors are bare `StatusCode` with no body/envelope
+      (Medium):** 422 collapses distinct causes (invalid manifest vs spawn
+      failure); `stop_plugin` returns 200 even when the stop failed
+      (`routes.rs:115`); 429 is the only error with a body + `Retry-After`;
+      WS upgrade failures are plain text; no OpenAPI — the contract lives
+      only in `tests/unit/test_api.rs`.
+  - Files: `src/api/routes.rs`, `src/api/middleware.rs`, `src/api/rate_limit.rs`.
+  - Acceptance: a JSON error envelope (code/message/retryable) on all
+    non-2xx; `stop_plugin` reports failure; endpoint doc (OpenAPI or README).
+  - **Status (2026-08-14): OPEN.**
+
+- [ ] S5 — **Internals leak into plugin-facing errors (Low):** registration
+      reject sends raw jsonwebtoken detail (`auth failed: {e}`,
+      `protocol.rs:322`); `ActionResponse.error` is a Debug enum name
+      (`format!("{:?}", status)`, `protocol.rs:654`).
+  - Files: `src/ipc/protocol.rs`.
+  - Acceptance: stable, documented error codes/messages on the wire.
+  - **Status (2026-08-14): OPEN.**
+
+- [ ] UX-2 — **Debug repr leaks into public API shapes (Low-Med):**
+      `PluginInfo.state = format!("{:?}", e.state)` (`routes.rs:59`) — a Rust
+      Debug enum name is the public field.
+  - Files: `src/api/routes.rs`.
+  - Acceptance: stable documented string/enum values in the response.
+  - **Status (2026-08-14): OPEN.**
+
+- [ ] PERF-3 — **Per-message full `PluginEntry` clones + O(n) registry scans
+      (Low-Med):** `registry.get` clones the whole entry incl. the manifest
+      proto (`registry.rs:159`; ~4 per forwarded message via `get_by_conn_id`
+      + `check_ipc_send` + `check_ipc_target` + `get`); `find_action_provider`
+      (`:204-217`), `count_pending_actions_for` (`:339-344`),
+      `find_pending_internal_id` per chunk (`:366-375`) scan linearly;
+      broadcast clones all entries (`:185-190`).
+  - Files: `src/plugins/registry.rs`, `src/auth/permissions.rs`.
+  - Acceptance: `Arc<PluginEntry>` or split hot/cold fields; action→provider
+    index; no O(n) scan per message.
+  - **Status (2026-08-14): OPEN.**
+
+### P3 — backlog
+
+- [ ] PERF-4 — **Hot-path constant-factor costs (Low):** double CRC32 per
+      outbound frame (build site + `write_frame_raw`); synchronous zstd
+      compress/decompress on async threads (`wire/src/framing.rs:137-152,240`);
+      sync `/proc` reads in the watchdog loop (`supervisor.rs:852,864`); WS
+      double payload copy per frame (`websocket.rs:220,246-258`).
+  - Files: `../veyron-wire/src/framing.rs`, `src/plugins/supervisor.rs`,
+    `src/api/websocket.rs`.
+  - **Status (2026-08-14): OPEN.**
+
+- [ ] UX-3 — **Config validation gaps + silent parse-error swallowing (Low):**
+      unknown `restart:` silently → `on-failure` (`loader.rs:19-23`) while
+      `max_fs_access` warns (two conventions); bad `log_level` → EnvFilter
+      matches nothing → silent no-logs; binary defaults (port 8000) drift
+      from the shipped config.yaml (8888); non-start CLI subcommands
+      `.unwrap_or_default()` on load errors (`main.rs:85-123`).
+  - Files: `src/plugins/loader.rs`, `src/utils/config.rs`, `src/main.rs`,
+    `config.yaml`.
+  - **Status (2026-08-14): OPEN.**
+
+- [ ] UX-4 — **CLI polish (Low):** sparse subcommand `about` text and a
+      hardcoded version string (`cli/mod.rs`); mixed output style
+      (✓/⚠/plain) and `vyn plugin logs` printing the raw JSON array
+      (`cli/plugin.rs:135`).
+  - Files: `src/cli/mod.rs`, `src/cli/plugin.rs`.
+  - **Status (2026-08-14): OPEN.**
+
+- [ ] S4 — **Dependency advisories (Low, warnings):** RUSTSEC-2026-0190
+      `anyhow` `Error::downcast_mut` unsoundness; RUSTSEC-2025-0119
+      `number_prefix` unmaintained.
+  - Files: `Cargo.lock`, `Cargo.toml`.
+  - **Status (2026-08-14): OPEN.**
+
+---
+
 ## Phase 9 — Hard isolation (deferred)
 
 Deferred until the R8 cross-repo items ship. The current sandbox (`sandbox:
@@ -817,6 +979,19 @@ surfaces cover every planned plugin).
 | P11-01 | protocol v1.4 — `PermissionType` additions 15–19 (`SECRETS`/`CLIPBOARD`/`LAUNCH`/`SCREEN`/`HOME`), header bump, wire regeneration — shipped (`899bf8d` + `31f2cd4`); `veyron-wire` published as 0.2.1; `veyron-sdk 0.1.3` published 2026-08-13, `[patch.crates-io]` dropped | `secrets` plugin (veyron-plugins) needs it |
 | P11-02 | proto-copy sync — all sibling copies byte-identical at v1.4 + Python-binding staleness check — shipped | P11-01 |
 | P11-03 | M9 zero-value enum renumber — SHIPPED on protocol v1.5 (2026-08-13): `*_UNKNOWN = 0` for ActionStatus/CommandStatus, header + `PROTOCOL_VERSION` 1.5, `veyron-wire` 0.2.2 consumed via patch branch (crates.io publish deferred), python/cpp copies synced + pb2 regenerated, no source edits anywhere | v1.5 wire bump |
+| S1 | registry signature must bind the full entry (`status`/`archive_url`/compat) — revocation bypass + download redirect — **FIXED** (2026-08-14): full-message signature, resolution moved to install (after verification), cache schema v2, tamper regression tests | none |
+| S3 | `crossbeam-epoch` 0.9.18 → 0.9.20 (RUSTSEC-2026-0204) — **OPEN** (P1) | none |
+| S2 | `data_dir` off shared /tmp + 0o700 store dir — **OPEN** (P1) | none |
+| PERF-1 | router kernel replies off the shared-task `.send().await` — **OPEN** (P1) | none |
+| PERF-2 | event-store SQLite off the async runtime (`spawn_blocking`) — **OPEN** (P1) | none |
+| UX-1 | JSON error envelope + honest stop status + API doc — **OPEN** (P2) | none |
+| S5 | stable wire error codes, no internals — **OPEN** (P2) | UX-1 |
+| UX-2 | stable `PluginInfo.state` values — **OPEN** (P2) | UX-1 |
+| PERF-3 | `Arc<PluginEntry>` + action→provider index — **OPEN** (P2) | none |
+| PERF-4 | drop double CRC / offload zstd / `/proc` reads off the async runtime — **OPEN** (P3) | none |
+| UX-3 | config validation consistency + surface load errors to all CLI — **OPEN** (P3) | none |
+| UX-4 | CLI help/output polish — **OPEN** (P3) | none |
+| S4 | dependency advisories (anyhow / number_prefix) — **OPEN** (P3) | none |
 
 **Ship gate:** R8-01..R8-05 are kernel-local and land together on `develop`;
 R8-06/R8-07 are cross-repo coordination items shipped from their own repos.
@@ -837,6 +1012,13 @@ done; P11-03 (M9 zero-value enum renumber) shipped on protocol **v1.5** —
 `veyron-wire` **0.2.2** and `veyron-sdk` **0.1.3** published to crates.io the
 same day; the `[patch.crates-io]` override in `Cargo.toml` was dropped and the
 workspace resolves both from the registry.
+
+**Delta audit (2026-08-14):** 13 new findings, all kernel-local, with
+priorities P0–P3 (see "Immediate — Delta audit findings" above): S1 (P0 —
+registry signature binding) **FIXED (2026-08-14)**; S3/S2/PERF-1/PERF-2 (P1),
+UX-1/S5/UX-2/PERF-3 (P2), PERF-4/UX-3/UX-4/S4 (P3) remain **OPEN**. S1 was
+the only one touching the trust anchor; the rest are independent and can land
+in any order.
 
 ## Definition of Done
 
