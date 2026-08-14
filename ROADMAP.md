@@ -310,13 +310,15 @@ backlog (polish).
 
 ### P1 — immediate
 
-- [ ] S3 — **RUSTSEC-2026-0204 `crossbeam-epoch` 0.9.18 (Low, one-command
+- [x] S3 — **RUSTSEC-2026-0204 `crossbeam-epoch` 0.9.18 (Low, one-command
       fix):** invalid pointer dereference in the `fmt::Pointer` impl; reached
       via `metrics-exporter-prometheus 0.15.3 → metrics-util 0.17.0`.
   - Files: `Cargo.lock`.
   - Acceptance: `cargo update -p crossbeam-epoch` → 0.9.20; `cargo audit`
     reports zero vulnerabilities.
-  - **Status (2026-08-14): OPEN.**
+  - **Status (2026-08-14): FIXED** — `cargo update -p crossbeam-epoch` →
+    0.9.20 (PR #20, `0f5d65f`); `cargo audit` no longer reports
+    RUSTSEC-2026-0204 (only the two S4 warnings remain).
 
 - [ ] S2 — **`data_dir: /tmp/veyron` puts the events SQLite DB in
       world-writable /tmp (Low-Med):** `EventStore::new` (`events/store.rs:13-16`)
@@ -980,7 +982,7 @@ surfaces cover every planned plugin).
 | P11-02 | proto-copy sync — all sibling copies byte-identical at v1.4 + Python-binding staleness check — shipped | P11-01 |
 | P11-03 | M9 zero-value enum renumber — SHIPPED on protocol v1.5 (2026-08-13): `*_UNKNOWN = 0` for ActionStatus/CommandStatus, header + `PROTOCOL_VERSION` 1.5, `veyron-wire` 0.2.2 consumed via patch branch (crates.io publish deferred), python/cpp copies synced + pb2 regenerated, no source edits anywhere | v1.5 wire bump |
 | S1 | registry signature must bind the full entry (`status`/`archive_url`/compat) — revocation bypass + download redirect — **FIXED** (2026-08-14): full-message signature, resolution moved to install (after verification), cache schema v2, tamper regression tests | none |
-| S3 | `crossbeam-epoch` 0.9.18 → 0.9.20 (RUSTSEC-2026-0204) — **OPEN** (P1) | none |
+| S3 | `crossbeam-epoch` 0.9.18 → 0.9.20 (RUSTSEC-2026-0204) — **FIXED** (2026-08-14, PR #20) | none |
 | S2 | `data_dir` off shared /tmp + 0o700 store dir — **OPEN** (P1) | none |
 | PERF-1 | router kernel replies off the shared-task `.send().await` — **OPEN** (P1) | none |
 | PERF-2 | event-store SQLite off the async runtime (`spawn_blocking`) — **OPEN** (P1) | none |

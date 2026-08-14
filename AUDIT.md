@@ -287,6 +287,8 @@ audit findings", priorities P0–P3).
   `fmt::Pointer` impl; reached via `metrics-exporter-prometheus 0.15.3 →
   metrics-util 0.17.0`.
 - **Fix:** `cargo update -p crossbeam-epoch` → 0.9.20 (verified, one package).
+- **Status (2026-08-14): FIXED** — 0.9.20 (PR #20); `cargo audit` reports no
+  RUSTSEC-2026-0204.
 
 ### S4. Dependency advisories: `anyhow` unsoundness + `number_prefix` unmaintained (Low, P3)
 
