@@ -125,3 +125,64 @@ fn ipc_target_denied_for_unknown_sender() {
     let reg = Arc::new(PluginRegistry::new());
     assert!(check_ipc_target(&reg, "ghost", "anyone").is_err());
 }
+
+// ── D-03: same-user only IPC ────────────────────────────────────────────────
+
+fn registry_with_user(plugin_id: &str, user_id: &str, targets: Vec<&str>) -> Arc<PluginRegistry> {
+    let registry = Arc::new(PluginRegistry::new());
+    registry_with_ipc_user(plugin_id, 1, user_id, targets, &registry);
+    registry
+}
+
+fn registry_with_ipc_user(
+    plugin_id: &str,
+    conn_id: u64,
+    user_id: &str,
+    ipc_targets: Vec<&str>,
+    registry: &Arc<PluginRegistry>,
+) {
+    let (tx, _rx) = mpsc::channel(1);
+    let manifest = PluginManifest {
+        permissions: vec!["PERMISSION_IPC_SEND".to_string()],
+        ipc_targets: ipc_targets.iter().map(|s| s.to_string()).collect(),
+        ..Default::default()
+    };
+    registry
+        .register(
+            plugin_id.to_string(),
+            conn_id,
+            manifest,
+            tx,
+            "device",
+            user_id,
+        )
+        .unwrap();
+}
+
+#[test]
+fn ipc_cross_user_denied() {
+    let reg = registry_with_user("sender", "alice", vec!["target"]);
+    registry_with_ipc_user("target", 2, "bob", vec![], &reg);
+    let err = check_ipc_target(&reg, "sender", "target").unwrap_err();
+    assert!(
+        err.to_string().contains("cross-user"),
+        "expected cross-user denial, got {err}"
+    );
+}
+
+#[test]
+fn ipc_same_user_allowed() {
+    let reg = registry_with_user("sender", "alice", vec!["target"]);
+    registry_with_ipc_user("target", 2, "alice", vec![], &reg);
+    assert!(check_ipc_target(&reg, "sender", "target").is_ok());
+}
+
+#[test]
+fn ipc_default_user_plugins_still_talk() {
+    // host plugins (empty user → "default") are unaffected — single-user
+    // deployments never hit the cross-user branch
+    let reg = Arc::new(PluginRegistry::new());
+    registry_with_ipc("sender", 1, vec!["target"], &reg);
+    registry_with_ipc_user("target", 2, "", vec![], &reg);
+    assert!(check_ipc_target(&reg, "sender", "target").is_ok());
+}

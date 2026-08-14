@@ -83,7 +83,7 @@
     wire. Full suite green (450 tests, `clippy -D warnings`,
     `fmt --check`).
 
-- [ ] **D-03 — Registration: parse new fields + device/user clamp + major-version reject + same-user IPC.**
+- [x] **D-03 — Registration: parse new fields + device/user clamp + major-version reject + same-user IPC.**
   - Parse `device_id`/`user_id`/`os`/`capabilities`/`protocol_version` on
     `PluginRegister`; clamp permissions by device (JWT claims already override
     the manifest — extend the clamp to key on device).
@@ -94,6 +94,20 @@
   - Files: `src/ipc/protocol.rs`, `src/auth/permissions.rs`.
   - Acceptance: v1.x registers with device metadata; major mismatch rejected
     with both versions in the message; cross-user IPC denied, same-user allowed.
+  - **Status (2026-08-14): SHIPPED** — this PR (`feat/d-03-registration-device-fields`).
+    Kernel bumps to `veyron-wire 0.2.3` (proto v1.6, crates.io); registry now
+    stores the wire `DeviceInfo`/`DeviceState`/`DeviceOs` and gains
+    `DeviceMeta` + `register_with_device` (empty identity → `"local"`/
+    `"default"`, device metadata refreshes on re-register). Router parses
+    device/user/os/arch/os_version/capabilities off the wire, accepts a
+    device-scoped JWT (`sub == device_id`) as a device ceiling (claims
+    override the manifest), and rejects a `protocol_version` **major**
+    mismatch with `ERR_PROTOCOL_MISMATCH` carrying both versions (empty =
+    v1.5 host plugin, accepted). `check_ipc_target` enforces same-user IPC
+    (cross-user denied, single-user "default" unaffected). `ActionLookup`
+    boxes `PluginEntry` (wire v1.6 grew the manifest past clippy's
+    large-variant threshold). Full suite green (281 unit + 86 integration,
+    `clippy -D warnings`, `fmt --check`).
 
 - [ ] **D-04 — Discovery surface: enriched events + `list_devices` + `/devices` + `vyn devices`.**
   - Enrich `system.plugin_joined` / `system.plugin_left` payloads with

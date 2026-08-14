@@ -78,7 +78,8 @@ pub fn check_ipc_send(registry: &PluginRegistry, plugin_id: &str) -> Result<(), 
 }
 
 /// Gate per-target IPC (T-04): sender must list the target in `ipc_targets`.
-/// Empty allowlist = deny-all, even with PERMISSION_IPC_SEND.
+/// Empty allowlist = deny-all, even with PERMISSION_IPC_SEND. D-03: same-user
+/// only — a sender may not talk to another user's plugins.
 pub fn check_ipc_target(
     registry: &PluginRegistry,
     sender_id: &str,
@@ -87,6 +88,17 @@ pub fn check_ipc_target(
     let entry = registry
         .get(sender_id)
         .ok_or_else(|| VeyronError::PluginNotFound(sender_id.to_string()))?;
+
+    // D-03: same-user only IPC (one comparison). Host plugins all share the
+    // "default" user, so single-user deployments are unaffected.
+    if let Some(target) = registry.get(target_id) {
+        if target.user_id != entry.user_id {
+            return Err(VeyronError::PermissionDenied(format!(
+                "cross-user IPC denied: {sender_id} (user {}) -> {target_id} (user {})",
+                entry.user_id, target.user_id
+            )));
+        }
+    }
 
     if entry.manifest.ipc_targets.iter().any(|t| t == target_id) {
         Ok(())

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use veyron::plugins::registry::{DeviceState, PluginRegistry, PluginState};
+use veyron::plugins::registry::{DeviceMeta, DeviceOs, DeviceState, PluginRegistry, PluginState};
 use veyron::proto::veyron::PluginManifest;
 use veyron::utils::errors::VeyronError;
 
@@ -15,6 +15,7 @@ fn dummy_manifest() -> PluginManifest {
         actions: vec![],
         events: vec![],
         ipc_targets: vec![],
+        ..Default::default()
     }
 }
 
@@ -925,7 +926,7 @@ fn register_populates_devices_map() {
 
     let dev = reg.get_device("phone-7f3a").expect("device must exist");
     assert_eq!(dev.device_id, "phone-7f3a");
-    assert_eq!(dev.state, DeviceState::Online);
+    assert_eq!(dev.state, DeviceState::Online as i32);
     assert!(
         dev.last_seen >= before,
         "last_seen must be set at registration"
@@ -963,7 +964,7 @@ fn register_upserts_existing_device_last_seen() {
     assert_eq!(reg.list_devices().len(), 1, "one record per device");
     let dev = reg.get_device("phone-7f3a").unwrap();
     assert!(dev.last_seen > first_seen, "last_seen must advance");
-    assert_eq!(dev.state, DeviceState::Online);
+    assert_eq!(dev.state, DeviceState::Online as i32);
 }
 
 #[test]
@@ -987,7 +988,7 @@ fn record_pong_advances_device_last_seen() {
 
     let dev = reg.get_device("phone-7f3a").unwrap();
     assert!(dev.last_seen > before, "pong must advance last_seen");
-    assert_eq!(dev.state, DeviceState::Online);
+    assert_eq!(dev.state, DeviceState::Online as i32);
 }
 
 #[test]
@@ -1017,13 +1018,13 @@ fn unregister_marks_device_offline_only_when_last_plugin_leaves() {
     reg.unregister("a");
     assert_eq!(
         reg.get_device("phone-7f3a").unwrap().state,
-        DeviceState::Online
+        DeviceState::Online as i32,
     );
 
     reg.unregister("b");
     assert_eq!(
         reg.get_device("phone-7f3a").unwrap().state,
-        DeviceState::Offline,
+        DeviceState::Offline as i32,
         "device must go offline when its last plugin leaves"
     );
 }
@@ -1065,4 +1066,100 @@ fn unix_millis_now() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+// ── D-03: device metadata off the wire ─────────────────────────────────────
+
+#[test]
+fn register_with_device_stores_metadata() {
+    let reg = PluginRegistry::new();
+
+    reg.register_with_device(
+        "geo".to_string(),
+        1,
+        dummy_manifest(),
+        dummy_write_tx(),
+        DeviceMeta {
+            device_id: "phone-7f3a".to_string(),
+            user_id: "behzod".to_string(),
+            os: DeviceOs::Android,
+            arch: "aarch64".to_string(),
+            os_version: "14".to_string(),
+            capabilities: vec!["geo".to_string(), "battery".to_string()],
+        },
+    )
+    .expect("register must succeed");
+
+    let dev = reg.get_device("phone-7f3a").expect("device must exist");
+    assert_eq!(dev.os, DeviceOs::Android as i32);
+    assert_eq!(dev.arch, "aarch64");
+    assert_eq!(dev.os_version, "14");
+    assert_eq!(
+        dev.capabilities,
+        vec!["geo".to_string(), "battery".to_string()]
+    );
+
+    let entry = reg.get("geo").expect("plugin must exist");
+    assert_eq!(entry.device_id, "phone-7f3a");
+    assert_eq!(entry.user_id, "behzod");
+}
+
+#[test]
+fn register_with_device_defaults_empty_identity() {
+    let reg = PluginRegistry::new();
+
+    reg.register_with_device(
+        "host-plugin".to_string(),
+        1,
+        dummy_manifest(),
+        dummy_write_tx(),
+        DeviceMeta::default(),
+    )
+    .expect("register must succeed");
+
+    let entry = reg.get("host-plugin").expect("plugin must exist");
+    assert_eq!(entry.device_id, "local");
+    assert_eq!(entry.user_id, "default");
+}
+
+#[test]
+fn re_register_refreshes_device_metadata() {
+    let reg = PluginRegistry::new();
+
+    reg.register_with_device(
+        "a".to_string(),
+        1,
+        dummy_manifest(),
+        dummy_write_tx(),
+        DeviceMeta {
+            device_id: "phone-7f3a".to_string(),
+            os: DeviceOs::Android,
+            capabilities: vec!["geo".to_string()],
+            ..Default::default()
+        },
+    )
+    .expect("first register must succeed");
+
+    reg.register_with_device(
+        "b".to_string(),
+        2,
+        dummy_manifest(),
+        dummy_write_tx(),
+        DeviceMeta {
+            device_id: "phone-7f3a".to_string(),
+            os: DeviceOs::Linux,
+            capabilities: vec!["clipboard".to_string()],
+            ..Default::default()
+        },
+    )
+    .expect("second register must succeed");
+
+    let dev = reg.get_device("phone-7f3a").expect("device must exist");
+    assert_eq!(
+        dev.os,
+        DeviceOs::Linux as i32,
+        "metadata must refresh on re-register"
+    );
+    assert_eq!(dev.capabilities, vec!["clipboard".to_string()]);
+    assert_eq!(reg.list_devices().len(), 1, "still one device record");
 }

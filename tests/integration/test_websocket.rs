@@ -118,6 +118,7 @@ async fn ws_client_registers_and_receives_ack() {
             description: String::new(),
             manifest: Some(PluginManifest::default()),
             jwt_token: String::new(),
+            ..Default::default()
         })),
         ..Default::default()
     };
@@ -189,6 +190,7 @@ async fn ws_rejects_compressed_and_fragmented_inbound_frames() {
             description: String::new(),
             manifest: Some(PluginManifest::default()),
             jwt_token: String::new(),
+            ..Default::default()
         })),
         ..Default::default()
     };
@@ -242,6 +244,7 @@ async fn ws_mac_tagged_frames_accepted_on_secured_kernel() {
             description: String::new(),
             manifest: Some(PluginManifest::default()),
             jwt_token: token.clone(),
+            ..Default::default()
         })),
         ..Default::default()
     };
@@ -331,6 +334,7 @@ async fn ws_untagged_frames_rejected_on_secured_kernel() {
             description: String::new(),
             manifest: Some(PluginManifest::default()),
             jwt_token: token.clone(),
+            ..Default::default()
         })),
         ..Default::default()
     };

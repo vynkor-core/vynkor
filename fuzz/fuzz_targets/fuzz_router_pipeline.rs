@@ -63,7 +63,7 @@ fuzz_target!(|data: &[u8]| {
         .await;
 
         // Register plugin_b directly in registry (bypass router to keep target focused)
-        let _ = registry.register("fuzz_b".to_string(), 2, PluginManifest::default(), b_tx);
+        let _ = registry.register("fuzz_b".to_string(), 2, PluginManifest::default(), b_tx, "", "");
 
         // Now send the fuzz data as a frame from conn_id=1 targeting "kernel"
         let _ = router_tx

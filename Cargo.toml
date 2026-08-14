@@ -21,7 +21,7 @@ name = "integration"
 path = "tests/integration/mod.rs"
 
 [dependencies]
-veyron-wire = "0.2.2"
+veyron-wire = "0.2.3"
 tokio = { version = "1", features = ["full"] }
 
 axum = { version = "0.8", features = ["ws"] }
