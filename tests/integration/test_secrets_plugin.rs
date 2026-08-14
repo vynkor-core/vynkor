@@ -96,7 +96,11 @@ async fn secrets_plugin_round_trip_with_permission() {
     client
         .send(
             "kernel",
-            action_req("sec-1", "secret_set", r#"{"name":"api_key","value":"sk-test-123"}"#),
+            action_req(
+                "sec-1",
+                "secret_set",
+                r#"{"name":"api_key","value":"sk-test-123"}"#,
+            ),
         )
         .await
         .expect("send secret_set failed");
@@ -107,7 +111,12 @@ async fn secrets_plugin_round_trip_with_permission() {
     match env.payload {
         Some(envelope::Payload::ActionResponse(r)) => {
             assert_eq!(r.action_id, "sec-1");
-            assert_eq!(r.status, ActionStatus::ActionOk as i32, "error: {}", r.error);
+            assert_eq!(
+                r.status,
+                ActionStatus::ActionOk as i32,
+                "error: {}",
+                r.error
+            );
             assert_eq!(r.data_json, br#"{"stored":true}"#);
         }
         other => panic!("expected ActionResponse, got {other:?}"),
@@ -127,7 +136,12 @@ async fn secrets_plugin_round_trip_with_permission() {
     match env.payload {
         Some(envelope::Payload::ActionResponse(r)) => {
             assert_eq!(r.action_id, "sec-2");
-            assert_eq!(r.status, ActionStatus::ActionOk as i32, "error: {}", r.error);
+            assert_eq!(
+                r.status,
+                ActionStatus::ActionOk as i32,
+                "error: {}",
+                r.error
+            );
             assert_eq!(r.data_json, br#"{"found":true,"value":"sk-test-123"}"#);
         }
         other => panic!("expected ActionResponse, got {other:?}"),
@@ -137,7 +151,10 @@ async fn secrets_plugin_round_trip_with_permission() {
     let vault_path = vault_dir.path().join("test-secrets-sender.vault");
     assert!(vault_path.exists(), "vault file must exist after a write");
     let raw = std::fs::read(&vault_path).unwrap();
-    assert!(String::from_utf8_lossy(&raw).contains("sk-test-123") == false, "vault must not contain plaintext secret");
+    assert!(
+        !String::from_utf8_lossy(&raw).contains("sk-test-123"),
+        "vault must not contain plaintext secret"
+    );
 
     let _ = child.kill();
     let _ = child.wait();
@@ -191,7 +208,10 @@ async fn secrets_plugin_denies_unprivileged_caller() {
         HashMap::from([
             ("secret_set".to_string(), PermissionType::PermissionSecrets),
             ("secret_get".to_string(), PermissionType::PermissionSecrets),
-            ("secret_delete".to_string(), PermissionType::PermissionSecrets),
+            (
+                "secret_delete".to_string(),
+                PermissionType::PermissionSecrets,
+            ),
             ("secret_list".to_string(), PermissionType::PermissionSecrets),
         ]),
     );
@@ -200,7 +220,10 @@ async fn secrets_plugin_denies_unprivileged_caller() {
         .await
         .expect("SDK connect failed");
     client
-        .register("test-secrets-noperm", plugin_manifest(&["PERMISSION_NETWORK"]))
+        .register(
+            "test-secrets-noperm",
+            plugin_manifest(&["PERMISSION_NETWORK"]),
+        )
         .await
         .expect("register failed");
 
