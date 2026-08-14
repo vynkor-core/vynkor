@@ -16,6 +16,7 @@ mod test_routing;
 mod test_sdk_cpp;
 mod test_sdk_python;
 mod test_sdk_rust;
+mod test_secrets_plugin;
 #[cfg(target_os = "linux")]
 mod test_shim;
 mod test_sigterm;
