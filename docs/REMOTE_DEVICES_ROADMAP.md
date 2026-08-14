@@ -135,13 +135,30 @@
 
 ## P1 — Client kernel + transport
 
-- [ ] **D-05 — WS transport in `veyron-sdk-rust`.**
+- [x] **D-05 — WS transport in `veyron-sdk-rust`.**
   Mirror the UDS client semantics (register, MAC enable, reconnect) over a WS
   backend. Respect the WS-gateway limits (no `FLAG_COMPRESSED`/`FLAG_FRAGMENTED`
   inbound; `FLAG_RAW_BINARY` passes).
   - Files: `../veyron-sdk-rust/`.
   - Acceptance: an SDK plugin connects to the WS endpoint, registers, and
     round-trips actions; integration test against the kernel WS gateway.
+  - **Status (2026-08-14): SHIPPED** — merged via PR veyron-core/veyron-sdk-rust#4
+    (`d0a7695`, commit `22bd761`). `VeyronClient::connect_ws(url, jwt, secret)`
+    mirrors the UDS semantics over the kernel's WS gateway: the `veyron`
+    subprotocol is always offered and the JWT rides the
+    `Sec-WebSocket-Protocol` header (never the URL — access-log hygiene);
+    frame-MAC enables after a secured registration exactly like
+    `connect_with_secret`. `Plugin::run_ws(url)` is the WS mirror of
+    `Plugin::run` (credentials from `VEYRON_JWT_TOKEN`/`VEYRON_JWT_SECRET`).
+    The client's transport is an internal enum, so the whole protocol surface
+    (register, ping, actions, streaming, events, raw audio) is shared
+    unchanged. R5-03 gateway limits respected: outbound frames are never
+    zstd-compressed or fragmented over WS (`send_fragmented` errors),
+    `FLAG_RAW_BINARY` passes. SDK bumps to `veyron-wire 0.2.3` (proto v1.6,
+    crates.io) and releases as **0.1.5**. Full suite green (31 tests — 6
+    fake-kernel WS protocol tests + 2 integration tests against the real
+    kernel WS gateway incl. a hand-minted HS256 JWT path, `clippy -D
+    warnings`, `fmt --check`).
 
 - [ ] **D-06 — `role: client` + bridge/mirror component + local-first routing.**
   - Config: `role: host|client` + `bridge:` section (host URL, token, mirror list).
