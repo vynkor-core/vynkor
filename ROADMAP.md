@@ -1008,12 +1008,44 @@ complete. M7 remains deferred by decision; M9 shipped with protocol v1.5
 Linux-cgroup/mount-namespace work and require a delegated cgroup v2 subtree or
 root. Phase 10 (plugin config + marketplace state) is likewise deferred and
 independent of Phase 9 — it can land before or after hard isolation.
-Phase 11 shipped (2026-08-13): P11-01 (protocol v1.4 permission values 15–19,
-`veyron-wire` 0.2.1 published) and P11-02 (proto-copy sync + drift guard) are
-done; P11-03 (M9 zero-value enum renumber) shipped on protocol **v1.5** —
-`veyron-wire` **0.2.2** and `veyron-sdk` **0.1.3** published to crates.io the
-same day; the `[patch.crates-io]` override in `Cargo.toml` was dropped and the
-workspace resolves both from the registry.
+ Phase 11 shipped (2026-08-13): P11-01 (protocol v1.4 permission values 15–19,
+ `veyron-wire` 0.2.1 published) and P11-02 (proto-copy sync + drift guard) are
+ done; P11-03 (M9 zero-value enum renumber) shipped on protocol **v1.5** —
+ `veyron-wire` **0.2.2** and `veyron-sdk` **0.1.3** published to crates.io the
+ same day; the `[patch.crates-io]` override in `Cargo.toml` was dropped and the
+ workspace resolves both from the registry.
+
+## Phase 12 — Remote devices (foundation)
+
+Task breakdown: `docs/REMOTE_DEVICES_ROADMAP.md` (design + decisions in
+`docs/REMOTE_DEVICES_PLAN.md`). Local-first stays the default — remote devices
+are an additive deployment on top of the single-machine kernel, never a
+migration. Dumb core stays dumb: the kernel stores/passes device metadata and
+tool schemas, never interprets them. Build order: **D-01 → D-02 → D-03 →
+D-04** (identity + versioning + discovery, one proto bump), then D-05 → D-07
+(client kernel + transport).
+
+- [x] **D-01 — Proto v1.6: device identity + versioning + `user_id` + tool
+  schema (one additive bump).** `PluginRegister` += `device_id`, `os`
+  (`DeviceOs`), `arch`, `os_version`, `capabilities[]`, `protocol_version`
+  (semver), `user_id`; `PluginManifest` += `platforms[]` + `action_specs[]`
+  (`ActionSpec { name, description, params_schema, risk,
+  requires_confirmation }`); new `DeviceInfo`/`DeviceState`/`ActionRisk`.
+  `PROTOCOL_VERSION` 1.5 → 1.6, `veyron-wire` 0.2.2 → 0.2.3 (patch —
+  additive), header + const + `Cargo.toml` in one commit.
+  - Files: `../veyron-wire/proto/veyron_protocol.proto`,
+    `../veyron-wire/src/lib.rs`, `../veyron-wire/Cargo.toml`, vendored
+    copies (`../veyron-sdk-python`, `../veyron-sdk-cpp`), regenerated
+    `veyron_protocol_pb2.py`, `tests/unit/test_proto_sync.rs`.
+  - Acceptance: regen compiles; copies byte-identical; drift test green;
+    header/`PROTOCOL_VERSION`/`Cargo.toml` bumped in one commit.
+  - **Status (2026-08-14): SHIPPED** — wire PR #4 (proto v1.6 + 0.2.3 +
+    value-lock tests), sdk-python #3 (proto + regenerated pb2), sdk-cpp #3
+    (proto), kernel PR #22 (R8-05 v1.6 markers + new header/const pairing
+    test). All merged 2026-08-14; full kernel suite green (444 tests),
+    `clippy -D warnings` + `fmt --check` clean. Kernel still consumes
+    published wire **0.2.2** — D-03 wires the fields up and bumps the dep
+    (via `[patch.crates-io]` until 0.2.3 publishes).
 
 **Delta audit (2026-08-14):** 13 new findings, all kernel-local, with
 priorities P0–P3 (see "Immediate — Delta audit findings" above): S1 (P0 —
