@@ -222,13 +222,27 @@
 
 ## P2 — AI integration, voice, sync, companions
 
-- [ ] **D-08 — Tool-calling surface (consumes D-01 `action_specs`).**
+- [x] **D-08 — Tool-calling surface (consumes D-01 `action_specs`).**
   Expose `action_specs` to the AI: enrich the joined event with `action_specs`
   and add a `get_manifest` admin action. Kernel only serves registry data —
   no interpretation.
   - Files: `src/ipc/protocol.rs`, `src/events/bus.rs`.
   - Acceptance: the AI can enumerate actions with
     name/description/params_schema/risk.
+  - **Status (2026-08-15): SHIPPED** — this PR
+    (`feat/d-08-tool-calling-surface`). `system.plugin_joined`/`plugin_left`
+    payloads now carry `action_specs` (name/description/params_schema/risk/
+    requires_confirmation, risk as lowercase string via `action_risk_str`)
+    built with `serde_json` like the D-04 fields — registry data only, the
+    kernel never parses `params_schema`. New IPC admin command `get_manifest`
+    (`src/kernel/commands.rs`, `PERMISSION_KERNEL_ADMIN`, `params_json` =
+    `{"plugin_id": "..."}`) returns the plugin's manifest (permissions/
+    actions/events/ipc_targets/platforms/action_specs + device/user identity);
+    `CommandHandler::dispatch` now receives `params_json` (previously unused
+    `KernelCommand` field). New unit tests (found/unknown-plugin/bad-params/
+    risk mapping) + an integration test asserting the joined event carries the
+    tool schema. Full suite green (116 lib + 91 integration + 295 unit = 502
+    tests, `clippy -D warnings`, `fmt --check`).
 
 - [ ] **D-09 — Confirmation gate (SDK helper + reference impl).**
   Permission-separation pattern: high-risk actions split into `request_*` (the

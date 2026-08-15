@@ -1,7 +1,7 @@
 use super::helpers::start_kernel;
 use std::time::Duration;
 use tokio::time::timeout;
-use veyron::proto::veyron::{envelope, Event, PluginManifest};
+use veyron::proto::veyron::{envelope, ActionRisk, ActionSpec, Event, PluginManifest};
 use veyron_sdk::VeyronClient;
 
 #[tokio::test]
@@ -154,6 +154,79 @@ async fn joined_event_carries_device_fields() {
             assert!(payload.contains("\"os\":\"android\""), "payload={payload}");
             assert!(
                 payload.contains("\"capabilities\":[\"geo\",\"battery\"]"),
+                "payload={payload}"
+            );
+        }
+        other => panic!("expected system.plugin_joined, got: {:?}", other),
+    }
+
+    let _ = shutdown_tx.send(());
+}
+
+#[tokio::test]
+async fn joined_event_carries_action_specs() {
+    // D-08: system.plugin_joined must surface the newcomer's tool schema
+    // (action_specs) so an AI subscriber can enumerate callable actions from
+    // the event alone, without a follow-up get_manifest round-trip.
+    let (shutdown_tx, _registry, _bus) =
+        start_kernel("/tmp/veyron_integ_joined_specs.sock", 19205).await;
+
+    let mut observer = VeyronClient::connect("/tmp/veyron_integ_joined_specs.sock")
+        .await
+        .unwrap();
+    observer
+        .register("observer", PluginManifest::default())
+        .await
+        .unwrap();
+    observer.subscribe(vec!["*".to_string()]).await.unwrap();
+
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    let mut newcomer = VeyronClient::connect("/tmp/veyron_integ_joined_specs.sock")
+        .await
+        .unwrap();
+    let manifest = PluginManifest {
+        actions: vec!["weather.get".to_string()],
+        action_specs: vec![ActionSpec {
+            name: "weather.get".to_string(),
+            description: "current conditions for a city".to_string(),
+            params_schema: r#"{"type":"object","properties":{"city":{"type":"string"}}}"#
+                .to_string(),
+            risk: ActionRisk::Low as i32,
+            requires_confirmation: false,
+        }],
+        ..Default::default()
+    };
+    newcomer.register("weather", manifest).await.unwrap();
+
+    let received = timeout(Duration::from_secs(2), observer.recv())
+        .await
+        .expect("recv timed out")
+        .expect("recv failed");
+
+    match received.payload {
+        Some(envelope::Payload::Event(e)) => {
+            assert_eq!(e.event_type, "system.plugin_joined");
+            let payload = String::from_utf8(e.payload_json).expect("joined payload must be JSON");
+            assert!(
+                payload.contains("\"plugin_id\":\"weather\""),
+                "payload={payload}"
+            );
+            assert!(
+                payload.contains("\"name\":\"weather.get\""),
+                "payload={payload}"
+            );
+            assert!(
+                payload.contains("\"description\":\"current conditions for a city\""),
+                "payload={payload}"
+            );
+            assert!(
+                payload.contains("\"params_schema\":\"{\\\"type\\\":\\\"object\\\""),
+                "payload={payload}"
+            );
+            assert!(payload.contains("\"risk\":\"low\""), "payload={payload}");
+            assert!(
+                payload.contains("\"requires_confirmation\":false"),
                 "payload={payload}"
             );
         }
