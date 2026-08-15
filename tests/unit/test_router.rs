@@ -11,7 +11,7 @@ use veyron::ipc::messages::IncomingMessage;
 use veyron::ipc::protocol::MessageRouter;
 use veyron::plugins::registry::PluginRegistry;
 use veyron::proto::veyron::{
-    envelope, Envelope, Ping, PluginManifest, PluginRegister, PluginRegisterAck,
+    envelope, ActionRequest, Envelope, Ping, PluginManifest, PluginRegister, PluginRegisterAck,
 };
 
 // ── helpers ─────────────────────────────────────────────────────────────────
@@ -24,6 +24,13 @@ fn ipc_manifest_with_targets(targets: Vec<&str>) -> PluginManifest {
     PluginManifest {
         permissions: vec!["PERMISSION_IPC_SEND".to_string()],
         ipc_targets: targets.iter().map(|s| s.to_string()).collect(),
+        ..Default::default()
+    }
+}
+
+fn action_manifest(actions: Vec<&str>) -> PluginManifest {
+    PluginManifest {
+        actions: actions.iter().map(|s| s.to_string()).collect(),
         ..Default::default()
     }
 }
@@ -1663,4 +1670,352 @@ async fn router_rejects_cross_device_token() {
         other => panic!("expected PluginRegisterAck, got {:?}", other),
     }
     assert!(!reg.is_registered(1));
+}
+
+// ── D-10: message_id propagation + hop logging ─────────────────────────────
+
+#[tokio::test]
+async fn kernel_action_request_preserves_message_id_to_provider() {
+    let reg = Arc::new(PluginRegistry::new());
+    let bus = Arc::new(EventBus::new());
+
+    // provider declares the action
+    let (provider_tx, mut provider_rx) = make_write_pair();
+    reg.register(
+        "plugin_b".to_string(),
+        2,
+        action_manifest(vec!["do.thing"]),
+        provider_tx,
+        "",
+        "",
+    )
+    .unwrap();
+
+    // caller sends a device-stamped ActionRequest to the kernel
+    let (caller_tx, _caller_rx) = make_write_pair();
+    reg.register(
+        "caller".to_string(),
+        1,
+        dummy_manifest(),
+        caller_tx.clone(),
+        "",
+        "",
+    )
+    .unwrap();
+
+    let router_tx = spawn_router(Arc::clone(&reg), bus);
+
+    let env = Envelope {
+        message_id: "trace-42".to_string(),
+        payload: Some(envelope::Payload::ActionRequest(ActionRequest {
+            action_id: "a1".to_string(),
+            action: "do.thing".to_string(),
+            params_json: b"{}".to_vec(),
+            timeout_ms: 1000,
+            streaming: false,
+            caller_plugin_id: String::new(),
+        })),
+        ..Default::default()
+    };
+
+    router_tx
+        .send(incoming(1, kernel_frame(env), caller_tx))
+        .await
+        .unwrap();
+
+    let frame = recv_frame(&mut provider_rx).await;
+    let forwarded = decode_envelope(&frame);
+    match forwarded.payload {
+        Some(envelope::Payload::ActionRequest(req)) => {
+            assert_eq!(req.action, "do.thing");
+            // internal correlation id, never the caller's "a1"
+            assert!(
+                req.action_id.starts_with("kact-"),
+                "expected internal action_id, got {}",
+                req.action_id
+            );
+            // D-10: the provider sees the device's message_id — the kernel
+            // hop must not mint a fresh id over a preserved trace.
+            assert_eq!(forwarded.message_id, "trace-42");
+        }
+        other => panic!("expected ActionRequest, got {:?}", other),
+    }
+}
+
+#[tokio::test]
+async fn kernel_action_request_stamps_message_id_when_absent() {
+    let reg = Arc::new(PluginRegistry::new());
+    let bus = Arc::new(EventBus::new());
+
+    let (provider_tx, mut provider_rx) = make_write_pair();
+    reg.register(
+        "plugin_b".to_string(),
+        2,
+        action_manifest(vec!["do.thing"]),
+        provider_tx,
+        "",
+        "",
+    )
+    .unwrap();
+    let (caller_tx, _caller_rx) = make_write_pair();
+    reg.register(
+        "caller".to_string(),
+        1,
+        dummy_manifest(),
+        caller_tx.clone(),
+        "",
+        "",
+    )
+    .unwrap();
+
+    let router_tx = spawn_router(Arc::clone(&reg), bus);
+
+    // no message_id on the wire — a host plugin or stale SDK
+    let env = Envelope {
+        payload: Some(envelope::Payload::ActionRequest(ActionRequest {
+            action_id: "a1".to_string(),
+            action: "do.thing".to_string(),
+            params_json: b"{}".to_vec(),
+            timeout_ms: 1000,
+            streaming: false,
+            caller_plugin_id: String::new(),
+        })),
+        ..Default::default()
+    };
+
+    router_tx
+        .send(incoming(1, kernel_frame(env), caller_tx))
+        .await
+        .unwrap();
+
+    let frame = recv_frame(&mut provider_rx).await;
+    let forwarded = decode_envelope(&frame);
+    assert!(
+        forwarded.message_id.starts_with("k-"),
+        "kernel must stamp a trace id when the sender provides none, got {:?}",
+        forwarded.message_id
+    );
+}
+
+#[tokio::test]
+async fn ping_pong_preserves_message_id() {
+    let reg = Arc::new(PluginRegistry::new());
+    let bus = Arc::new(EventBus::new());
+
+    let (write_tx, mut write_rx) = make_write_pair();
+    reg.register(
+        "pinger".to_string(),
+        5,
+        dummy_manifest(),
+        write_tx.clone(),
+        "",
+        "",
+    )
+    .unwrap();
+
+    let router_tx = spawn_router(Arc::clone(&reg), bus);
+
+    let ping_env = Envelope {
+        message_id: "ping-1".to_string(),
+        payload: Some(envelope::Payload::Ping(Ping { timestamp: 999 })),
+        ..Default::default()
+    };
+
+    router_tx
+        .send(incoming(5, kernel_frame(ping_env), write_tx))
+        .await
+        .unwrap();
+
+    let frame = recv_frame(&mut write_rx).await;
+    let env = decode_envelope(&frame);
+    assert!(
+        matches!(env.payload, Some(envelope::Payload::Pong(_))),
+        "expected Pong, got {:?}",
+        env.payload
+    );
+    assert_eq!(
+        env.message_id, "ping-1",
+        "pong must echo the ping's trace id"
+    );
+}
+
+#[tokio::test]
+async fn forward_preserves_message_id() {
+    let reg = Arc::new(PluginRegistry::new());
+    let bus = Arc::new(EventBus::new());
+
+    let (b_tx, mut b_rx) = make_write_pair();
+    reg.register("plugin_b".to_string(), 2, dummy_manifest(), b_tx, "", "")
+        .unwrap();
+    let (a_tx, _a_rx) = make_write_pair();
+    reg.register(
+        "plugin_a".to_string(),
+        1,
+        ipc_manifest_with_targets(vec!["plugin_b"]),
+        a_tx.clone(),
+        "",
+        "",
+    )
+    .unwrap();
+
+    let router_tx = spawn_router(Arc::clone(&reg), bus);
+
+    // zero-parse relay: the envelope bytes (message_id included) pass through
+    let env = Envelope {
+        message_id: "fwd-9".to_string(),
+        payload: Some(envelope::Payload::Ping(Ping { timestamp: 1 })),
+        ..Default::default()
+    };
+    router_tx
+        .send(incoming(
+            1,
+            plug_frame("plugin_b", encode_envelope(env)),
+            a_tx,
+        ))
+        .await
+        .unwrap();
+
+    let frame = recv_frame(&mut b_rx).await;
+    assert_eq!(decode_envelope(&frame).message_id, "fwd-9");
+}
+
+#[tokio::test]
+async fn broadcast_preserves_message_id() {
+    let reg = Arc::new(PluginRegistry::new());
+    let bus = Arc::new(EventBus::new());
+
+    let (a_tx, _a_rx) = make_write_pair();
+    let (b_tx, mut b_rx) = make_write_pair();
+    let (c_tx, mut c_rx) = make_write_pair();
+    reg.register(
+        "plugin_a".to_string(),
+        1,
+        ipc_manifest_with_targets(vec!["plugin_b", "plugin_c"]),
+        a_tx.clone(),
+        "",
+        "",
+    )
+    .unwrap();
+    reg.register("plugin_b".to_string(), 2, dummy_manifest(), b_tx, "", "")
+        .unwrap();
+    reg.register("plugin_c".to_string(), 3, dummy_manifest(), c_tx, "", "")
+        .unwrap();
+
+    let router_tx = spawn_router(Arc::clone(&reg), bus);
+
+    let env = Envelope {
+        message_id: "bcast-7".to_string(),
+        payload: Some(envelope::Payload::Ping(Ping { timestamp: 1 })),
+        ..Default::default()
+    };
+    router_tx
+        .send(incoming(1, plug_frame("*", encode_envelope(env)), a_tx))
+        .await
+        .unwrap();
+
+    let fb = recv_frame(&mut b_rx).await;
+    let fc = recv_frame(&mut c_rx).await;
+    assert_eq!(decode_envelope(&fb).message_id, "bcast-7");
+    assert_eq!(decode_envelope(&fc).message_id, "bcast-7");
+}
+
+#[tokio::test]
+async fn routing_logs_ingress_and_relay_hops_with_message_id() {
+    use std::io::Write;
+    use std::sync::{Mutex, Once, OnceLock};
+
+    // traced_test can't capture debug! logs from the spawned router task (its
+    // env filter is target-scoped and it matches by test span) — install our
+    // own TRACE-level subscriber writing into a process-global buffer.
+    static LOG_BUF: OnceLock<Mutex<Vec<u8>>> = OnceLock::new();
+    static INIT: Once = Once::new();
+
+    #[derive(Clone, Copy)]
+    struct BufWriter(&'static OnceLock<Mutex<Vec<u8>>>);
+    impl tracing_subscriber::fmt::MakeWriter<'_> for BufWriter {
+        type Writer = BufWriter;
+        fn make_writer(&self) -> Self::Writer {
+            *self
+        }
+    }
+    impl Write for BufWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.get().unwrap().lock().unwrap().write(buf)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    INIT.call_once(|| {
+        LOG_BUF.set(Mutex::new(Vec::new())).unwrap();
+        let _ = tracing::subscriber::set_global_default(
+            tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::TRACE)
+                .with_ansi(false)
+                .with_writer(BufWriter(&LOG_BUF))
+                .finish(),
+        );
+    });
+
+    let reg = Arc::new(PluginRegistry::new());
+    let bus = Arc::new(EventBus::new());
+
+    let (b_tx, mut b_rx) = make_write_pair();
+    reg.register("plugin_b".to_string(), 2, dummy_manifest(), b_tx, "", "")
+        .unwrap();
+    let (a_tx, _a_rx) = make_write_pair();
+    reg.register(
+        "plugin_a".to_string(),
+        1,
+        ipc_manifest_with_targets(vec!["plugin_b"]),
+        a_tx.clone(),
+        "",
+        "",
+    )
+    .unwrap();
+
+    let router_tx = spawn_router(Arc::clone(&reg), bus);
+
+    let env = Envelope {
+        message_id: "hop-trace-1".to_string(),
+        payload: Some(envelope::Payload::Ping(Ping { timestamp: 1 })),
+        ..Default::default()
+    };
+    router_tx
+        .send(incoming(
+            1,
+            plug_frame("plugin_b", encode_envelope(env)),
+            a_tx,
+        ))
+        .await
+        .unwrap();
+
+    // draining the relay proves the router finished both hops before we assert
+    let _ = recv_frame(&mut b_rx).await;
+    let logs = String::from_utf8(LOG_BUF.get().unwrap().lock().unwrap().to_vec()).unwrap();
+    assert!(
+        logs.contains("message ingress"),
+        "hop-0 ingress log missing:\n{logs}"
+    );
+    assert!(
+        logs.contains("message relayed"),
+        "hop-1 relay log missing:\n{logs}"
+    );
+    assert!(
+        logs.contains("hop=0"),
+        "hop field missing on ingress:\n{logs}"
+    );
+    assert!(
+        logs.contains("hop=1"),
+        "hop field missing on relay:\n{logs}"
+    );
+    assert!(
+        logs.contains("hop-trace-1"),
+        "trace id must appear in hop logs:\n{logs}"
+    );
+    assert!(
+        logs.contains("plugin_b"),
+        "target must appear in hop logs:\n{logs}"
+    );
 }

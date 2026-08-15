@@ -1,6 +1,7 @@
 use crate::events::store::EventStore;
 use crate::ipc::connection::out_frame;
 use crate::ipc::framing::Frame;
+use crate::ipc::protocol::kernel_message_id;
 use crate::plugins::registry::{device_os_str, PluginRegistry};
 use crate::proto::veyron::{envelope, Envelope, Event};
 use dashmap::DashMap;
@@ -8,7 +9,7 @@ use metrics::counter;
 use prost::Message;
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
@@ -108,9 +109,18 @@ impl EventBus {
         }
 
         let event_type = event.event_type.clone();
+        // D-10: the bus builds a fresh envelope per delivery (nothing to
+        // preserve from a publisher that never stamped one) — stamp the trace
+        // header so each delivered event is a traceable hop with the same
+        // kernel-wide id space as build_outbound.
         let env = Envelope {
+            message_id: kernel_message_id(),
+            sender_id: "kernel".to_string(),
+            timestamp: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
             payload: Some(envelope::Payload::Event(event)),
-            ..Default::default()
         };
         let mut payload = Vec::new();
         if env.encode(&mut payload).is_err() {
@@ -119,6 +129,7 @@ impl EventBus {
         // Encoded once per publish; each subscriber below gets an Arc clone
         // (refcount bump) of these bytes, not its own copy.
         let payload: Arc<[u8]> = payload.into();
+        let message_id = env.message_id;
 
         for plugin_id in targets {
             match registry.get(&plugin_id) {
@@ -127,7 +138,16 @@ impl EventBus {
                     // Non-blocking send: a slow/full subscriber must not stall the
                     // publisher or any other subscriber in this fan-out loop.
                     match entry.write_tx.try_send(out_frame(frame)) {
-                        Ok(()) => {}
+                        Ok(()) => {
+                            debug!(
+                                message_id = %message_id,
+                                sender_id = "kernel",
+                                target = %plugin_id,
+                                hop = 1,
+                                event_type = %event_type,
+                                "event delivered to subscriber"
+                            );
+                        }
                         Err(mpsc::error::TrySendError::Closed(_)) => {
                             // receiver dropped — plugin is disconnecting
                             counter!("events_dropped_total", "reason" => "channel_closed")
