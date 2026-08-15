@@ -296,19 +296,49 @@
     logs carry the fields). Full suite green (`clippy -D warnings`,
     `fmt --check`).
 
-- [ ] **D-11 — Threat model doc.**
+- [x] **D-11 — Threat model doc.**
   Assets / actors (external attacker, compromised plugin, compromised device,
   malicious prompt) / controls (TLS, JWT, frame-MAC, per-device permissions,
   overlay, confirmation gate, least-privilege AI) — consolidating §10/§19/§21.
   - Files: `docs/THREAT_MODEL.md` (new).
   - Acceptance: doc exists and covers the four actors.
+  - **Status (2026-08-15): SHIPPED** — merged via PR veyron-core/veyron#31
+    (`3c111bb`, commit `2926b51`). `docs/THREAT_MODEL.md` (new, 176 lines)
+    documents assets and the four actors (external attacker, compromised
+    plugin, compromised device, malicious prompt) with per-actor threat
+    scenarios, plus the controls that mitigate them — TLS, JWT, frame-MAC,
+    per-device permissions, overlay, confirmation gate, least-privilege AI —
+    consolidating §10/§19/§21.
 
-- [ ] **D-12 — Voice pipeline: STT local (client) + TTS host → Opus.**
+- [x] **D-12 — Voice pipeline: STT local (client) + TTS host → Opus.**
   Local STT plugin (whisper.cpp/vosk) emits text to the host; host TTS streams
   Opus to the client speaker via the existing `FLAG_RAW_BINARY` +
   `AudioStreamChunk` path. Audio never leaves the device for STT.
   - Files: `../veyron-plugins/`.
   - Acceptance: local STT → text event; host TTS → Opus → client speaker.
+  - **Status (2026-08-15): SHIPPED** — merged via PR
+    veyron-core/veyron-plugins#13 (`daae966`). Both legs of the pipeline
+    landed in the plugins repo. Host-TTS → client-speaker: `tts` gains
+    `tts_speak` — synthesize locally (sherpa), encode PCM as Opus (new
+    `provider/opus.rs`, 20 ms frames), and stream `AudioStreamChunk`
+    envelopes (codec `OPUS`, `end_of_stream` on the last) to a `target`
+    peer (e.g. `device.phone.speaker`); adds `PERMISSION_AUDIO_STREAM` +
+    `PERMISSION_IPC_SEND`, with the `ipc_targets` allowlist from
+    `TTS_PLUGIN_IPC_TARGETS` (default-deny, T-04 gate). Client-STT →
+    host-text: `stt` gains `stt_listen_start`/`stt_listen_stop` — accumulate
+    inbound `AudioStreamChunk` PCM (`PCM_S16LE`, per-`stream_id` buffers in
+    new `listen.rs`), transcribe locally (sherpa `transcribe_pcm`), publish
+    the transcript as an `stt_text` event (namespaced `plugin.stt.stt_text`),
+    and return it in the response; adds `PERMISSION_AUDIO_STREAM` +
+    `PERMISSION_EVENT_PUBLISH`. Audio never leaves the device — only the
+    text crosses the wire. Both plugins bumped `veyron-sdk` 0.1.2→0.1.6 /
+    `veyron-wire` 0.2.0→0.2.3 (the pinned 0.2.0 predated the M9 status
+    renumber, so action responses were numerically incompatible with the
+    kernel's proto v1.6). Unit tests: tts 50→64, stt 57→69 (`clippy -D
+    warnings`, `fmt` clean). E2E against a live kernel + real piper/zipformer
+    models: `tts_speak` streamed 83 Opus chunks with terminal
+    `end_of_stream`; a 1 s PCM chunk was transcribed locally and published
+    as `stt_text`.
 
 - [ ] **D-13 — Sync: heartbeat + snapshot + deltas + pull-on-reconnect.**
   Client plugin with `PERMISSION_SCHEDULER` publishes heartbeat/state on a
@@ -319,11 +349,25 @@
   - Acceptance: offline client catches up on reconnect; state push works.
 
 - [ ] **D-14 — Android device-agent app.**
-  Single app exposing fixed capabilities (geo, battery, notifications,
-  clipboard, contacts) that register on the host as `device.*`; persistent WS +
-  foreground service.
-  - Files: new `../veyron-client-android` (or under `veyron-client`).
-  - Acceptance: phone appears on the host; `device.geo`/`device.battery` callable.
+  Single app exposing fixed capabilities that register on the host as
+  `device.<cap>`; persistent WS + foreground service.
+  - Files: new `../vynkor-client-android`. Design + decisions:
+    `docs/ANDROID_DEVICE_AGENT.md`; Rust core + UniFFI boundary:
+    `docs/ANDROID_DEVICE_AGENT_RUST_CORE.md`.
+  - Acceptance: phone appears on the host; `device.geo`/`device.battery`
+    callable.
+  - **Design (2026-08-15):** repo `vynkor-client-android` created in
+    `veyron-core` (org rename pending — new names used from day one). Stack:
+    Kotlin (Android surface only) + Rust core via **UniFFI**; the Rust core
+    is `vynkor-wire`-only (framing/MAC/proto), **no SDK** — the agent is a
+    device bridge, not a `Plugin`. Capabilities Tier 1 (MVP): geo, battery,
+    notifications, clipboard, contacts, mic, speaker. Voice (D-12) ships in
+    the first release: STT local on the client; TTS on both host (strong)
+    and client (weak/offline). `minSdk 26` / `targetSdk 35`. Persistent WS +
+    foreground service (FGS type architecture deferred). Skeleton landed:
+    `rust/` crate `vynkor-agent-core` (UniFFI surface: `Agent`,
+    `AgentConfig`, 5 foreign traits) — `cargo build` green, cdylib exports
+    the UniFFI metadata; transport/protocol/caps are TODO.
 
 - [ ] **D-15 — Web companion (wss chat/control) + Web Push.**
   Browser/PWA client speaking the frame protocol over wss (TS), chat with the
