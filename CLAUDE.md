@@ -2,6 +2,17 @@
 
 A high-performance plugin kernel written in Rust with C++ interop and multi-SDK support (Python, C++, Rust). Implements a message-passing architecture for secure plugin sandboxing and IPC.
 
+> **Rename (in progress):** the project is being renamed from **Veyron** to
+> **vynkor** — everywhere: the kernel, and all sibling crates/repos
+> (`veyron-wire` → `vynkor-wire`, `veyron-sdk-*` → `vynkor-sdk-*`,
+> `veyron-plugins` → `vynkor-plugins`, `veyron-web` → `vynkor-web`, …).
+> The Android agent repo is already `vynkor-client-android` (born with the new
+> name). "vynkor" is a
+> contraction of "veyron core". The **`vyn` binary stays `vyn`.** New code,
+> docs, and comments use the new names; the actual GitHub org/repo renames,
+> crate renames, and old-code migration are deferred — do not bulk-rename
+> existing code or repo names yet.
+
 ## WHY
 
 - **Kernel-first architecture:** Plugin isolation via IPC, not direct linking
