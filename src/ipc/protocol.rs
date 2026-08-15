@@ -25,11 +25,33 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 static MSG_SEQ: AtomicU64 = AtomicU64::new(0);
 static ACTION_CORRELATION_SEQ: AtomicU64 = AtomicU64::new(0);
 static EVENT_PUBLISH_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// D-10: process-unique trace id for kernel-stamped envelopes. Shared by
+/// `build_outbound` and the event bus so the two stamping sites can never
+/// collide on the same `k-{ts}-{seq}` value.
+pub(crate) fn kernel_message_id() -> String {
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let seq = MSG_SEQ.fetch_add(1, Ordering::Relaxed);
+    format!("k-{ts}-{seq}")
+}
+
+/// D-10: best-effort read of the envelope's `message_id` for the trace logs.
+/// Observability only — never gates or alters routing (zero-parse preserved);
+/// payloads that aren't envelopes (e.g. `FLAG_RAW_BINARY` audio chunks) simply
+/// log an empty id.
+fn envelope_message_id(frame: &Frame) -> String {
+    Envelope::decode(frame.payload.as_ref())
+        .map(|env| env.message_id)
+        .unwrap_or_default()
+}
 
 pub struct MessageRouter;
 
@@ -214,6 +236,23 @@ impl MessageRouter {
                 continue;
             }
 
+            // D-10: hop-0 trace log. `envelope_message_id` is a best-effort
+            // read for observability only — routing stays payload-free
+            // (zero-parse); a raw/undecodable payload just logs an empty id.
+            let trace_mid = envelope_message_id(&msg.frame);
+            let trace_sender = registry
+                .get_by_conn_id(msg.conn_id)
+                .map(|e| e.plugin_id.clone())
+                .unwrap_or_default();
+            debug!(
+                conn_id,
+                message_id = %trace_mid,
+                sender_id = %trace_sender,
+                target = %target,
+                hop = 0,
+                "message ingress"
+            );
+
             let errored = match target.as_str() {
                 "kernel" => {
                     counter!("messages_routed_total", "routing" => "kernel").increment(1);
@@ -235,11 +274,11 @@ impl MessageRouter {
                 }
                 "*" => {
                     counter!("messages_routed_total", "routing" => "broadcast").increment(1);
-                    Self::broadcast(msg, &registry).await
+                    Self::broadcast(msg, &trace_mid, &registry).await
                 }
                 plugin_id => {
                     counter!("messages_routed_total", "routing" => "forward").increment(1);
-                    Self::forward(msg, plugin_id, &registry, bridge.as_ref()).await
+                    Self::forward(msg, plugin_id, &trace_mid, &registry, bridge.as_ref()).await
                 }
             };
 
@@ -435,6 +474,7 @@ impl MessageRouter {
                 };
 
                 let response = Envelope {
+                    message_id: envelope.message_id.clone(),
                     payload: Some(envelope::Payload::PluginRegisterAck(ack)),
                     ..Default::default()
                 };
@@ -487,6 +527,7 @@ impl MessageRouter {
                     .unwrap_or_default()
                     .as_millis() as u64;
                 let pong = Envelope {
+                    message_id: envelope.message_id.clone(),
                     payload: Some(envelope::Payload::Pong(Pong {
                         original_timestamp: ping.timestamp,
                         server_timestamp,
@@ -559,6 +600,7 @@ impl MessageRouter {
                 };
 
                 let ack = Envelope {
+                    message_id: envelope.message_id.clone(),
                     payload: Some(envelope::Payload::EventPublishAck(EventPublishAck {
                         event_id,
                         status: status as i32,
@@ -667,6 +709,7 @@ impl MessageRouter {
                         );
 
                         let forwarded = Envelope {
+                            message_id: envelope.message_id.clone(),
                             payload: Some(envelope::Payload::ActionRequest(ActionRequest {
                                 action_id: internal_id,
                                 action: req.action.clone(),
@@ -688,6 +731,7 @@ impl MessageRouter {
 
                 if let Some(status) = not_found_status {
                     let response = Envelope {
+                        message_id: envelope.message_id.clone(),
                         payload: Some(envelope::Payload::ActionResponse(ActionResponse {
                             action_id,
                             status: status as i32,
@@ -723,6 +767,7 @@ impl MessageRouter {
                 match taken {
                     Some(pending) => {
                         let response = Envelope {
+                            message_id: envelope.message_id.clone(),
                             payload: Some(envelope::Payload::ActionResponse(ActionResponse {
                                 action_id: pending.original_action_id,
                                 status: resp.status,
@@ -764,6 +809,7 @@ impl MessageRouter {
                         match registry.get(&pending.provider_id) {
                             Some(provider_entry) => {
                                 let forwarded = Envelope {
+                                    message_id: envelope.message_id.clone(),
                                     payload: Some(envelope::Payload::ActionRequestChunk(
                                         ActionRequestChunk {
                                             action_id: internal_id.clone(),
@@ -819,6 +865,7 @@ impl MessageRouter {
                     Some(pending) => {
                         registry.touch_pending_action(&chunk.action_id);
                         let forwarded = Envelope {
+                            message_id: envelope.message_id.clone(),
                             payload: Some(envelope::Payload::ActionResponseChunk(
                                 ActionResponseChunk {
                                     action_id: pending.original_action_id,
@@ -893,6 +940,7 @@ impl MessageRouter {
                     Some((internal_id, pending, from_provider)) => {
                         if from_provider {
                             let forwarded = Envelope {
+                                message_id: envelope.message_id.clone(),
                                 payload: Some(envelope::Payload::SessionClose(SessionClose {
                                     action_id: pending.original_action_id.clone(),
                                     reason: close.reason.clone(),
@@ -902,6 +950,7 @@ impl MessageRouter {
                             let _ = Self::try_send_envelope(&pending.requester_write_tx, forwarded);
                         } else if let Some(provider_entry) = registry.get(&pending.provider_id) {
                             let forwarded = Envelope {
+                                message_id: envelope.message_id.clone(),
                                 payload: Some(envelope::Payload::SessionClose(SessionClose {
                                     action_id: internal_id.clone(),
                                     reason: close.reason.clone(),
@@ -959,6 +1008,7 @@ impl MessageRouter {
                 };
 
                 let ack = Envelope {
+                    message_id: envelope.message_id.clone(),
                     payload: Some(envelope::Payload::KernelCommandAck(KernelCommandAck {
                         command_id: cmd.command_id,
                         status: outcome.status as i32,
@@ -988,6 +1038,7 @@ impl MessageRouter {
     async fn forward(
         msg: IncomingMessage,
         plugin_id: &str,
+        message_id: &str,
         registry: &PluginRegistry,
         bridge: Option<&BridgeHandle>,
     ) -> bool {
@@ -1060,6 +1111,13 @@ impl MessageRouter {
                 // Non-blocking send: a slow/full target must not block the router.
                 // Dropping one frame for a non-draining plugin is not the sender's
                 // fault, so this is not counted against the sender's error budget.
+                debug!(
+                    message_id = %message_id,
+                    sender_id = %sender_id,
+                    target = %plugin_id,
+                    hop = 1,
+                    "message relayed to target"
+                );
                 if entry.write_tx.try_send(out_frame(frame)).is_err() {
                     warn!(target = %plugin_id, "forward: target channel full, frame dropped");
                     counter!("ipc_forward_timeouts_total").increment(1);
@@ -1082,7 +1140,7 @@ impl MessageRouter {
         }
     }
 
-    async fn broadcast(msg: IncomingMessage, registry: &PluginRegistry) -> bool {
+    async fn broadcast(msg: IncomingMessage, message_id: &str, registry: &PluginRegistry) -> bool {
         let sender_id = match registry.get_by_conn_id(msg.conn_id) {
             Some(entry) => entry.plugin_id.clone(),
             None => {
@@ -1148,6 +1206,14 @@ impl MessageRouter {
                     "broadcast: target channel full, frame dropped"
                 );
                 counter!("broadcast_timeouts_total").increment(1);
+            } else {
+                debug!(
+                    message_id = %message_id,
+                    sender_id = %sender_id,
+                    target = %entry.plugin_id,
+                    hop = 1,
+                    "broadcast delivered to subscriber"
+                );
             }
         }
         false
@@ -1176,10 +1242,21 @@ impl MessageRouter {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64;
-        let seq = MSG_SEQ.fetch_add(1, Ordering::Relaxed);
-        env.message_id = format!("k-{ts}-{seq}");
+        // D-10: a caller that already set `message_id` (a trace id preserved
+        // from an inbound envelope) keeps it; only stamp a fresh id when
+        // there isn't one — otherwise the kernel hop breaks the trace.
+        if env.message_id.is_empty() {
+            env.message_id = kernel_message_id();
+        }
         env.timestamp = ts;
         env.sender_id = "kernel".to_string();
+        debug!(
+            message_id = %env.message_id,
+            sender_id = %env.sender_id,
+            target = "client",
+            hop = 1,
+            "kernel message dispatched"
+        );
 
         let mut payload = Vec::new();
         if env.encode(&mut payload).is_err() {

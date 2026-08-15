@@ -231,3 +231,35 @@ async fn publish_to_many_stuck_subscribers_does_not_multiply_delay() {
         start.elapsed()
     );
 }
+
+#[tokio::test]
+async fn delivered_event_carries_trace_header() {
+    let bus = EventBus::new();
+    let registry = make_registry();
+    let mut rx = register_plugin(&registry, "listener", 1);
+
+    bus.subscribe("listener", vec!["alarm.fired".to_string()]);
+    bus.publish(make_event("alarm.fired"), &registry).await;
+
+    let item = rx.recv().await.expect("frame must arrive");
+    let frame = match item {
+        veyron::ipc::connection::Outbound::Frame(f) => *f,
+        _ => panic!("expected Outbound::Frame"),
+    };
+    let env = Envelope::decode(frame.payload.as_ref()).expect("decode envelope");
+
+    // D-10: the bus builds a fresh envelope — it must stamp the trace header
+    // so each delivered event is a traceable hop.
+    assert!(
+        env.message_id.starts_with("k-"),
+        "kernel-stamped trace id expected, got {:?}",
+        env.message_id
+    );
+    assert_eq!(env.sender_id, "kernel");
+    assert!(env.timestamp > 0, "timestamp must be stamped");
+    assert!(
+        matches!(env.payload, Some(envelope::Payload::Event(_))),
+        "expected Event payload, got {:?}",
+        env.payload
+    );
+}
