@@ -949,7 +949,13 @@ impl MessageRouter {
                         "{sender_id} lacks PERMISSION_KERNEL_ADMIN"
                     ))
                 } else {
-                    CommandHandler::dispatch(&cmd.command, registry, start_time, config_path)
+                    CommandHandler::dispatch(
+                        &cmd.command,
+                        registry,
+                        start_time,
+                        config_path,
+                        &cmd.params_json,
+                    )
                 };
 
                 let ack = Envelope {

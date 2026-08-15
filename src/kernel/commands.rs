@@ -46,6 +46,7 @@ impl CommandHandler {
         registry: &PluginRegistry,
         start_time: Instant,
         config_path: Option<&str>,
+        params_json: &[u8],
     ) -> CommandOutcome {
         match command {
             "health_check" => {
@@ -74,6 +75,55 @@ impl CommandHandler {
                     })
                     .collect();
                 CommandOutcome::ok(serde_json::Value::Array(devices).to_string())
+            }
+            // D-08: tool-calling surface — serve a plugin's manifest (incl.
+            // action_specs) to the AI. Registry data only, no interpretation.
+            // params_json: {"plugin_id": "..."}.
+            "get_manifest" => {
+                let plugin_id = serde_json::from_slice::<serde_json::Value>(params_json)
+                    .ok()
+                    .and_then(|v| {
+                        v.get("plugin_id")
+                            .and_then(|p| p.as_str())
+                            .map(|s| s.to_string())
+                    })
+                    .unwrap_or_default();
+                match registry.get(&plugin_id) {
+                    Some(entry) => {
+                        let m = &entry.manifest;
+                        let action_specs: Vec<serde_json::Value> = m
+                            .action_specs
+                            .iter()
+                            .map(|s| {
+                                serde_json::json!({
+                                    "name": s.name,
+                                    "description": s.description,
+                                    "params_schema": s.params_schema,
+                                    "risk": crate::plugins::registry::action_risk_str(s.risk),
+                                    "requires_confirmation": s.requires_confirmation,
+                                })
+                            })
+                            .collect();
+                        CommandOutcome::ok(
+                            serde_json::json!({
+                                "plugin_id": entry.plugin_id,
+                                "device_id": entry.device_id,
+                                "user_id": entry.user_id,
+                                "permissions": m.permissions,
+                                "actions": m.actions,
+                                "events": m.events,
+                                "ipc_targets": m.ipc_targets,
+                                "platforms": m.platforms,
+                                "action_specs": action_specs,
+                            })
+                            .to_string(),
+                        )
+                    }
+                    None => CommandOutcome::err(
+                        CommandStatus::CommandError,
+                        format!("plugin not registered: {plugin_id}"),
+                    ),
+                }
             }
             "reload_config" => match config_path {
                 Some(path) => match load_config(path) {
@@ -145,7 +195,7 @@ mod tests {
     #[test]
     fn health_check_reports_plugin_count() {
         let registry = PluginRegistry::new();
-        let out = CommandHandler::dispatch("health_check", &registry, Instant::now(), None);
+        let out = CommandHandler::dispatch("health_check", &registry, Instant::now(), None, b"");
         assert_eq!(out.status, CommandStatus::CommandOk);
         assert!(out.error.is_empty());
         let json = String::from_utf8(out.data_json).unwrap();
@@ -166,7 +216,7 @@ mod tests {
                 "",
             )
             .unwrap();
-        let out = CommandHandler::dispatch("health_check", &registry, Instant::now(), None);
+        let out = CommandHandler::dispatch("health_check", &registry, Instant::now(), None, b"");
         assert_eq!(out.status, CommandStatus::CommandOk);
         let json = String::from_utf8(out.data_json).unwrap();
         assert!(json.contains("\"plugin_count\":1"), "json={json}");
@@ -175,7 +225,7 @@ mod tests {
     #[test]
     fn reload_config_without_path_errors() {
         let registry = PluginRegistry::new();
-        let out = CommandHandler::dispatch("reload_config", &registry, Instant::now(), None);
+        let out = CommandHandler::dispatch("reload_config", &registry, Instant::now(), None, b"");
         assert_eq!(out.status, CommandStatus::CommandError);
         assert_eq!(out.error, "no config path configured");
     }
@@ -188,6 +238,7 @@ mod tests {
             &registry,
             Instant::now(),
             Some("/nonexistent/veyron_cfg_test.yaml"),
+            b"",
         );
         assert_eq!(out.status, CommandStatus::CommandError);
         assert!(
@@ -211,6 +262,7 @@ mod tests {
             &registry,
             Instant::now(),
             Some(tmp.to_str().unwrap()),
+            b"",
         );
         let _ = std::fs::remove_file(&tmp);
         assert_eq!(out.status, CommandStatus::CommandOk, "error={}", out.error);
@@ -222,7 +274,7 @@ mod tests {
     #[test]
     fn unknown_command_reports_unknown() {
         let registry = PluginRegistry::new();
-        let out = CommandHandler::dispatch("does_not_exist", &registry, Instant::now(), None);
+        let out = CommandHandler::dispatch("does_not_exist", &registry, Instant::now(), None, b"");
         assert_eq!(out.status, CommandStatus::CommandUnknown);
         assert_eq!(out.error, "unknown command: does_not_exist");
     }
@@ -230,7 +282,7 @@ mod tests {
     #[test]
     fn list_devices_returns_empty_array_when_no_devices() {
         let registry = PluginRegistry::new();
-        let out = CommandHandler::dispatch("list_devices", &registry, Instant::now(), None);
+        let out = CommandHandler::dispatch("list_devices", &registry, Instant::now(), None, b"");
         assert_eq!(out.status, CommandStatus::CommandOk);
         assert_eq!(String::from_utf8(out.data_json).unwrap(), "[]");
     }
@@ -239,7 +291,7 @@ mod tests {
     fn list_devices_returns_registered_device_fields() {
         let registry = PluginRegistry::new();
         register_device(&registry, "geo", 1, "phone-1");
-        let out = CommandHandler::dispatch("list_devices", &registry, Instant::now(), None);
+        let out = CommandHandler::dispatch("list_devices", &registry, Instant::now(), None, b"");
         assert_eq!(out.status, CommandStatus::CommandOk);
         let json = String::from_utf8(out.data_json).unwrap();
         assert!(json.contains("\"device_id\":\"phone-1\""), "json={json}");
@@ -252,5 +304,114 @@ mod tests {
         );
         assert!(json.contains("\"state\":\"online\""), "json={json}");
         assert!(json.contains("\"last_seen\":"), "json={json}");
+    }
+
+    #[test]
+    fn get_manifest_returns_action_specs() {
+        let registry = PluginRegistry::new();
+        let manifest = PluginManifest {
+            actions: vec!["weather.get".to_string()],
+            permissions: vec!["PERMISSION_NETWORK".to_string()],
+            action_specs: vec![crate::proto::veyron::ActionSpec {
+                name: "weather.get".to_string(),
+                description: "current conditions".to_string(),
+                params_schema: r#"{"type":"object"}"#.to_string(),
+                risk: crate::proto::veyron::ActionRisk::Low as i32,
+                requires_confirmation: false,
+            }],
+            ..Default::default()
+        };
+        registry
+            .register(
+                "weather".to_string(),
+                1,
+                manifest,
+                dummy_tx(),
+                "phone-1",
+                "default",
+            )
+            .unwrap();
+        let out = CommandHandler::dispatch(
+            "get_manifest",
+            &registry,
+            Instant::now(),
+            None,
+            br#"{"plugin_id":"weather"}"#,
+        );
+        assert_eq!(out.status, CommandStatus::CommandOk, "error={}", out.error);
+        let json = String::from_utf8(out.data_json).unwrap();
+        assert!(json.contains("\"plugin_id\":\"weather\""), "json={json}");
+        assert!(
+            json.contains("\"actions\":[\"weather.get\"]"),
+            "json={json}"
+        );
+        assert!(json.contains("\"name\":\"weather.get\""), "json={json}");
+        assert!(
+            json.contains("\"description\":\"current conditions\""),
+            "json={json}"
+        );
+        assert!(
+            json.contains("\"params_schema\":\"{\\\"type\\\":\\\"object\\\"}\""),
+            "json={json}"
+        );
+        assert!(json.contains("\"risk\":\"low\""), "json={json}");
+        assert!(
+            json.contains("\"requires_confirmation\":false"),
+            "json={json}"
+        );
+    }
+
+    #[test]
+    fn get_manifest_unknown_plugin_errors() {
+        let registry = PluginRegistry::new();
+        let out = CommandHandler::dispatch(
+            "get_manifest",
+            &registry,
+            Instant::now(),
+            None,
+            br#"{"plugin_id":"nope"}"#,
+        );
+        assert_eq!(out.status, CommandStatus::CommandError);
+        assert_eq!(out.error, "plugin not registered: nope");
+    }
+
+    #[test]
+    fn get_manifest_missing_plugin_id_errors() {
+        let registry = PluginRegistry::new();
+        let out = CommandHandler::dispatch("get_manifest", &registry, Instant::now(), None, b"");
+        assert_eq!(out.status, CommandStatus::CommandError);
+        assert_eq!(out.error, "plugin not registered: ");
+    }
+
+    #[test]
+    fn get_manifest_maps_high_risk() {
+        let registry = PluginRegistry::new();
+        let manifest = PluginManifest {
+            action_specs: vec![crate::proto::veyron::ActionSpec {
+                name: "file.delete".to_string(),
+                description: "delete a file".to_string(),
+                params_schema: String::new(),
+                risk: crate::proto::veyron::ActionRisk::High as i32,
+                requires_confirmation: true,
+            }],
+            ..Default::default()
+        };
+        registry
+            .register("fs".to_string(), 2, manifest, dummy_tx(), "", "")
+            .unwrap();
+        let out = CommandHandler::dispatch(
+            "get_manifest",
+            &registry,
+            Instant::now(),
+            None,
+            br#"{"plugin_id":"fs"}"#,
+        );
+        assert_eq!(out.status, CommandStatus::CommandOk, "error={}", out.error);
+        let json = String::from_utf8(out.data_json).unwrap();
+        assert!(json.contains("\"risk\":\"high\""), "json={json}");
+        assert!(
+            json.contains("\"requires_confirmation\":true"),
+            "json={json}"
+        );
     }
 }

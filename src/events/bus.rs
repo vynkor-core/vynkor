@@ -209,11 +209,30 @@ pub fn plugin_lifecycle_payload(registry: &PluginRegistry, plugin_id: &str) -> V
         Some(dev) => (device_os_str(dev.os).to_string(), dev.capabilities),
         None => ("unspecified".to_string(), vec![]),
     };
+    // D-08: surface the tool schema (action_specs) so the AI can enumerate
+    // callable actions from the joined event alone. Registry data only — the
+    // kernel never interprets params_schema.
+    let action_specs: Vec<serde_json::Value> = registry
+        .get(plugin_id)
+        .map(|e| e.manifest.action_specs)
+        .unwrap_or_default()
+        .iter()
+        .map(|s| {
+            serde_json::json!({
+                "name": s.name,
+                "description": s.description,
+                "params_schema": s.params_schema,
+                "risk": crate::plugins::registry::action_risk_str(s.risk),
+                "requires_confirmation": s.requires_confirmation,
+            })
+        })
+        .collect();
     serde_json::json!({
         "plugin_id": plugin_id,
         "device_id": device_id,
         "os": os,
         "capabilities": capabilities,
+        "action_specs": action_specs,
     })
     .to_string()
     .into_bytes()

@@ -8,7 +8,7 @@ use tokio::sync::mpsc;
 
 // D-03: registry now stores the wire DeviceInfo/DeviceState/DeviceOs (proto
 // v1.6) directly — re-exported so callers keep the registry:: path.
-pub use crate::proto::veyron::{DeviceInfo, DeviceOs, DeviceState};
+pub use crate::proto::veyron::{ActionRisk, DeviceInfo, DeviceOs, DeviceState};
 
 /// Device identity + metadata parsed off `PluginRegister` (D-03). The
 /// registry falls back to the single-user defaults (`"local"`/`"default"`)
@@ -525,6 +525,18 @@ pub fn device_state_str(state: i32) -> &'static str {
         Ok(DeviceState::Online) => "online",
         Ok(DeviceState::Offline) => "offline",
         _ => "unspecified",
+    }
+}
+
+// D-08: display strings for wire ActionRisk values — the tool-calling surface
+// (joined event + get_manifest) reads risk back as a lowercase string
+pub fn action_risk_str(risk: i32) -> &'static str {
+    match ActionRisk::try_from(risk) {
+        Ok(ActionRisk::Low) => "low",
+        Ok(ActionRisk::Medium) => "medium",
+        Ok(ActionRisk::High) => "high",
+        Ok(ActionRisk::Critical) => "critical",
+        _ => "unknown",
     }
 }
 
