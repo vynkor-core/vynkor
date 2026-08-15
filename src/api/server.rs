@@ -42,6 +42,7 @@ pub fn create_router(
         vec![],
         5,
         1024,
+        10,
     )
 }
 
@@ -57,6 +58,7 @@ pub fn create_router_full(
     plugin_defs: Vec<PluginDef>,
     ws_handshake_timeout_secs: u64,
     max_ws_connections: usize,
+    ws_register_timeout_secs: u64,
 ) -> Router {
     let state = Arc::new(AppState {
         manager,
@@ -132,6 +134,7 @@ pub fn create_router_full(
             jwt_validator,
             open_conns: Arc::new(AtomicU64::new(0)),
             max_connections: max_ws_connections,
+            register_timeout_secs: ws_register_timeout_secs,
         });
         let ws_sub = Router::new()
             .route("/ws", get(ws_handler))
@@ -148,6 +151,7 @@ pub fn create_router_full(
 
 pub struct ApiServer {
     port: u16,
+    bind_ip: std::net::IpAddr,
     manager: Arc<PluginManager>,
     jwt_validator: Option<Arc<JwtValidator>>,
     ws_router_tx: Option<mpsc::Sender<IncomingMessage>>,
@@ -160,12 +164,14 @@ pub struct ApiServer {
     plugin_defs: Vec<PluginDef>,
     ws_handshake_timeout_secs: u64,
     max_ws_connections: usize,
+    ws_register_timeout_secs: u64,
 }
 
 impl ApiServer {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         port: u16,
+        bind_ip: std::net::IpAddr,
         manager: Arc<PluginManager>,
         jwt_validator: Option<Arc<JwtValidator>>,
         ws_router_tx: Option<mpsc::Sender<IncomingMessage>>,
@@ -178,9 +184,11 @@ impl ApiServer {
         plugin_defs: Vec<PluginDef>,
         ws_handshake_timeout_secs: u64,
         max_ws_connections: usize,
+        ws_register_timeout_secs: u64,
     ) -> Self {
         Self {
             port,
+            bind_ip,
             manager,
             jwt_validator,
             ws_router_tx,
@@ -193,6 +201,7 @@ impl ApiServer {
             plugin_defs,
             ws_handshake_timeout_secs,
             max_ws_connections,
+            ws_register_timeout_secs,
         }
     }
 
@@ -208,18 +217,19 @@ impl ApiServer {
             self.plugin_defs.clone(),
             self.ws_handshake_timeout_secs,
             self.max_ws_connections,
+            self.ws_register_timeout_secs,
         );
-        let addr = SocketAddr::from(([127, 0, 0, 1], self.port));
+        let addr = SocketAddr::from((self.bind_ip, self.port));
 
         if let (Some(cert), Some(key)) = (&self.tls_cert_path, &self.tls_key_path) {
-            info!("HTTPS/WSS API: https://localhost:{}", self.port);
+            info!("HTTPS/WSS API: https://{}", addr);
             let tls_config =
                 axum_server::tls_rustls::RustlsConfig::from_pem_file(cert, key).await?;
             axum_server::bind_rustls(addr, tls_config)
                 .serve(app.into_make_service())
                 .await?;
         } else {
-            info!("HTTP API: http://localhost:{}", self.port);
+            info!("HTTP API: http://{}", addr);
             axum_server::bind(addr)
                 .serve(app.into_make_service())
                 .await?;

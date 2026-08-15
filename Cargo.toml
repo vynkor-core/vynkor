@@ -87,6 +87,10 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 tokio-tungstenite = "0.24"
 futures-util = "0.3"
 
+# D-07: self-signed cert generation when TLS is on by default and the operator
+# provided no tls_cert_path/tls_key_path
+rcgen = "0.13"
+
 [features]
 otel = ["tracing-opentelemetry", "opentelemetry", "opentelemetry_sdk", "opentelemetry-otlp"]
 

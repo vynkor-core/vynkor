@@ -61,6 +61,8 @@ pub enum PluginCmd {
 /// `port`/`tls`: derive the kernel API's base URL (scheme + host + port).
 /// `token`: presented as `Authorization: Bearer <token>` on every request —
 /// required against a secured kernel (R5-06, AUDIT H-02/H-03).
+/// `cert_path`: the certificate to trust when TLS is on (operator-provided or
+/// the kernel's auto-generated self-signed pair, D-07).
 #[allow(clippy::too_many_arguments)]
 pub async fn handle(
     cmd: PluginCmd,
@@ -68,6 +70,7 @@ pub async fn handle(
     registry_url: Option<&str>,
     token: Option<&str>,
     tls: bool,
+    cert_path: Option<&std::path::Path>,
     cache_ttl_secs: u64,
     tmp_dir: &std::path::Path,
     max_archive_bytes: u64,
@@ -95,6 +98,7 @@ pub async fn handle(
         }
     };
     let base = base_url(port, tls);
+    let client = build_client(tls, cert_path)?;
 
     match cmd {
         PluginCmd::List { refresh, installed } => {
@@ -119,19 +123,25 @@ pub async fn handle(
             print_table(&filtered);
         }
         PluginCmd::Start { id } => {
-            api_post(&base, &format!("/plugins/{id}/start"), token).await?;
+            api_post(&client, &base, &format!("/plugins/{id}/start"), token).await?;
             println!("Plugin '{id}' started.");
         }
         PluginCmd::Stop { id } => {
-            api_post(&base, &format!("/plugins/{id}/stop"), token).await?;
+            api_post(&client, &base, &format!("/plugins/{id}/stop"), token).await?;
             println!("Plugin '{id}' stopped.");
         }
         PluginCmd::Restart { id } => {
-            api_post(&base, &format!("/plugins/{id}/restart"), token).await?;
+            api_post(&client, &base, &format!("/plugins/{id}/restart"), token).await?;
             println!("Plugin '{id}' restarted.");
         }
         PluginCmd::Logs { id, lines } => {
-            let body = api_get(&base, &format!("/plugins/{id}/logs?lines={lines}"), token).await?;
+            let body = api_get(
+                &client,
+                &base,
+                &format!("/plugins/{id}/logs?lines={lines}"),
+                token,
+            )
+            .await?;
             print!("{body}");
         }
         PluginCmd::Install { target, refresh } => {
@@ -381,9 +391,38 @@ fn print_table(entries: &[RegistryEntry]) {
     }
 }
 
-pub(crate) async fn api_get(base: &str, path: &str, token: Option<&str>) -> anyhow::Result<String> {
+/// HTTP client for the kernel API. TLS (D-07, on by default) pins the exact
+/// certificate the kernel serves — the operator-provided one or the
+/// auto-generated self-signed pair — instead of silently accepting anything.
+pub(crate) fn build_client(
+    tls: bool,
+    cert_path: Option<&std::path::Path>,
+) -> anyhow::Result<reqwest::Client> {
+    if !tls {
+        return Ok(reqwest::Client::new());
+    }
+    let cert_path = cert_path.ok_or_else(|| {
+        anyhow::anyhow!("tls enabled but no certificate path known for this config")
+    })?;
+    let pem = std::fs::read(cert_path).map_err(|_| {
+        anyhow::anyhow!(
+            "cannot read TLS certificate at {} — start the kernel once so it generates one",
+            cert_path.display()
+        )
+    })?;
+    let cert = reqwest::Certificate::from_pem(&pem)?;
+    Ok(reqwest::Client::builder()
+        .add_root_certificate(cert)
+        .build()?)
+}
+
+pub(crate) async fn api_get(
+    client: &reqwest::Client,
+    base: &str,
+    path: &str,
+    token: Option<&str>,
+) -> anyhow::Result<String> {
     let url = format!("{base}{path}");
-    let client = reqwest::Client::new();
     let mut req = client.get(&url);
     if let Some(t) = token {
         req = req.bearer_auth(t);
@@ -398,9 +437,13 @@ pub(crate) async fn api_get(base: &str, path: &str, token: Option<&str>) -> anyh
     Ok(resp.text().await?)
 }
 
-async fn api_post(base: &str, path: &str, token: Option<&str>) -> anyhow::Result<()> {
+pub(crate) async fn api_post(
+    client: &reqwest::Client,
+    base: &str,
+    path: &str,
+    token: Option<&str>,
+) -> anyhow::Result<()> {
     let url = format!("{base}{path}");
-    let client = reqwest::Client::new();
     let mut req = client.post(&url);
     if let Some(t) = token {
         req = req.bearer_auth(t);
@@ -440,7 +483,8 @@ mod tests {
             .create_async()
             .await;
 
-        let body = api_get(&server.url(), "/plugins/x/logs", Some("tok-123"))
+        let client = reqwest::Client::new();
+        let body = api_get(&client, &server.url(), "/plugins/x/logs", Some("tok-123"))
             .await
             .unwrap();
         assert_eq!(body, "log line");
@@ -458,7 +502,8 @@ mod tests {
             .create_async()
             .await;
 
-        api_get(&server.url(), "/plugins/x/logs", None)
+        let client = reqwest::Client::new();
+        api_get(&client, &server.url(), "/plugins/x/logs", None)
             .await
             .unwrap();
         mock.assert_async().await;
@@ -474,9 +519,20 @@ mod tests {
             .create_async()
             .await;
 
-        api_post(&server.url(), "/plugins/x/start", Some("tok-456"))
+        let client = reqwest::Client::new();
+        api_post(&client, &server.url(), "/plugins/x/start", Some("tok-456"))
             .await
             .unwrap();
         mock.assert_async().await;
+    }
+
+    #[test]
+    fn build_client_without_tls_is_plain() {
+        assert!(build_client(false, None).is_ok());
+    }
+
+    #[test]
+    fn build_client_tls_requires_a_cert_path() {
+        assert!(build_client(true, None).is_err());
     }
 }

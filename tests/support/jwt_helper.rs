@@ -22,6 +22,8 @@ pub fn create_test_token(
         ipc_targets: vec![],
         exp: (now + exp_offset_secs).max(0) as usize,
         iat: now as usize,
+        aud: None,
+        jti: None,
     };
     encode(
         &Header::new(Algorithm::HS256),
@@ -29,4 +31,15 @@ pub fn create_test_token(
         &EncodingKey::from_secret(secret),
     )
     .expect("test token encoding must not fail")
+}
+
+/// D-07: per-device JWT with aud + jti claims, like `vyn token mint` issues.
+pub fn create_device_token(
+    device_id: &str,
+    permissions: Vec<String>,
+    secret: &[u8],
+    ttl_secs: u64,
+) -> String {
+    veyron::auth::jwt::mint_device_token(secret, device_id, permissions, vec![], ttl_secs, "veyron")
+        .expect("device token minting must not fail")
 }

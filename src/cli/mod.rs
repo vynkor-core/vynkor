@@ -1,11 +1,13 @@
 pub mod complete;
 pub mod devices;
 pub mod plugin;
+pub mod token;
 
 use clap::{Parser, Subcommand};
 use clap_complete::Shell;
 use plugin::PluginCmd;
 use std::path::PathBuf;
+use token::TokenCmd;
 
 #[derive(Parser)]
 #[command(name = "vyn")]
@@ -37,6 +39,15 @@ pub enum Commands {
         /// JWT bearer token for a secured kernel. Falls back to VEYRON_JWT_TOKEN.
         #[arg(long)]
         token: Option<String>,
+    },
+    /// Mint JWTs offline (D-07) — per-device tokens for remote device agents.
+    /// Reads jwt_secret from the config file; the kernel need not be running.
+    Token {
+        #[command(subcommand)]
+        cmd: TokenCmd,
+
+        #[arg(short, long, default_value = "config.yaml")]
+        config: String,
     },
     Start {
         #[arg(short, long)]

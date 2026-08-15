@@ -21,3 +21,4 @@ mod test_sdk;
 mod test_server;
 mod test_state;
 mod test_supervisor;
+mod test_tls;

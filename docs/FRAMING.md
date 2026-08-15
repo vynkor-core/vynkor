@@ -89,6 +89,21 @@ query strings appear in server access logs, browser history, and proxy logs.
 The header approach is superior. The manifesto text is superseded by this document.
 Third-party clients must use the `Sec-WebSocket-Protocol` header.
 
+## WebSocket Registration Deadline (D-07)
+
+A JWT-authenticated WS connection that never completes `PluginRegister` never
+receives a session frame-MAC key, so its frames are only CRC-protected. The
+network path is TLS by default (D-07), so a wire MITM can no longer inject such
+frames — and the gateway closes the residual window by dropping any
+authenticated connection that has not registered within
+`ws_register_timeout_secs` (default 10). Registration arms the MAC exactly as
+on UDS: the ack carries a `session_nonce`, both sides derive the session key,
+and every subsequent frame must carry a valid `FLAG_MAC_PRESENT` tag
+(`ERR_MAC_MISSING`/`ERR_MAC_INVALID` otherwise, same as the UDS path). The
+register frame itself is MAC-free by construction (the key does not exist yet)
+— on the WS path it is protected by TLS; on UDS by socket permissions
+(`0o600`).
+
 ## Audio Permissions
 
 `PERMISSION_AUDIO_STREAM` — required for any plugin that sends frames with `FLAG_RAW_BINARY`

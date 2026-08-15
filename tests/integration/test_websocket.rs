@@ -1,5 +1,5 @@
 use super::helpers::{start_kernel, start_kernel_secured};
-use crate::jwt_helper::create_test_token;
+use crate::jwt_helper::{create_device_token, create_test_token};
 use futures_util::{SinkExt, StreamExt};
 use prost::Message;
 use std::time::Duration;
@@ -406,6 +406,201 @@ async fn ws_closed_after_max_parse_errors() {
     };
     assert!(closed, "WS connection must close after 16 parse errors");
     let _ = _shutdown.send(());
+}
+
+// ---- D-07: per-device JWT + register-or-drop deadline ----
+
+type WsStream =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// Register over WS and return the ack's session nonce (the MAC key input).
+async fn register_and_get_nonce(
+    ws: &mut WsStream,
+    plugin_id: &str,
+    device_id: &str,
+    token: &str,
+) -> Vec<u8> {
+    let reg_env = Envelope {
+        payload: Some(envelope::Payload::PluginRegister(PluginRegister {
+            plugin_id: plugin_id.to_string(),
+            device_id: device_id.to_string(),
+            version: String::new(),
+            description: String::new(),
+            manifest: Some(PluginManifest::default()),
+            jwt_token: token.to_string(),
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+    let mut buf = Vec::new();
+    reg_env.encode(&mut buf).unwrap();
+    ws.send(WsMsg::Binary(build_frame("kernel", &buf)))
+        .await
+        .unwrap();
+
+    let ack_data = match timeout(Duration::from_secs(3), ws.next())
+        .await
+        .expect("ack timed out")
+        .expect("stream ended")
+        .expect("ws error")
+    {
+        WsMsg::Binary(b) => b,
+        other => panic!("expected binary ack, got: {:?}", other),
+    };
+    let (ack_payload, _) = parse_ws_frame(&ack_data);
+    let ack_env = Envelope::decode(ack_payload.as_ref()).expect("decode ack");
+    match ack_env.payload {
+        Some(envelope::Payload::PluginRegisterAck(ack)) => {
+            assert!(ack.accepted, "registration must be accepted");
+            ack.session_nonce
+        }
+        other => panic!("expected PluginRegisterAck, got {:?}", other),
+    }
+}
+
+fn ws_closed(msg: Option<Result<WsMsg, tokio_tungstenite::tungstenite::Error>>) -> bool {
+    matches!(msg, None | Some(Err(_)) | Some(Ok(WsMsg::Close(_))))
+}
+
+#[tokio::test]
+async fn ws_client_that_never_registers_is_dropped() {
+    // D-07 gap closure: a JWT-authenticated WS client that never completes
+    // registration never gets a session frame-MAC key — the gateway must drop
+    // it after the register timeout instead of letting it idle forever.
+    use super::helpers::{start_kernel_with_config, test_config};
+    use veyron::utils::config::Config;
+
+    let secret = "ws-register-deadline-secret-32-bytes-minimum";
+    let cfg = Config {
+        allow_no_auth: false,
+        jwt_secret: Some(secret.to_string()),
+        ws_register_timeout_secs: 1,
+        ..test_config("/tmp/veyron_ws_no_register.sock", 19357)
+    };
+    let (_shutdown, _reg, _bus) = start_kernel_with_config(cfg).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let token = create_test_token("never-register", vec![], secret.as_bytes(), 3600);
+    let mut ws = ws_connect_with_jwt(19357, &token).await;
+
+    let closed = timeout(Duration::from_secs(5), async {
+        loop {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            if ws_closed(ws.next().await) {
+                return true;
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+    assert!(
+        closed,
+        "unregistered WS client must be dropped after the register timeout"
+    );
+}
+
+#[tokio::test]
+async fn ws_client_that_registers_survives_the_deadline() {
+    // registering within the deadline arms the session MAC key, and the
+    // connection must stay alive past the register timeout
+    use super::helpers::{start_kernel_with_config, test_config};
+    use veyron::utils::config::Config;
+
+    let secret = "ws-register-ok-secret-32-bytes-minimum";
+    let cfg = Config {
+        allow_no_auth: false,
+        jwt_secret: Some(secret.to_string()),
+        ws_register_timeout_secs: 1,
+        ..test_config("/tmp/veyron_ws_registered.sock", 19358)
+    };
+    let (_shutdown, _reg, _bus) = start_kernel_with_config(cfg).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let token = create_test_token("registered-plugin", vec![], secret.as_bytes(), 3600);
+    let mut ws = ws_connect_with_jwt(19358, &token).await;
+    let nonce = register_and_get_nonce(&mut ws, "registered-plugin", "", &token).await;
+    let key = derive_session_key(secret.as_bytes(), &nonce, "registered-plugin");
+
+    // wait out the deadline — a registered connection must not be dropped
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    let ping_env = Envelope {
+        payload: Some(envelope::Payload::Ping(Ping { timestamp: 7 })),
+        ..Default::default()
+    };
+    let mut ping_buf = Vec::new();
+    ping_env.encode(&mut ping_buf).unwrap();
+    ws.send(WsMsg::Binary(build_mac_frame("kernel", &ping_buf, &key)))
+        .await
+        .unwrap();
+
+    let pong = timeout(Duration::from_secs(2), ws.next())
+        .await
+        .expect("recv timed out")
+        .expect("stream ended");
+    assert!(
+        matches!(pong, Ok(WsMsg::Binary(_))),
+        "registered WS client must stay alive past the register deadline, got {pong:?}"
+    );
+}
+
+#[tokio::test]
+async fn per_device_token_registers_device_plugin_end_to_end() {
+    // D-07 acceptance: a per-device JWT (sub=device_id, aud + jti nonce)
+    // registers any plugin of that device over WS and the frame-MAC flow
+    // works with it — the same path a device agent uses.
+    use super::helpers::{start_kernel_with_config, test_config};
+    use veyron::utils::config::Config;
+
+    let secret = "ws-device-token-secret-32-bytes-minimum";
+    let cfg = Config {
+        allow_no_auth: false,
+        jwt_secret: Some(secret.to_string()),
+        ..test_config("/tmp/veyron_ws_device_token.sock", 19359)
+    };
+    let (_shutdown, _reg, _bus) = start_kernel_with_config(cfg).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let token = create_device_token(
+        "phone-1",
+        vec!["PERMISSION_IPC_SEND".into()],
+        secret.as_bytes(),
+        3600,
+    );
+    let mut ws = ws_connect_with_jwt(19359, &token).await;
+    let nonce = register_and_get_nonce(&mut ws, "device.geo", "phone-1", &token).await;
+    assert_eq!(nonce.len(), 16, "must get a session nonce");
+
+    let key = derive_session_key(secret.as_bytes(), &nonce, "device.geo");
+
+    // MAC'd ping/pong round-trip proves the session key is live on both sides
+    let ping_env = Envelope {
+        payload: Some(envelope::Payload::Ping(Ping { timestamp: 9 })),
+        ..Default::default()
+    };
+    let mut ping_buf = Vec::new();
+    ping_env.encode(&mut ping_buf).unwrap();
+    ws.send(WsMsg::Binary(build_mac_frame("kernel", &ping_buf, &key)))
+        .await
+        .unwrap();
+
+    let pong_data = match timeout(Duration::from_secs(2), ws.next())
+        .await
+        .expect("recv timed out")
+        .expect("stream ended")
+        .expect("ws error")
+    {
+        WsMsg::Binary(b) => b,
+        other => panic!("expected binary pong, got: {:?}", other),
+    };
+    let (pong_payload, had_mac) = parse_ws_frame(&pong_data);
+    assert!(had_mac, "outbound frames must be MAC-tagged");
+    let pong_env = Envelope::decode(pong_payload.as_ref()).expect("decode pong");
+    assert!(
+        matches!(pong_env.payload, Some(envelope::Payload::Pong(_))),
+        "expected Pong, got {:?}",
+        pong_env.payload
+    );
 }
 
 #[tokio::test]

@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::process::Command;
 use tracing::{info, warn};
-use veyron::cli::{complete, devices, plugin};
+use veyron::cli::{complete, devices, plugin, token};
 use veyron::cli::{Cli, Commands};
 use veyron::kernel;
 use veyron::utils;
@@ -138,12 +138,14 @@ async fn run_kernel(cli: Cli) -> Result<()> {
             let cfg = load_config(&config).unwrap_or_default();
             let token = token.or_else(|| std::env::var("VEYRON_JWT_TOKEN").ok());
             let plugins_dir = resolve_plugins_dir(&config, cfg.plugins_dir.as_deref());
+            let cert_path = veyron::utils::config::effective_tls_cert_path(&cfg);
             plugin::handle(
                 cmd,
                 cfg.port,
                 cfg.registry_url.as_deref(),
                 token.as_deref(),
-                cfg.tls_cert_path.is_some(),
+                cfg.tls,
+                cert_path.as_deref(),
                 cfg.registry_cache_ttl_secs,
                 &cfg.tmp_dir,
                 cfg.max_archive_bytes,
@@ -158,7 +160,11 @@ async fn run_kernel(cli: Cli) -> Result<()> {
         Commands::Devices { config, token } => {
             let cfg = load_config(&config).unwrap_or_default();
             let token = token.or_else(|| std::env::var("VEYRON_JWT_TOKEN").ok());
-            devices::handle(cfg.port, cfg.tls_cert_path.is_some(), token.as_deref()).await?;
+            let cert_path = veyron::utils::config::effective_tls_cert_path(&cfg);
+            devices::handle(cfg.port, cfg.tls, cert_path.as_deref(), token.as_deref()).await?;
+        }
+        Commands::Token { cmd, config } => {
+            token::handle(cmd, &config).await?;
         }
         Commands::Completions { shell } => {
             complete::generate_completions(shell);
