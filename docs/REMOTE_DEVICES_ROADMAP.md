@@ -271,13 +271,30 @@
     the acceptance: the AI's `confirm_write` is denied, the user's
     `device.phone` confirm executes the write.
 
-- [ ] **D-10 — Observability: `message_id` propagation + log discipline.**
+- [x] **D-10 — Observability: `message_id` propagation + log discipline.**
   Preserve `Envelope.message_id` across forward/broadcast (the event bus
   currently builds fresh envelopes without it) and log
   `message_id`/`sender_id`/`target`/`hop` at each hop.
   - Files: `src/ipc/protocol.rs`, `src/events/bus.rs`.
   - Acceptance: one action is traceable device → bridge → kernel → plugin via
     `message_id`.
+  - **Status (2026-08-15): SHIPPED** — merged via PR veyron-core/veyron#30
+    (`68da36a`, commit `5b663a6`). `build_outbound` keeps a caller-set
+    `message_id` (fresh `k-{ts}-{seq}` only when absent) and shares the id
+    sequence with the event bus via `kernel_message_id()` so the two stamping
+    sites can't collide; all 11 envelope-rebuild paths (register/ping/event-ack,
+    action request/response, chunks, session close, kernel-command ack) copy
+    the inbound `message_id` instead of minting a new one — the kernel no
+    longer breaks the trace on the device→kernel→plugin leg. The event bus
+    stamps `message_id`/`sender_id`/`timestamp` on delivered event envelopes.
+    Log discipline: `debug!` per hop with
+    `message_id`/`sender_id`/`target`/`hop` — hop 0 ingress in the router loop,
+    hop 1 at relay (forward/broadcast), dispatch (`build_outbound`), and event
+    delivery; best-effort envelope decode for the log only, routing stays
+    zero-parse. 6 new tests (request preserves/stamps, ping→pong echoes,
+    forward + broadcast relay, event delivery carries the trace header, hop
+    logs carry the fields). Full suite green (`clippy -D warnings`,
+    `fmt --check`).
 
 - [ ] **D-11 — Threat model doc.**
   Assets / actors (external attacker, compromised plugin, compromised device,
