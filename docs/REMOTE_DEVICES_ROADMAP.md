@@ -244,12 +244,32 @@
     tool schema. Full suite green (116 lib + 91 integration + 295 unit = 502
     tests, `clippy -D warnings`, `fmt --check`).
 
-- [ ] **D-09 — Confirmation gate (SDK helper + reference impl).**
+- [x] **D-09 — Confirmation gate (SDK helper + reference impl).**
   Permission-separation pattern: high-risk actions split into `request_*` (the
   AI's JWT can call) and `confirm_*` (only the user's device can call). SDK
   one-liner + a reference high-risk plugin demonstrating `requires_confirmation`.
   - Files: `../veyron-sdk-rust/`, `../veyron-plugins/`.
   - Acceptance: the AI cannot call `confirm_*`; the user confirm path works.
+  - **Status (2026-08-15): SHIPPED** — veyron-sdk-rust#5
+    (`feat/d-09-confirmation-gate`): new `ConfirmationGate` SDK helper splits
+    one risky operation into `request_<op>` (any caller; action spec marked
+    `requires_confirmation`; params stored as pending, nothing executes) and
+    `confirm_<op>` (allowlisted callers only; executes the params stored at
+    request time). Enforcement is plugin-side, keyed on the kernel-stamped
+    `caller_plugin_id` (unspoofable) — no kernel gate (dumb core, §21.2
+    decision #2). The confirm allowlist supports `prefix.*` globs
+    (`device.*` = every D-06 bridge mirror); pending requests expire (default
+    5 min, `with_pending_ttl`); caller-side one-liners
+    `send_confirmation_request`/`send_confirmation`. SDK bumps to **0.1.6**
+    (additive); the D-05-era WS integration tests also pin `tls: false` in
+    the spawned kernel config, which D-07's TLS-default had broken.
+    veyron-plugins#11 (`feat/d-09-confirmation-gate`) ships the reference
+    `gated-write` plugin demonstrating the gate on a risky file write
+    (`request_write`/`confirm_write`, writes confined to `GATED_WRITE_DATA_DIR`,
+    absolute-path/`..`/symlink-escape guards; the SDK dep is patched from the
+    D-09 branch until 0.1.6 publishes). E2E against the real kernel confirms
+    the acceptance: the AI's `confirm_write` is denied, the user's
+    `device.phone` confirm executes the write.
 
 - [ ] **D-10 — Observability: `message_id` propagation + log discipline.**
   Preserve `Envelope.message_id` across forward/broadcast (the event bus
