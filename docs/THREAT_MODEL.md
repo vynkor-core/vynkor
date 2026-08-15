@@ -88,7 +88,7 @@ softest local target.
 ### 3. compromised device
 
 A device is a full peer on the network path: its agent connects over WS(TLS),
-registers `device.<cap>` mirrors, and holds a per-device JWT. "Compromised
+registers `<device_id>.<cap>` mirrors, and holds a per-device JWT. "Compromised
 device" means that JWT, or the agent process, is attacker-controlled.
 
 Denied by:

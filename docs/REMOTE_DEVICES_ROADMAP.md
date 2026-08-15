@@ -163,13 +163,13 @@
 - [x] **D-06 — `role: client` + bridge/mirror component + local-first routing.**
   - Config: `role: host|client` + `bridge:` section (host URL, token, mirror list).
   - Bridge: one WS connection per mirrored capability, registering as
-    `device.<cap>` on the host, shuttling frames both ways.
+    `<device_id>.<cap>` on the host, shuttling frames both ways.
   - Local router: resolve local `target` first, else forward via bridge
     (local-to-local must not round-trip the host).
   - Files: `src/utils/config.rs`, new bridge module, `src/kernel/orchestrator.rs`,
     `src/ipc/protocol.rs`.
   - Acceptance: `vyn --client` runs, hosts a local plugin, that plugin appears
-    on the host as `device.<cap>`; local-to-local traffic stays local.
+    on the host as `<device_id>.<cap>`; local-to-local traffic stays local.
   - **Status (2026-08-14): SHIPPED** — this PR
     (`feat/d-06-role-client-bridge`, commits `a073c20`, `e29741b`).
     `role: client` + `bridge:` config (host_url/token/secret/mirror) plus
@@ -184,6 +184,8 @@
     actions targeting `"kernel"` fail locally with `ActionNotFound` (D-10),
     relay uses the first live connection only. Full suite green (478 tests
     incl. 4 new bridge tests; `clippy -D warnings`, `fmt --check`).
+    **Naming updated (2026-08-15):** mirrors register as `<device_id>.<cap>`
+    (D-14 decision), not the literal `device.<cap>` — see D-14.
 
 - [x] **D-07 — Auth: per-device JWT minting + TLS by default + close the WS no-MAC gap.**
   - `vyn token mint --device …` → per-device JWT (`sub=device_id`, restricted
@@ -350,11 +352,11 @@
 
 - [ ] **D-14 — Android device-agent app.**
   Single app exposing fixed capabilities that register on the host as
-  `device.<cap>`; persistent WS + foreground service.
+  `<device_id>.<cap>`; persistent WS + foreground service.
   - Files: new `../vynkor-client-android`. Design + decisions:
     `docs/ANDROID_DEVICE_AGENT.md`; Rust core + UniFFI boundary:
     `docs/ANDROID_DEVICE_AGENT_RUST_CORE.md`.
-  - Acceptance: phone appears on the host; `device.geo`/`device.battery`
+  - Acceptance: phone appears on the host; `<device_id>.geo`/`<device_id>.battery`
     callable.
   - **Design (2026-08-15):** repo `vynkor-client-android` created in
     `veyron-core` (org rename pending — new names used from day one). Stack:
@@ -368,6 +370,20 @@
     `rust/` crate `vynkor-agent-core` (UniFFI surface: `Agent`,
     `AgentConfig`, 5 foreign traits) — `cargo build` green, cdylib exports
     the UniFFI metadata; transport/protocol/caps are TODO.
+  - **Naming decision (2026-08-15): `<device_id>.<cap>`** (plan §4) wins over
+    the D-06 bridge's literal `device.<cap>`. The kernel bridge now registers
+    `{device_id}.{cap}` (`src/bridge/mod.rs`, `device_id` from config →
+    `$HOSTNAME` → `unknown`); the design docs (`ANDROID_DEVICE_AGENT*.md`)
+    use the new form. Cross-repo follow-ups still open:
+    - [ ] `veyron-plugins/plugins/gated-write` — `DEFAULT_CONFIRM_CALLERS =
+      "device.*"` matches nothing now; the confirm allowlist for "any device
+      mirror" needs a decision (glob extension vs operator-set `<device_id>.*`
+      vs matching on the kernel-stamped caller device_id).
+    - [ ] `veyron-sdk-rust/src/confirmation_gate.rs` — `device.*` doc-comment
+      examples/tests → `<device_id>.*` form (mechanism is generic, docs only).
+    - [ ] `veyron-plugins/plugins/tts` — `device.phone.speaker` examples
+      (README/USAGE/plugin.json/request.rs) → `<device_id>.speaker`
+      (operator-configured `TTS_PLUGIN_IPC_TARGETS`, examples only).
 
 - [ ] **D-15 — Web companion (wss chat/control) + Web Push.**
   Browser/PWA client speaking the frame protocol over wss (TS), chat with the

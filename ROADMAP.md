@@ -1,4 +1,4 @@
-# Veyron ROADMAP — Phase 8
+# Veyron ROADMAP — Phases 8–11
 
 **Baseline:** 2026-08-10 · Kernel `0.1.0`
 **Branch:** `develop`

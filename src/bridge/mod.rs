@@ -180,7 +180,7 @@ impl Bridge {
     async fn one_cycle(&self, cap: &str, conn_id: u64) -> Result<(), BridgeError> {
         // mirror only a live local plugin: the manifest is registered on the
         // host verbatim (so its actions resolve there) and locally stripped
-        // of the provider surface (so device.<cap> never wins action lookup)
+        // of the provider surface (so <device_id>.<cap> never wins action lookup)
         let (host_manifest, local_user_id) = wait_for_local_plugin(&self.registry, cap).await;
         let url = resolve_ws_url(&self.config.host_url)?;
         self.run_conn(cap, conn_id, &url, host_manifest, local_user_id)
@@ -196,7 +196,8 @@ impl Bridge {
         host_manifest: PluginManifest,
         local_user_id: String,
     ) -> Result<(), BridgeError> {
-        let device_plugin_id = format!("device.{cap}");
+        // <device_id>.<cap> — D-14 naming decision, globally unique per device
+        let device_plugin_id = format!("{}.{}", self.device_id, cap);
 
         let mut req = url
             .into_client_request()
@@ -275,7 +276,7 @@ impl Bridge {
             }
         };
 
-        // local registration makes the router resolve device.<cap> without
+        // local registration makes the router resolve <device_id>.<cap> without
         // round-tripping the host — local-to-local traffic stays local
         let (host_tx, host_rx) = mpsc::channel::<Outbound>(64);
         let local_manifest = local_entry_manifest(&host_manifest, cap);
@@ -332,7 +333,7 @@ async fn wait_for_local_plugin(registry: &PluginRegistry, cap: &str) -> (PluginM
 
 /// The local registry entry is a routing proxy, not a provider: strip the
 /// action/event surface so find_action_provider/event delivery never resolve
-/// device.<cap>, and force the send gate so host->client frames pass
+/// <device_id>.<cap>, and force the send gate so host->client frames pass
 /// forward()'s permission checks.
 fn local_entry_manifest(host_manifest: &PluginManifest, cap: &str) -> PluginManifest {
     let mut m = host_manifest.clone();
@@ -532,7 +533,7 @@ mod tests {
         PluginManifest {
             actions: actions.iter().map(|s| s.to_string()).collect(),
             permissions: vec!["PERMISSION_IPC_SEND".to_string()],
-            ipc_targets: vec!["device.geo".to_string()],
+            ipc_targets: vec!["device-1.geo".to_string()],
             ..Default::default()
         }
     }
@@ -676,7 +677,7 @@ mod tests {
                 Some(envelope::Payload::PluginRegister(r)) => r,
                 other => panic!("expected PluginRegister, got {other:?}"),
             };
-            assert_eq!(reg.plugin_id, "device.geo");
+            assert_eq!(reg.plugin_id, "device-1.geo");
             assert_eq!(reg.capabilities, vec!["geo"]);
             assert_eq!(reg.device_id, "device-1");
 
@@ -695,7 +696,7 @@ mod tests {
                 .await
                 .unwrap();
 
-            let key = derive_session_key(&host_secret, b"nonce-aaaaaaaaaa", "device.geo");
+            let key = derive_session_key(&host_secret, b"nonce-aaaaaaaaaa", "device-1.geo");
 
             // host kernel -> device: an Event (device traffic)
             let event = Envelope {
@@ -774,9 +775,11 @@ mod tests {
             .unwrap();
         assert_eq!(frame_target(&msg.frame), "kernel");
 
-        // the local registry now resolves device.geo to the bridge
-        let entry = registry.get("device.geo").expect("bridge entry registered");
-        assert_eq!(entry.plugin_id, "device.geo");
+        // the local registry now resolves device-1.geo to the bridge
+        let entry = registry
+            .get("device-1.geo")
+            .expect("bridge entry registered");
+        assert_eq!(entry.plugin_id, "device-1.geo");
         assert!(entry.manifest.actions.is_empty());
 
         // push a kernel-reply frame through the bridge entry's write channel
