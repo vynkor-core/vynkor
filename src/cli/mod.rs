@@ -50,6 +50,26 @@ pub enum Commands {
 
         #[arg(short, long)]
         debug: bool,
+
+        /// Kernel role: host (default) or client (mirrors plugins to a host kernel, D-06).
+        #[arg(long, value_parser = ["client", "host"])]
+        role: Option<String>,
+
+        /// Host kernel base URL for the client bridge; http/https base gets /ws appended (D-06).
+        #[arg(long)]
+        bridge_url: Option<String>,
+
+        /// JWT for the host kernel's WS gateway (D-06).
+        #[arg(long)]
+        bridge_token: Option<String>,
+
+        /// Host kernel's jwt_secret, needed to derive the bridge frame MAC key (D-06).
+        #[arg(long)]
+        bridge_secret: Option<String>,
+
+        /// Local plugin id to mirror to the host; repeatable (D-06).
+        #[arg(long)]
+        bridge_mirror: Vec<String>,
     },
 
     Stop {

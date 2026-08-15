@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
+use std::collections::HashSet;
 use std::fs;
 use std::process::Command;
 use tracing::{info, warn};
@@ -7,7 +8,7 @@ use veyron::cli::{complete, devices, plugin};
 use veyron::cli::{Cli, Commands};
 use veyron::kernel;
 use veyron::utils;
-use veyron::utils::config::{load_config, resolve_plugins_dir, Config};
+use veyron::utils::config::{load_config, resolve_plugins_dir, BridgeConfig, Config, Role};
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -43,6 +44,11 @@ async fn run_kernel(cli: Cli) -> Result<()> {
             port,
             config,
             debug,
+            role,
+            bridge_url,
+            bridge_token,
+            bridge_secret,
+            bridge_mirror,
         } => {
             // Defer the load-failure warning until after logging is configured,
             // so it honours the resolved log level.
@@ -63,6 +69,15 @@ async fn run_kernel(cli: Cli) -> Result<()> {
                 warn!("failed to load config '{}': {}, using defaults", config, e);
             }
 
+            apply_role_overrides(
+                &mut cfg,
+                role,
+                bridge_url,
+                bridge_token,
+                bridge_secret,
+                bridge_mirror,
+            )?;
+            validate_bridge_config(&cfg)?;
             ensure_auth_configured(&cfg)?;
 
             if foreground {
@@ -172,6 +187,83 @@ fn ensure_auth_configured(cfg: &Config) -> Result<()> {
     Ok(())
 }
 
+/// Merge D-06 CLI overrides into the loaded config. Bridge flags implicitly
+/// select the client role unless `--role` was given explicitly.
+fn apply_role_overrides(
+    cfg: &mut Config,
+    role: Option<String>,
+    bridge_url: Option<String>,
+    bridge_token: Option<String>,
+    bridge_secret: Option<String>,
+    bridge_mirror: Vec<String>,
+) -> Result<()> {
+    let explicit_role = role.as_deref();
+    if explicit_role == Some("client") {
+        cfg.role = Role::Client;
+    } else if explicit_role == Some("host") {
+        cfg.role = Role::Host;
+    }
+    let has_bridge_flag = bridge_url.is_some()
+        || bridge_token.is_some()
+        || bridge_secret.is_some()
+        || !bridge_mirror.is_empty();
+    if has_bridge_flag && explicit_role.is_none() {
+        cfg.role = Role::Client;
+    }
+    if !has_bridge_flag {
+        return Ok(());
+    }
+    let bridge = cfg.bridge.get_or_insert_with(BridgeConfig::default);
+    if let Some(url) = bridge_url {
+        bridge.host_url = url;
+    }
+    if let Some(token) = bridge_token {
+        bridge.token = Some(token);
+    }
+    if let Some(secret) = bridge_secret {
+        bridge.secret = Some(secret);
+    }
+    if !bridge_mirror.is_empty() {
+        bridge.mirror = bridge_mirror;
+    }
+    Ok(())
+}
+
+/// A client kernel is unusable without a reachable host and a non-empty mirror
+/// list, and mirroring a plugin that is not configured would silently no-op.
+fn validate_bridge_config(cfg: &Config) -> Result<()> {
+    if cfg.role != Role::Client {
+        return Ok(());
+    }
+    let bridge = cfg.bridge.as_ref().ok_or_else(|| {
+        anyhow::anyhow!("role: client requires a `bridge:` block in config or --bridge-url")
+    })?;
+    let url_ok = ["ws://", "wss://", "http://", "https://"]
+        .iter()
+        .any(|p| bridge.host_url.starts_with(p));
+    if !url_ok {
+        anyhow::bail!(
+            "invalid bridge host_url '{}': expected http(s):// or ws(s)://",
+            bridge.host_url
+        );
+    }
+    if bridge.mirror.is_empty() {
+        anyhow::bail!(
+            "role: client requires at least one mirrored plugin (`bridge.mirror` or --bridge-mirror)"
+        );
+    }
+    let configured: HashSet<&str> = cfg.plugins.iter().map(|p| p.id.as_str()).collect();
+    for cap in &bridge.mirror {
+        if !configured.contains(cap.as_str()) {
+            anyhow::bail!(
+                "bridge mirror '{cap}' is not a configured plugin (plugins: [{}])",
+                configured.iter().cloned().collect::<Vec<_>>().join(", ")
+            );
+        }
+    }
+    Ok(())
+}
+
 fn is_running(pid_file: &std::path::Path) -> Result<bool> {
     let pid = match read_pid(pid_file) {
         Ok(p) => p,
@@ -267,6 +359,23 @@ fn daemonize_and_run(cfg: &Config, config_path: &str, debug: bool) -> Result<()>
         .arg("--port")
         .arg(cfg.port.to_string())
         .env("VEYRON_READY_FD", ready_fd.to_string());
+    if cfg.role == Role::Client {
+        // the daemon child re-execs with flags only — re-apply the role and
+        // bridge settings so client mode survives the background fork
+        command.arg("--role").arg("client");
+        if let Some(bridge) = &cfg.bridge {
+            command.arg("--bridge-url").arg(&bridge.host_url);
+            if let Some(t) = &bridge.token {
+                command.arg("--bridge-token").arg(t);
+            }
+            if let Some(s) = &bridge.secret {
+                command.arg("--bridge-secret").arg(s);
+            }
+            for m in &bridge.mirror {
+                command.arg("--bridge-mirror").arg(m);
+            }
+        }
+    }
     if debug {
         command.arg("--debug");
     }
