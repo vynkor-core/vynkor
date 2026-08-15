@@ -568,10 +568,10 @@ async fn per_device_token_registers_device_plugin_end_to_end() {
         3600,
     );
     let mut ws = ws_connect_with_jwt(19359, &token).await;
-    let nonce = register_and_get_nonce(&mut ws, "device.geo", "phone-1", &token).await;
+    let nonce = register_and_get_nonce(&mut ws, "phone-1.geo", "phone-1", &token).await;
     assert_eq!(nonce.len(), 16, "must get a session nonce");
 
-    let key = derive_session_key(secret.as_bytes(), &nonce, "device.geo");
+    let key = derive_session_key(secret.as_bytes(), &nonce, "phone-1.geo");
 
     // MAC'd ping/pong round-trip proves the session key is live on both sides
     let ping_env = Envelope {
