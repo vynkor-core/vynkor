@@ -185,7 +185,7 @@
     relay uses the first live connection only. Full suite green (478 tests
     incl. 4 new bridge tests; `clippy -D warnings`, `fmt --check`).
 
-- [ ] **D-07 — Auth: per-device JWT minting + TLS by default + close the WS no-MAC gap.**
+- [x] **D-07 — Auth: per-device JWT minting + TLS by default + close the WS no-MAC gap.**
   - `vyn token mint --device …` → per-device JWT (`sub=device_id`, restricted
     claims, `aud`/nonce/short `exp`).
   - TLS (rustls) enabled by default for the network path; bind beyond
@@ -195,6 +195,28 @@
     `src/cli/`.
   - Acceptance: per-device token works end-to-end; TLS on by default;
     `aud`/`exp`/nonce validated.
+  - **Status (2026-08-15): SHIPPED** — this PR
+    (`feat/d-07-per-device-jwt-tls`). `PluginClaims` gains `aud`/`jti`;
+    `JwtValidator` enforces `exp` (as before), the required `jwt_audience`
+    config (`aud` claim becomes mandatory when set — pre-D-07 tokens without
+    `aud` keep validating when it isn't) and the "`aud` present ⇒ `jti`
+    nonce present" pairing; `mint_device_token` issues per-device JWTs
+    (`sub=device_id`, restricted claims, `aud`, 16-byte `jti`, short `exp`).
+    New `vyn token mint --device <id> [--permissions …] [--ipc-targets …]
+    [--ttl-seconds …] [--aud …]` mints offline from the config's `jwt_secret`.
+    TLS is on by default (`tls: true`): the kernel serves the configured
+    cert/key or auto-generates a self-signed pair into `<private dir>/
+    veyron-tls/` (`rcgen`, reused across restarts) — `tls: false` is the
+    explicit insecure opt-out; a half-configured `tls_cert_path`/`tls_key_path`
+    fails boot rather than downgrading. The gateway binds `0.0.0.0` when
+    `role: host` + auth is configured (loopback otherwise, `bind:` overrides);
+    the local `vyn` clients pin the exact served certificate instead of
+    accepting anything. The WS no-MAC gap is closed: a JWT-authenticated WS
+    connection that doesn't complete registration within
+    `ws_register_timeout_secs` (default 10) is dropped — every WS frame is
+    either MAC'd (post-registration) or arrives on a TLS-protected connection
+    within a bounded window. Full suite green (112 lib + 90 integration + 295
+    unit = 497 tests, `clippy -D warnings`, `fmt --check`).
 
 ---
 
