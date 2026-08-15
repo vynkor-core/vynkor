@@ -162,12 +162,32 @@ pub struct Config {
     /// accept/reject window is still governed by ActionRequest.timeout_ms.
     #[serde(default)]
     pub session_idle_timeout_secs: Option<u32>,
+    /// TLS for the network path — **on by default** (D-07). When no
+    /// cert/key are configured the kernel generates a self-signed pair on
+    /// first start; set `tls: false` to serve plain HTTP (insecure).
+    #[serde(default = "default_tls")]
+    pub tls: bool,
     /// TLS certificate (PEM). When both cert and key are set, the WS/HTTP gateway binds TLS.
     #[serde(default)]
     pub tls_cert_path: Option<PathBuf>,
     /// TLS private key (PEM). When both cert and key are set, the WS/HTTP gateway binds TLS.
     #[serde(default)]
     pub tls_key_path: Option<PathBuf>,
+    /// Audience the kernel requires in every accepted JWT (D-07). Unset =
+    /// any `aud` accepted (pre-D-07 behaviour). `vyn token mint` defaults
+    /// its `--aud` to this value.
+    #[serde(default)]
+    pub jwt_audience: Option<String>,
+    /// Explicit bind address override (D-07). Default: `0.0.0.0` when
+    /// `role: host` and auth is configured (remote devices can reach it),
+    /// else `127.0.0.1`.
+    #[serde(default)]
+    pub bind: Option<String>,
+    /// Seconds a JWT-authenticated WS connection may stay unregistered
+    /// before the gateway drops it (D-07, closes the "never registers → no
+    /// frame-MAC" gap). Registering arms the session MAC key.
+    #[serde(default = "default_ws_register_timeout_secs")]
+    pub ws_register_timeout_secs: u64,
     /// Override the plugin registry URL. Default: official veyron-core/veyron-plugins registry.
     /// Set to a private registry URL for air-gapped or enterprise deployments.
     #[serde(default)]
@@ -318,6 +338,12 @@ fn default_max_tracked_error_conns() -> usize {
 fn default_ws_handshake_timeout_secs() -> u64 {
     5
 }
+fn default_ws_register_timeout_secs() -> u64 {
+    10
+}
+fn default_tls() -> bool {
+    true
+}
 fn default_max_ws_connections() -> usize {
     1024
 }
@@ -357,8 +383,12 @@ impl Default for Config {
             action_caller_rate_limit_rps: None,
             action_caller_max_concurrent: None,
             session_idle_timeout_secs: None,
+            tls: default_tls(),
             tls_cert_path: None,
             tls_key_path: None,
+            jwt_audience: None,
+            bind: None,
+            ws_register_timeout_secs: default_ws_register_timeout_secs(),
             registry_url: None,
             marketplace_public_key: None,
             registry_cache_ttl_secs: default_registry_cache_ttl_secs(),
@@ -475,6 +505,25 @@ pub fn resolve_device_id(config: &Config) -> String {
         .device_id
         .clone()
         .unwrap_or_else(|| std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown".to_string()))
+}
+
+/// Where the kernel auto-generates TLS material when none is configured
+/// (D-07): `<private dir>/veyron-tls/` — same per-user private location as
+/// the pid/log files (never the shared /tmp, AUDIT M-09).
+pub fn default_tls_dir() -> Option<PathBuf> {
+    veyron_wire::socket::default_private_dir().map(|d| d.join("veyron-tls"))
+}
+
+/// The certificate a local `vyn` client must trust when TLS is on: the
+/// operator-provided one, else the auto-generated self-signed cert.
+pub fn effective_tls_cert_path(config: &Config) -> Option<PathBuf> {
+    if !config.tls {
+        return None;
+    }
+    if let Some(cert) = &config.tls_cert_path {
+        return Some(cert.clone());
+    }
+    default_tls_dir().map(|d| d.join("cert.pem"))
 }
 
 #[cfg(test)]
@@ -764,6 +813,74 @@ mod tests {
         });
         temp_env::with_var_unset("HOSTNAME", || {
             assert_eq!(resolve_device_id(&config), "unknown");
+        });
+    }
+
+    // D-07: the network path is TLS by default — only an explicit tls: false
+    // serves plain HTTP
+    #[test]
+    fn tls_defaults_to_on() {
+        assert!(Config::default().tls, "tls must default to on (D-07)");
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_minimal_config(&dir, "");
+        assert!(load_config(&path).unwrap().tls);
+
+        let path = write_minimal_config(&dir, "tls: false\n");
+        assert!(!load_config(&path).unwrap().tls);
+    }
+
+    #[test]
+    fn jwt_audience_bind_and_ws_register_timeout_parse() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_minimal_config(
+            &dir,
+            "tls: false\njwt_audience: myhub\nbind: 0.0.0.0\nws_register_timeout_secs: 5\n",
+        );
+        let config = load_config(&path).unwrap();
+        assert_eq!(config.jwt_audience.as_deref(), Some("myhub"));
+        assert_eq!(config.bind.as_deref(), Some("0.0.0.0"));
+        assert_eq!(config.ws_register_timeout_secs, 5);
+    }
+
+    #[test]
+    fn ws_register_timeout_defaults_to_10_secs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_minimal_config(&dir, "tls: false\n");
+        assert_eq!(load_config(&path).unwrap().ws_register_timeout_secs, 10);
+    }
+
+    #[test]
+    fn effective_tls_cert_path_prefers_configured_over_generated() {
+        let configured = Config {
+            tls: true,
+            tls_cert_path: Some(PathBuf::from("/etc/veyron/cert.pem")),
+            ..Default::default()
+        };
+        assert_eq!(
+            effective_tls_cert_path(&configured),
+            Some(PathBuf::from("/etc/veyron/cert.pem"))
+        );
+
+        // tls off → no cert to trust
+        let off = Config {
+            tls: false,
+            ..Default::default()
+        };
+        assert_eq!(effective_tls_cert_path(&off), None);
+
+        // tls on, no cert configured → the auto-generated path under the
+        // private dir (probed with a temp XDG_RUNTIME_DIR)
+        let auto = Config {
+            tls: true,
+            ..Default::default()
+        };
+        let dir = tempfile::tempdir().unwrap();
+        temp_env::with_var("XDG_RUNTIME_DIR", Some(dir.path()), || {
+            assert_eq!(
+                effective_tls_cert_path(&auto),
+                Some(dir.path().join("veyron-tls/cert.pem"))
+            );
         });
     }
 }

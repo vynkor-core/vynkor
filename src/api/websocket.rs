@@ -11,6 +11,7 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,
 };
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
@@ -35,6 +36,10 @@ pub struct WsGateway {
     /// the upgrade completes (T-09; mirrors the UDS listener's `max_connections`).
     pub open_conns: Arc<AtomicU64>,
     pub max_connections: usize,
+    /// D-07: a JWT-authenticated connection that doesn't complete
+    /// registration within this window is dropped — a client that never
+    /// registers never gets a session frame-MAC key.
+    pub register_timeout_secs: u64,
 }
 
 /// Extract JWT from `Sec-WebSocket-Protocol: veyron, <jwt>`.
@@ -79,10 +84,17 @@ pub async fn ws_handler(
     let router_tx = state.router_tx.clone();
     let disconnect_tx = state.disconnect_tx.clone();
     let open_conns = Arc::clone(&state.open_conns);
+    // D-07: the register-or-drop deadline only bites on authenticated
+    // connections — unauthenticated local ones can already route nothing.
+    let register_timeout = if state.jwt_validator.is_some() {
+        state.register_timeout_secs
+    } else {
+        0
+    };
 
     ws.protocols(["veyron"])
         .on_upgrade(move |socket| async move {
-            handle_socket(socket, conn_id, router_tx, disconnect_tx).await;
+            handle_socket(socket, conn_id, router_tx, disconnect_tx, register_timeout).await;
             open_conns.fetch_sub(1, Ordering::Relaxed);
         })
 }
@@ -92,6 +104,7 @@ async fn handle_socket(
     conn_id: u64,
     router_tx: mpsc::Sender<IncomingMessage>,
     disconnect_tx: mpsc::Sender<u64>,
+    register_timeout_secs: u64,
 ) {
     info!(conn_id = conn_id, "WS client connected");
 
@@ -100,6 +113,13 @@ async fn handle_socket(
     let session_key: SessionKeyCell = std::sync::Arc::new(std::sync::Mutex::new(None));
     // Key stored locally for tagging outbound frames; populated via Outbound::EnableMac.
     let mut outbound_key: Option<[u8; 32]> = None;
+    // D-07: registration deadline. EnableMac (sent by the router on accepted
+    // registration) both arms the MAC keys and marks the connection
+    // registered; a client that never registers within the window is dropped
+    // so every WS frame is MAC'd or the connection is short-lived.
+    let deadline = (register_timeout_secs > 0)
+        .then(|| tokio::time::Instant::now() + Duration::from_secs(register_timeout_secs));
+    let mut registered = false;
 
     loop {
         tokio::select! {
@@ -175,11 +195,28 @@ async fn handle_socket(
                         }
                     }
                     Some(Outbound::EnableMac(k, cell)) => {
+                        registered = true;
                         outbound_key = Some(k);
                         *cell.lock().unwrap_or_else(|p| p.into_inner()) = Some(k);
                     }
                     None => break,
                 }
+            }
+            _ = async {
+                // the select! guard is only consulted once the future is
+                // ready, and the future expression runs unconditionally — so
+                // a None deadline must be a pending future, not a panic
+                if let Some(d) = deadline {
+                    tokio::time::sleep_until(d).await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            }, if deadline.is_some() && !registered => {
+                warn!(
+                    conn_id,
+                    "WS: client never registered within {register_timeout_secs}s — closing"
+                );
+                break;
             }
         }
     }

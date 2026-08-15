@@ -38,9 +38,29 @@ allow_no_auth: true
 # ActionStreamAbort{reason: "idle timeout"} to both sides. Default: unlimited.
 # session_idle_timeout_secs: 300
 
-# TLS for WebSocket/HTTP gateway. When both are set, binds HTTPS/WSS instead of plain HTTP.
+# TLS for the WebSocket/HTTP gateway. ON by default (D-07): with no cert/key
+# configured the kernel generates a self-signed pair on first start (stored
+# under the private runtime dir; `vyn` pins it explicitly). Set `tls: false`
+# to serve plain HTTP (insecure). To use your own certificate:
+# tls: true
 # tls_cert_path: /etc/veyron/tls/cert.pem
 # tls_key_path:  /etc/veyron/tls/key.pem
+#
+# Audience required in every accepted JWT (D-07). When set, tokens without a
+# matching `aud` claim are rejected — remint existing tokens with
+# `vyn token mint`. `vyn token mint` defaults its `--aud` to this value.
+# jwt_audience: myhub
+#
+# Explicit network bind address (D-07). Default: 0.0.0.0 when role: host and
+# jwt_secret is set (remote devices can reach the gateway), else 127.0.0.1.
+# bind: 0.0.0.0
+#
+# Seconds a JWT-authenticated WS connection may stay unregistered before the
+# gateway drops it (D-07, closes the "never registers -> no frame-MAC" gap).
+# ws_register_timeout_secs: 10
+#
+# Per-device JWT minting (offline, reads jwt_secret from this file):
+#   vyn token mint --device phone-1 [--permissions PERMISSION_IPC_SEND] [--ttl-seconds 86400]
 
 # Base dir for scratch/cache files: marketplace registry cache
 # (~/.cache/veyron/registry.json when $HOME is set) and plugin-install

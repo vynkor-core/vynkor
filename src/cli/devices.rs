@@ -14,10 +14,16 @@ struct DeviceView {
 }
 
 /// `vyn devices` — list devices the kernel has ever seen, via GET /devices.
-pub async fn handle(port: u16, tls: bool, token: Option<&str>) -> anyhow::Result<()> {
+pub async fn handle(
+    port: u16,
+    tls: bool,
+    cert_path: Option<&std::path::Path>,
+    token: Option<&str>,
+) -> anyhow::Result<()> {
     let scheme = if tls { "https" } else { "http" };
     let base = format!("{scheme}://127.0.0.1:{port}");
-    let body = super::plugin::api_get(&base, "/devices", token).await?;
+    let client = super::plugin::build_client(tls, cert_path)?;
+    let body = super::plugin::api_get(&client, &base, "/devices", token).await?;
     let devices: Vec<DeviceView> = serde_json::from_str(&body)?;
     print_table(&devices);
     Ok(())

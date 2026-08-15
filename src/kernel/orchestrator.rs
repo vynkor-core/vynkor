@@ -130,7 +130,10 @@ impl Kernel {
         }
         let jwt_validator = config.jwt_secret.as_deref().map(|s| {
             info!("JWT auth enabled");
-            Arc::new(JwtValidator::new(s.as_bytes()))
+            Arc::new(JwtValidator::with_audience(
+                s.as_bytes(),
+                config.jwt_audience.clone(),
+            ))
         });
         if jwt_validator.is_none() {
             if !config.allow_no_auth {
@@ -144,6 +147,30 @@ impl Kernel {
                  plugin; do not use in production"
             );
         }
+
+        // D-07: TLS is on by default; resolve (or auto-generate) the cert pair
+        // before any listener starts so a half-configured tls_* fails the boot
+        // instead of silently downgrading to plaintext.
+        let (tls_cert_path, tls_key_path) = crate::utils::tls::resolve_tls_paths(&config)?;
+
+        // D-07: a host that actually serves remote devices has auth on — bind
+        // beyond loopback only then. With allow_no_auth the API stays local
+        // regardless of role (exposing an unauthenticated control plane would
+        // be a footgun), overridable via explicit `bind:`.
+        let bind_ip: std::net::IpAddr = if let Some(bind) = &config.bind {
+            bind.parse()
+                .map_err(|_| anyhow::anyhow!("invalid bind address '{bind}'"))?
+        } else if config.role == Role::Host && config.jwt_secret.is_some() {
+            std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)
+        } else {
+            if config.role == Role::Host {
+                warn!(
+                    "role: host without jwt_secret — API stays bound to 127.0.0.1; \
+                     set jwt_secret to expose the network path to remote devices"
+                );
+            }
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+        };
 
         let kernel_start = std::time::Instant::now();
         let config_path = config.config_file.clone();
@@ -261,6 +288,7 @@ impl Kernel {
         PluginLoader::load_all(&config.plugins, &manager, Some(&event_bus)).await;
         let api = ApiServer::new(
             config.port,
+            bind_ip,
             manager,
             jwt_validator.clone(),
             Some(ws_router_tx),
@@ -268,11 +296,12 @@ impl Kernel {
             kernel_start,
             config.api_rate_limit_rps,
             config.api_rate_limit_burst,
-            config.tls_cert_path.clone(),
-            config.tls_key_path.clone(),
+            tls_cert_path,
+            tls_key_path,
             config.plugins.clone(),
             config.ws_handshake_timeout_secs,
             config.max_ws_connections,
+            config.ws_register_timeout_secs,
         );
         tokio::spawn(async move {
             if let Err(e) = api.run().await {
