@@ -1,10 +1,12 @@
 pub mod complete;
+pub mod device;
 pub mod devices;
 pub mod plugin;
 pub mod token;
 
 use clap::{Parser, Subcommand};
 use clap_complete::Shell;
+use device::DeviceCmd;
 use plugin::PluginCmd;
 use std::path::PathBuf;
 use token::TokenCmd;
@@ -45,6 +47,16 @@ pub enum Commands {
     Token {
         #[command(subcommand)]
         cmd: TokenCmd,
+
+        #[arg(short, long, default_value = "config.yaml")]
+        config: String,
+    },
+    /// Pair a remote device agent by QR code (D-14 companion) — render a
+    /// `vynkor://pair` QR/link with the host URL, device id, JWT, frame-MAC
+    /// secret, and served TLS cert so the Android app can scan-and-connect.
+    Device {
+        #[command(subcommand)]
+        cmd: DeviceCmd,
 
         #[arg(short, long, default_value = "config.yaml")]
         config: String,
