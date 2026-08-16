@@ -184,7 +184,7 @@ QUIC · ed25519 enrollment · CRDT/sync engine · full plugin host on Android/iO
 3. **Phone notification delivery** — options in §20; MVP = persistent WS +
    foreground service.
 4. **AI tool-calling + safety** — design in §21; needs manifest v3 (tool schema)
-   + a confirmation gate.
+   - a confirmation gate.
 5. **Kairo model** — resolved: the plugin already supports local models and API
    keys, user's choice. Remaining (memory/RAG, tool loop) is Kairo's own
    roadmap, out of kernel scope.
@@ -283,6 +283,7 @@ The schema/permission/DB part is genuinely cheap and should land now so it is
 never a migration. The expensive part is *enforcement*, not identity.
 
 **Now (~1 wk):**
+
 - `user_id` in JWT claims + on registration/device.
 - `database` plugin keys by `user_id` (even a constant "default" for v1).
 - "same-user only" IPC rule (one comparison in `check_ipc_target` /
@@ -290,6 +291,7 @@ never a migration. The expensive part is *enforcement*, not identity.
 - registry carries `user_id` (like `device_id`).
 
 **Defer (the real cost):**
+
 - Event-bus user-scoping (subscribe/deliver by user, not just `event_type`) —
   a core-component change; today a co-user's plugin could subscribe to `*`.
 - Per-user AI (agent sessions, memory, tool permissions per user).

@@ -342,15 +342,38 @@
     `end_of_stream`; a 1 s PCM chunk was transcribed locally and published
     as `stt_text`.
 
-- [ ] **D-13 — Sync: heartbeat + snapshot + deltas + pull-on-reconnect.**
+- [x] **D-13 — Sync: heartbeat + snapshot + deltas + pull-on-reconnect.**
   Client plugin with `PERMISSION_SCHEDULER` publishes heartbeat/state on a
   timer; host `get_snapshot` action + subscribe to delta events; on reconnect,
   pull snapshot then subscribe (event bus is at-least-once to connected
   subscribers only).
   - Files: `../veyron-plugins/` (sync/database plugin), client scheduler.
   - Acceptance: offline client catches up on reconnect; state push works.
+  - **Status (2026-08-15): SHIPPED** — merged via PR
+    veyron-core/veyron-plugins#14 (`7ab76ba`, commit message `feat(d-13)`).
+    `sync` (host-side versioned SQLite KV store): `sync_get_snapshot` /
+    `sync_get` / `sync_set` / `sync_del`; every mutation bumps a monotonic
+    persisted version and publishes `plugin.sync.sync.delta` (op/key/value/
+    version/updated_at) after the ActionResponse; lazy `heartbeat.*` TTL
+    pruning on set/snapshot, prune deltas emitted before the mutation's own
+    delta (versions ascending); `ConcurrentHandler` hot-path,
+    `PERMISSION_STORAGE` + `PERMISSION_EVENT_PUBLISH` (21 tests incl. a
+    fake-kernel response-then-delta test). `sync-client` (client-side mirror):
+    on every (re)connect subscribes to `plugin.sync.sync.delta`, pulls
+    `sync_get_snapshot` and replaces the mirror (authoritative reset — offline
+    catch-up), applies version-gated deltas, a timer task pushes
+    `heartbeat.<device_id>` into host state via `sync_set`
+    (`PERMISSION_SCHEDULER`); `sync_client_get_state` reads the mirror;
+    reconnect loop with backoff 1 s→30 s; custom serve loop so the heartbeat
+    task can push into the mpsc channel (SDK's loop doesn't expose it) (10
+    tests: snapshot seed, delta apply, stale skip, reconnect catch-up,
+    heartbeat emission). **Known v1 limitation** (documented in the sync-client
+    README): the kernel bridge does not yet relay host→client event
+    subscriptions, so cross-kernel delta delivery needs a kernel follow-up;
+    single-kernel deployments work fully. `veyron-plugins/ROADMAP.md` shipped
+    table gains sync + sync-client rows.
 
-- [ ] **D-14 — Android device-agent app.**
+- [x] **D-14 — Android device-agent app.**
   Single app exposing fixed capabilities that register on the host as
   `<device_id>.<cap>`; persistent WS + foreground service.
   - Files: new `../vynkor-client-android`. Design + decisions:
@@ -384,6 +407,18 @@
     - [ ] `veyron-plugins/plugins/tts` — `device.phone.speaker` examples
       (README/USAGE/plugin.json/request.rs) → `<device_id>.speaker`
       (operator-configured `TTS_PLUGIN_IPC_TARGETS`, examples only).
+  - **Status (2026-08-16): IMPLEMENTED + E2E-verified against a live kernel
+    over LAN** — Rust core (`vynkor-agent-core`: transport/protocol/caps/ffi
+    in `rust/`), Kotlin app (`app/`: FGS, capability providers, onboarding),
+    Gradle build (`cargoNdkBuild` + `uniffiBindgen` tasks, JNA AAR, 3 ABIs).
+    Real phone (Android 13, same Wi-Fi) registered all 7 Tier-1 capabilities
+    as `d14-test-phone.<cap>`; device `state: online` in `GET /devices`;
+    `adb logcat -s vynkor` shows the Rust protocol logs. Build/experience
+    notes, tooling gotchas (JNA AAR, tracing-android, UFW port, MAC-over-flag
+    contract, `IntoClientRequest` 0.30 change), and the E2E recipe:
+    `../vynkor-client-android/docs/D14_IMPLEMENTATION_NOTES.md`. Follow-ups
+    (deferred): Opus codec for mic/speaker (PCM passthrough now), TLS cert
+    pinning (webpki-roots now), UI live connection status, `user_id` config.
 
 - [ ] **D-15 — Web companion (wss chat/control) + Web Push.**
   Browser/PWA client speaking the frame protocol over wss (TS), chat with the

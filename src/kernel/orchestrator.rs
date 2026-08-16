@@ -262,14 +262,16 @@ impl Kernel {
             ));
         }
 
-        let supervisor = Arc::new(PluginSupervisor::with_events(
+        let mut supervisor = PluginSupervisor::with_events(
             &config.socket_path,
             config.log_buffer_lines,
             Some(Arc::clone(&event_bus)),
             Some(Arc::clone(&registry)),
             config.restart_backoff_base_ms,
             config.restart_backoff_max_ms,
-        ));
+        );
+        supervisor.set_data_dir(config.data_dir.clone());
+        let supervisor = Arc::new(supervisor);
         let sup_loop = Arc::clone(&supervisor);
         tokio::spawn(async move { sup_loop.monitor_loop().await });
 

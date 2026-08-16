@@ -137,6 +137,9 @@ allow_no_auth: true
 #     - /run/user/1000/veyron.sock  # use XDG_RUNTIME_DIR/veyron.sock (fallback: ~/.veyron/run/veyron.sock)
 #   env:                             # extra environment variables
 #     - LOG_LEVEL=info
+#   (Every plugin also gets VEYRON_SOCKET_PATH and — when the kernel grants
+#   it — VEYRON_DATA_DIR: a writable per-plugin dir <data_dir>/plugins/<id>
+#   for the plugin's own persistent state, e.g. a database.)
 #   sandbox: false                   # true: isolate in private user+net+PID+mount namespace (Linux) via a shim process (R9-02). Plugins run as PID 1 of their own namespace with a private /proc.
 #   grace_seconds: 10                # optional, default 5 — seconds to wait after SIGTERM before SIGKILL
 #   max_procs: 1024                  # optional, default 1024 — process-count cap (applied to every plugin, not just sandboxed). With cgroup v2 available the budget is the plugin's own cgroup pids.max: counts only that plugin's threads, isolated from the rest of the session (R9-01). Otherwise the fallback is RLIMIT_NPROC, which counts ALL threads of the real uid at clone time — on busy sessions (hundreds of threads) a low value makes every plugin thread spawn fail with EAGAIN, so raise it per-plugin there.

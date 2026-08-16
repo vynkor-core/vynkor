@@ -91,6 +91,11 @@ futures-util = "0.3"
 # provided no tls_cert_path/tls_key_path
 rcgen = "0.13"
 
+# D-14 companion: `vyn device connect` renders the pairing QR (terminal UTF-8 /
+# SVG) and base64url-encodes the payload for the vynkor://pair link
+qrcode = "0.14"
+base64 = "0.22"
+
 [features]
 otel = ["tracing-opentelemetry", "opentelemetry", "opentelemetry_sdk", "opentelemetry-otlp"]
 

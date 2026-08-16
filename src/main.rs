@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::process::Command;
 use tracing::{info, warn};
-use veyron::cli::{complete, devices, plugin, token};
+use veyron::cli::{complete, device, devices, plugin, token};
 use veyron::cli::{Cli, Commands};
 use veyron::kernel;
 use veyron::utils;
@@ -165,6 +165,9 @@ async fn run_kernel(cli: Cli) -> Result<()> {
         }
         Commands::Token { cmd, config } => {
             token::handle(cmd, &config).await?;
+        }
+        Commands::Device { cmd, config } => {
+            device::handle(cmd, &config)?;
         }
         Commands::Completions { shell } => {
             complete::generate_completions(shell);

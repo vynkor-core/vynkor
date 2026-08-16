@@ -113,6 +113,10 @@ struct ExitEvent {
 
 pub struct PluginSupervisor {
     socket_path: String,
+    /// Base dir for per-plugin writable state: each spawn gets
+    /// `data_dir/plugins/<plugin_id>`, exposed to the plugin as
+    /// `VEYRON_DATA_DIR`. `None` = no data dir granted.
+    data_dir: Option<PathBuf>,
     entries: Arc<DashMap<String, PluginEntry>>,
     event_tx: mpsc::Sender<ExitEvent>,
     event_rx: Arc<Mutex<mpsc::Receiver<ExitEvent>>>,
@@ -148,6 +152,12 @@ impl PluginSupervisor {
         Self::with_events(socket_path, max_log_lines, None, None, 100, 30_000)
     }
 
+    /// Grant every spawned plugin a writable per-plugin dir under `dir`
+    /// (exposed as `VEYRON_DATA_DIR`) for its own persistent state.
+    pub fn set_data_dir(&mut self, dir: PathBuf) {
+        self.data_dir = Some(dir);
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn with_events(
         socket_path: &str,
@@ -160,6 +170,7 @@ impl PluginSupervisor {
         let (event_tx, event_rx) = mpsc::channel::<ExitEvent>(64);
         PluginSupervisor {
             socket_path: socket_path.to_string(),
+            data_dir: None,
             backoff_base_ms,
             backoff_max_ms,
             entries: Arc::new(DashMap::new()),
@@ -220,6 +231,24 @@ impl PluginSupervisor {
         // sandboxed plugins run under a shim that places them in a private
         // PID namespace (R9-02, see plugins::shim) — the shim is our own
         // binary re-exec'd with the hidden __shim subcommand
+        // Grant the plugin a writable data dir (VEYRON_DATA_DIR) for its own
+        // persistent state. Created up front: a sandboxed plugin cannot mkdir
+        // paths it can't see, and Landlock needs the dir in RW_PATHS.
+        let mut writable_paths = config.writable_paths.clone();
+        let mut plugin_data_dir: Option<PathBuf> = None;
+        if let Some(data_dir) = &self.data_dir {
+            let plugin_data = data_dir.join("plugins").join(&config.plugin_id);
+            match std::fs::create_dir_all(&plugin_data) {
+                Ok(()) => {
+                    plugin_data_dir = Some(plugin_data.clone());
+                    writable_paths.push(plugin_data);
+                }
+                Err(e) => {
+                    warn!(plugin_id = %config.plugin_id, error = %e, "failed to create plugin data dir");
+                }
+            }
+        }
+
         let mut cmd = if use_shim {
             let mut c = Command::new(sandbox_shim_bin());
             c.arg("__shim").arg(&config.binary_path);
@@ -241,7 +270,7 @@ impl PluginSupervisor {
                     )
                     .env(
                         "VEYRON_RW_PATHS",
-                        fsaccess::join_paths_env(&config.writable_paths),
+                        fsaccess::join_paths_env(&writable_paths),
                     );
             }
             c
@@ -258,6 +287,9 @@ impl PluginSupervisor {
             .env("VEYRON_SOCKET_PATH", &self.socket_path)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        if let Some(dir) = &plugin_data_dir {
+            cmd.env("VEYRON_DATA_DIR", dir);
+        }
         for kv in &config.env {
             if let Some((k, v)) = kv.split_once('=') {
                 cmd.env(k, v);
