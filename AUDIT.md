@@ -1,6 +1,6 @@
 # Veyron Codebase Audit
 
-Date: 2026-07-07 (initial) · **Reconciled: 2026-08-11** (full re-audit on `develop` @ `c93342b`) · **Delta audit: 2026-08-14** (`develop` @ `2d16ebf` — post-reconciliation code + previously un-audited performance/UX surfaces)
+Date: 2026-07-07 (initial) · **Reconciled: 2026-08-11** (full re-audit on `develop` @ `c93342b`) · **Delta audit: 2026-08-14** (`develop` @ `2d16ebf` — post-reconciliation code + previously un-audited performance/UX surfaces) · **Architecture (dumb-core) audit: 2026-08-16** (manifesto compliance — domain logic in the kernel; see "Architecture audit — dumb-core" below; fix plan in `docs/DUMB_CORE_AUDIT.md`)
 Scope: full repo — kernel/IPC/events/api (`src/kernel`, `src/ipc`, `src/events`, `src/api`, `src/utils`), auth/plugin-lifecycle/marketplace (`src/auth`, `src/plugins`, `src/cli`, `src/marketplace`), and cross-SDK/protocol (`sdk/rust`, `sdk/cpp`, `sdk/python`, `proto/`, `wire/`, `tests/`, `fuzz/`).
 
 Method: three parallel read-only code-audit passes. Findings below are deduplicated and grouped by severity. Each entry has file:line, concrete failure scenario, and fix direction. The 2026-08-11 reconciliation re-verified every finding against the current tree (codegraph + targeted reads) and annotated its status.
@@ -385,6 +385,70 @@ revocation check in the installer, seccomp/Landlock fail-closed, WS frame
 parser bounds, rate-limit keyed on verified `sub`, no sensitive values logged
 (WS token withheld, `jwt_secret` only as length). No regressions in the
 previously-hardened areas.
+
+---
+
+## Architecture audit — dumb-core (2026-08-16)
+
+Fresh manifesto-compliance audit: does the kernel stay a "dumb byte router +
+process supervisor" (README §1, ROADMAP Manifesto), or has domain logic crept
+into the core? Method: full module responsibility map (`src/kernel`, `src/api`,
+`src/plugins`, `src/events`, `src/ipc`, `src/marketplace`, `src/bridge`,
+`src/cli`, `src/auth`), wire-protocol schema review, and a DB-usage trace
+(SQLite event store). Full report + fix plan: `docs/DUMB_CORE_AUDIT.md`.
+
+**Verdict: manifesto declared, code partially drifted.** The IPC/supervision/
+sandbox/auth core is genuinely dumb; four blocks of product-level logic have
+grown into the kernel (marketplace app-store client, device-fleet domain,
+AI tool-calling surface, hardcoded action→permission policy), and the events
+SQLite DB technically contradicts the manifesto's literal "no databases"
+clause (it is infrastructure, not application state — see DC-5). All five
+findings below are **OPEN** (2026-08-16); fix plan in `docs/DUMB_CORE_AUDIT.md`.
+
+### DC-1. Marketplace / plugin app-store client embedded in the kernel (Medium)
+
+- **Files:** `src/marketplace/registry.rs` (1509 L: `DEFAULT_REGISTRY_URL` → veyron-plugins GitHub, `:15-16`; maintainer Ed25519 key pinned in kernel source, `:38-39`; kernel-compat policy, `:626-661`), `src/marketplace/installer.rs` (822 L: download→sha256→zip→atomic-rename pipeline, installed.json ledger, drop-in config write; **hardcoded business rule `sandbox = plugin_id != "network"`, `:647`**), `src/marketplace/state.rs` (154 L), `src/cli/plugin.rs` (`vyn plugin list/search/install/remove/enable/disable`)
+- **Issue:** a full plugin distribution/app-store client (catalog fetch, signature verification, revocation governance, install/uninstall, upgrade detection, package-state ledger) is compiled into the kernel. Package management and marketplace governance are product features, not byte-routing.
+- **Impact:** kernel grows product-specific policy (which registry, which maintainer key, which plugin is exempt from sandboxing); every marketplace change ships a kernel release.
+- **Fix:** extract to a `marketplace` plugin (or separate binary) that drives the kernel only through the existing plugin-lifecycle surface (`plugins.d/` drop-ins). The kernel may keep signed-archive verification only if it stays a security boundary.
+- **Status (2026-08-16): OPEN.**
+
+### DC-2. Device-fleet domain model in the kernel (D-01…D-14) (Medium)
+
+- **Files:** `src/plugins/registry.rs` (`DeviceMeta` `:17-24`; `devices` DashMap `:91`; upsert on registration `:206-229`; offline transition `:239-247`; `record_pong`/`last_seen` `:250-260`; `get_device`/`list_devices` `:271-278`), `src/api/routes.rs` (`DeviceInfoView` `:107-117`, `list_devices` `:119-136`), `src/api/server.rs:89` (`GET /devices`), `src/kernel/commands.rs:61-78` (`list_devices` IPC command), `src/cli/device.rs` (QR pairing embedding the master `jwt_secret`, `:26-36,126-150`), `src/cli/token.rs` (per-device JWT minting), `src/cli/devices.rs`, `src/bridge/mod.rs` (810 L — `role: client` mirrors local plugins to a host as `device.<cap>`), wire proto `PluginRegister` device fields `:79-88`, `DeviceInfo/DeviceOs/DeviceState` `:107-133`
+- **Issue:** device identity, capabilities negotiation, online/offline state machine, discovery surfaces, per-device JWT minting, QR-pairing UX and a remote-device bridge are product features embedded in the core. Defensible slice: `device_id` in the JWT `sub` is auth infrastructure. The discovery/interpretation/pairing surfaces are not.
+- **Impact:** the kernel owns a whole device-fleet product domain; changing device UX ships a kernel release.
+- **Fix:** keep device identity in the kernel (auth); move discovery surfaces (`GET /devices`, `list_devices`, `vyn devices`), pairing tooling and the bridge into plugins / companion tools.
+- **Status (2026-08-16): OPEN.**
+
+### DC-3. AI tool-calling surface baked into protocol and kernel (Low-Med)
+
+- **Files:** wire proto `ActionSpec`/`ActionRisk` — *"tool schema for the AI (D-08)"*, `:159-173`; `src/kernel/commands.rs` `get_manifest` (`:79-127`, comment: *"serve a plugin's manifest (incl. action_specs) to the AI"*); `src/events/bus.rs` `plugin_lifecycle_payload` (`:223-259` — action_specs embedded in `system.plugin_joined/left` *"so the AI can enumerate callable actions from the joined event alone"*)
+- **Issue:** the kernel is explicitly shaped for an AI-agent frontend (README's Kairo framing). Tool-schema interpretation (risk levels, `requires_confirmation`, params_schema) is domain logic.
+- **Fix:** policy decision required — either accept `action_specs` as a generic manifest feature (document it as such) or move tool-schema interpretation to the AI plugin and strip it from lifecycle events.
+- **Status (2026-08-16): OPEN (decision).**
+
+### DC-4. Hardcoded action→permission policy (Low)
+
+- **File:** `src/auth/permissions.rs:12-17` — `required_permission_for_action("http_request") → PERMISSION_NETWORK`
+- **Issue:** the kernel hardcodes knowledge of a specific plugin's ("network") action name as the fallback permission map. The data-driven v2 path (`registry.action_requirement`, `loader.rs:74-90`) supersedes it, but the fallback remains and the comment says new sensitive actions must be added to the kernel.
+- **Fix:** drop the fallback; require v2 per-action permission declarations (fail-closed on undeclared sensitive actions).
+- **Status (2026-08-16): OPEN.**
+
+### DC-5. Events SQLite DB vs the manifesto's "no databases" clause (Info/Low-Med)
+
+- **Files:** `src/events/store.rs` (single table `events(event_id, event_type, payload_json, status, created_at, retry_count)`, `:17-26`), `src/events/bus.rs` (`persist` on publish `:84-89`, retry worker `:180-200`), `src/kernel/orchestrator.rs:91` (opens at boot; failure non-fatal), `src/ipc/protocol.rs:1024-1028` (EventAck → `mark_delivered`)
+- **Issue:** the DB is a **delivery outbox for at-least-once event delivery** — infrastructure, not application state (the plugin registry is honestly in-memory DashMap; marketplace state is JSON files). But the manifesto's literal "no databases" wording is violated; `payload_json` BLOB transiently stores full plugin event payloads (bounded: 1h retention prune); open audit items S2 (world-writable `/tmp` default `data_dir`) and PERF-2 (sync rusqlite under `std::sync::Mutex` on tokio workers) sit on this path.
+- **Fix:** amend the manifesto to carve out the delivery outbox explicitly ("no databases *for application state*; the event-delivery outbox is an exception"); keep the DB; close S2 + PERF-2 (0o700 private runtime dir + `spawn_blocking`/dedicated writer task).
+- **Status (2026-08-16): OPEN (manifesto wording + S2/PERF-2).**
+
+**Confirmed dumb-core-clean (do not re-litigate without new evidence):** zero-parse
+frame routing + MAC + fragmentation (`src/ipc`, `wire/`), process supervision
+and restart policy (`src/plugins/supervisor.rs`), sandbox isolation — namespaces,
+cgroup v2 pids, Landlock, seccomp (`runner/shim/seccomp/fsaccess`), JWT + frame
+MAC + default-deny permissions (`src/auth`), event-bus delivery mechanics, API
+gateway plumbing, metrics, TLS. No domain logic found in `src/kernel/orchestrator.rs`,
+`src/ipc/protocol.rs` routing paths, or the supervisor/runner stack.
 
 ---
 
