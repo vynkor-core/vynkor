@@ -98,6 +98,7 @@ pub struct Config {
     pub pid_file: PathBuf,
     #[serde(default = "default_log_path")]
     pub log_file: PathBuf,
+    #[serde(default = "default_data_dir")]
     pub data_dir: PathBuf,
     #[serde(default = "default_socket_path")]
     pub socket_path: String,
@@ -282,6 +283,16 @@ fn default_log_path() -> PathBuf {
         .map(|dir| dir.join("veyron.log"))
         .unwrap_or_else(|| PathBuf::from("veyron.log"))
 }
+
+/// Per-user private data dir for the event store and per-plugin state.
+/// S2: the events DB must never live in world-writable `/tmp` — a local user
+/// could pre-create the path and forge pending events.
+fn default_data_dir() -> PathBuf {
+    veyron_wire::socket::default_private_dir()
+        .map(|dir| dir.join("veyron-data"))
+        .unwrap_or_else(|| PathBuf::from("veyron-data"))
+}
+
 fn default_watchdog_interval() -> u64 {
     30
 }
@@ -570,6 +581,31 @@ mod tests {
             assert!(
                 !log.starts_with("/tmp"),
                 "log file must not default into /tmp (AUDIT M-09)"
+            );
+        });
+    }
+
+    #[test]
+    fn default_data_dir_uses_xdg_runtime_dir() {
+        temp_env::with_var("XDG_RUNTIME_DIR", Some("/run/user/1000"), || {
+            let path = default_data_dir();
+            assert_eq!(path, PathBuf::from("/run/user/1000/veyron-data"));
+        });
+    }
+
+    #[test]
+    fn default_data_dir_never_falls_back_to_shared_tmp() {
+        temp_env::with_var_unset("XDG_RUNTIME_DIR", || {
+            let path = default_data_dir();
+            assert!(
+                !path.starts_with("/tmp"),
+                "data_dir must not default into world-writable /tmp (AUDIT S2)"
+            );
+            let path_str = path.to_string_lossy();
+            assert!(
+                path.starts_with("/run/user/") || path_str.contains("/.veyron/"),
+                "expected a per-user private data dir, got {}",
+                path.display()
             );
         });
     }

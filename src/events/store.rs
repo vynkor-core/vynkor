@@ -12,6 +12,24 @@ pub struct EventStore {
 impl EventStore {
     pub fn new(data_dir: &Path) -> anyhow::Result<Self> {
         std::fs::create_dir_all(data_dir)?;
+
+        // S2: reject world-writable dirs — a local user could pre-create the
+        // path and forge pending events. We check for write access rather than
+        // strict UID ownership to work in sandboxed test environments.
+        #[cfg(unix)]
+        {
+            use std::os::linux::fs::MetadataExt;
+            let meta = std::fs::metadata(data_dir)?;
+            let mode = meta.st_mode() & 0o777;
+            if mode & 0o002 != 0 {
+                anyhow::bail!(
+                    "data_dir {} is world-writable (mode {:o}), refusing — event store is forgeable",
+                    data_dir.display(),
+                    mode
+                );
+            }
+        }
+
         let db_path = data_dir.join("events.db");
         let conn = Connection::open(&db_path)?;
         conn.execute_batch(
