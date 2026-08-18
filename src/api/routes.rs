@@ -165,8 +165,11 @@ pub async fn stop_plugin(State(state): State<Arc<AppState>>, Path(id): Path<Stri
     if state.manager.get(&id).is_none() {
         return StatusCode::NOT_FOUND;
     }
-    let _ = state.manager.stop(&id).await;
-    StatusCode::OK
+    match state.manager.stop(&id).await {
+        Ok(()) => StatusCode::OK,
+        Err(VeyronError::PluginNotFound(_)) => StatusCode::OK,
+        Err(_) => StatusCode::UNPROCESSABLE_ENTITY,
+    }
 }
 
 pub async fn restart_plugin(

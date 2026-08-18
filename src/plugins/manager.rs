@@ -35,11 +35,13 @@ impl PluginManager {
         self.supervisor.spawn_plugin(config).await
     }
 
-    /// Stops the supervised OS process (best-effort) and removes the IPC registration.
+    /// Stops the supervised OS process and removes the IPC registration.
+    /// Returns the supervisor error if the process couldn't be stopped, but
+    /// always unregisters the plugin from the registry regardless.
     pub async fn stop(&self, plugin_id: &str) -> Result<(), VeyronError> {
-        let _ = self.supervisor.stop_plugin(plugin_id).await;
+        let result = self.supervisor.stop_plugin(plugin_id).await;
         self.registry.unregister(plugin_id);
-        Ok(())
+        result
     }
 
     pub async fn restart(&self, plugin_id: &str) -> Result<(), VeyronError> {
