@@ -36,10 +36,11 @@ fn vendored_proto_copies_are_byte_identical() {
 
 // R8-05 follow-up: the generated Python binding (../veyron-sdk-python/veyron/
 // veyron_protocol_pb2.py) must reflect the same wire schema. It is produced by
-// scripts/gen_proto_python.py from ../veyron-wire/proto/veyron_protocol.proto
-// and is committed, but nothing guarded it against going stale when the proto
-// grew (PERMISSION_STORAGE, ActionRequest.caller_plugin_id were missing). Marker
-// check: when the proto adds a symbol, the regeneration step must run too.
+// ../veyron-sdk-python/scripts/gen_proto_python.py from
+// ../veyron-wire/proto/veyron_protocol.proto and is committed, but nothing
+// guarded it against going stale when the proto grew (PERMISSION_STORAGE,
+// ActionRequest.caller_plugin_id were missing). Marker check: when the proto
+// adds a symbol, the regeneration step must run too.
 #[test]
 fn generated_python_binding_is_not_stale() {
     let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -78,7 +79,7 @@ fn generated_python_binding_is_not_stale() {
     ] {
         assert!(
             source.contains(marker),
-            "generated {pb2_path:?} is missing {marker}; run scripts/gen_proto_python.py"
+            "generated {pb2_path:?} is missing {marker}; run ../veyron-sdk-python/scripts/gen_proto_python.py"
         );
     }
 
@@ -88,7 +89,7 @@ fn generated_python_binding_is_not_stale() {
     assert!(
         source.contains("ller_plugin_id"),
         "generated {pb2_path:?} is missing ActionRequest.caller_plugin_id; \
-         run scripts/gen_proto_python.py"
+         run ../veyron-sdk-python/scripts/gen_proto_python.py"
     );
 
     // v1.6 field names with escaped leading bytes — match stable tails (see
@@ -97,7 +98,7 @@ fn generated_python_binding_is_not_stale() {
         assert!(
             source.contains(marker),
             "generated {pb2_path:?} is missing v1.6 field {marker}; \
-             run scripts/gen_proto_python.py"
+             run ../veyron-sdk-python/scripts/gen_proto_python.py"
         );
     }
 }
