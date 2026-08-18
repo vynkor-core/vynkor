@@ -865,7 +865,7 @@ surfaces cover every planned plugin).
     `../veyron-sdk-cpp/proto/veyron_protocol.proto` — re-sync byte-identical
     (R8-05 reads these sibling paths directly and fails on drift).
   - `../veyron-sdk-python/veyron/veyron_protocol_pb2.py` — regenerate via
-    `scripts/gen_proto_python.py`. Caveat: the R8-05 staleness marker check
+    `../veyron-sdk-python/scripts/gen_proto_python.py`. Caveat: the R8-05 staleness marker check
     asserts symbol **names**, not values, so a pure renumber with a skipped
     regen would NOT fail loudly — the regen must be done deliberately.
   - `../veyron-sdk-rust/Cargo.toml` — `veyron-wire = "0.2.1"` → `"0.3.0"`.
