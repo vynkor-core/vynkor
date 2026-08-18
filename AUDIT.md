@@ -280,6 +280,10 @@ audit findings", priorities P0–P3).
   redelivers to subscribers — or symlink `events.db` elsewhere.
 - **Fix:** default `data_dir` to the per-user private runtime dir; create the
   store dir 0o700 with an ownership check.
+- **Status (2026-08-18): FIXED** — `default_data_dir()` uses
+  `veyron_wire::socket::default_private_dir()` (XDG_RUNTIME_DIR pattern,
+  same as M-09); `EventStore::new` rejects world-writable dirs (`mode &
+  0o002`); shipped via PR #35.
 
 ### S3. RUSTSEC-2026-0204 `crossbeam-epoch` 0.9.18 (Low, P1)
 
@@ -496,6 +500,6 @@ Remaining open:
 
 Delta (2026-08-14) ordering (priorities P0–P3, tracked in `ROADMAP.md`):
 1. **P0 — S1** (registry signature must bind the full entry: `status`/`archive_url`/compat). Trust-anchor correctness; everything else waits. **FIXED 2026-08-14.**
-2. **P1 — S3** (one-command `crossbeam-epoch` CVE fix), **S2** (`data_dir` off shared /tmp), **PERF-1** (router kernel replies off the shared-task `.send().await`), **PERF-2** (event-store SQLite off the async runtime).
+2. **P1 — S3** (one-command `crossbeam-epoch` CVE fix), **S2** (`data_dir` off shared /tmp — **FIXED 2026-08-18, PR #35**), **PERF-1** (router kernel replies off the shared-task `.send().await`), **PERF-2** (event-store SQLite off the async runtime).
 3. **P2 — UX-1** (JSON error envelope + honest stop status), **S5** (stable wire error codes), **UX-2** (stable `PluginInfo.state`), **PERF-3** (`Arc<PluginEntry>` + action→provider index).
 4. **P3 — PERF-4** (double CRC / sync zstd / `/proc` reads / WS copies), **UX-3** (config validation consistency), **UX-4** (CLI polish), **S4** (dependency advisories).

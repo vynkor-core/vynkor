@@ -320,7 +320,7 @@ backlog (polish).
     0.9.20 (PR #20, `0f5d65f`); `cargo audit` no longer reports
     RUSTSEC-2026-0204 (only the two S4 warnings remain).
 
-- [ ] S2 — **`data_dir: /tmp/veyron` puts the events SQLite DB in
+- [x] S2 — **`data_dir: /tmp/veyron` puts the events SQLite DB in
       world-writable /tmp (Low-Med):** `EventStore::new` (`events/store.rs:13-16`)
       does `create_dir_all` + symlink-following `Connection::open`. On a
       multi-user host a local user can pre-create `/tmp/veyron` and read or
@@ -330,7 +330,9 @@ backlog (polish).
   - Files: `src/events/store.rs`, `src/utils/config.rs`, `config.yaml`.
   - Acceptance: `data_dir` defaults to the per-user private runtime dir; the
     store dir is created 0o700 with an ownership check.
-  - **Status (2026-08-14): OPEN.**
+  - **Status (2026-08-18): FIXED** — `default_data_dir()` uses
+    `veyron_wire::socket::default_private_dir()` (XDG_RUNTIME_DIR pattern);
+    `EventStore::new` rejects world-writable dirs; shipped via PR #35.
 
 - [ ] PERF-1 — **Router kernel replies block on `.send().await` — one slow
       plugin stalls all IPC (Medium):** `send_envelope`
@@ -983,7 +985,7 @@ surfaces cover every planned plugin).
 | P11-03 | M9 zero-value enum renumber — SHIPPED on protocol v1.5 (2026-08-13): `*_UNKNOWN = 0` for ActionStatus/CommandStatus, header + `PROTOCOL_VERSION` 1.5, `veyron-wire` 0.2.2 consumed via patch branch (crates.io publish deferred), python/cpp copies synced + pb2 regenerated, no source edits anywhere | v1.5 wire bump |
 | S1 | registry signature must bind the full entry (`status`/`archive_url`/compat) — revocation bypass + download redirect — **FIXED** (2026-08-14): full-message signature, resolution moved to install (after verification), cache schema v2, tamper regression tests | none |
 | S3 | `crossbeam-epoch` 0.9.18 → 0.9.20 (RUSTSEC-2026-0204) — **FIXED** (2026-08-14, PR #20) | none |
-| S2 | `data_dir` off shared /tmp + 0o700 store dir — **OPEN** (P1) | none |
+| S2 | `data_dir` off shared /tmp + 0o700 store dir — **FIXED** (2026-08-18, PR #35) | none |
 | PERF-1 | router kernel replies off the shared-task `.send().await` — **OPEN** (P1) | none |
 | PERF-2 | event-store SQLite off the async runtime (`spawn_blocking`) — **OPEN** (P1) | none |
 | UX-1 | JSON error envelope + honest stop status + API doc — **OPEN** (P2) | none |
@@ -1067,7 +1069,8 @@ D-04** (identity + versioning + discovery, one proto bump), then D-05 → D-07
 
 **Delta audit (2026-08-14):** 13 new findings, all kernel-local, with
 priorities P0–P3 (see "Immediate — Delta audit findings" above): S1 (P0 —
-registry signature binding) **FIXED (2026-08-14)**; S3/S2/PERF-1/PERF-2 (P1),
+registry signature binding) **FIXED (2026-08-14)**; S2 **FIXED (2026-08-18,
+PR #35)**; S3/PERF-1/PERF-2 (P1),
 UX-1/S5/UX-2/PERF-3 (P2), PERF-4/UX-3/UX-4/S4 (P3) remain **OPEN**. S1 was
 the only one touching the trust anchor; the rest are independent and can land
 in any order.
