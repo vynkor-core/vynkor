@@ -2,8 +2,16 @@ use veyron::events::store::EventStore;
 use veyron::proto::veyron::Event;
 
 fn tmp_store(tag: &str) -> EventStore {
+    // S2: use a private 0o700 dir — the ownership check rejects world-writable /tmp
     let dir = std::env::temp_dir().join(format!("veyron_store_test_{tag}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    // set 0o700 so the ownership check passes
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
     EventStore::new(&dir).expect("EventStore::new must succeed")
 }
 
@@ -129,4 +137,31 @@ fn prune_respects_retention_window() {
     // generous retention: the just-created terminal event is too new to prune
     let removed = store.prune(3600);
     assert_eq!(removed, 0, "recent terminal event must be retained");
+}
+
+#[cfg(unix)]
+#[test]
+fn new_rejects_world_writable_dir() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = std::env::temp_dir().join(format!(
+        "veyron_store_test_world_writable_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o777)).unwrap();
+
+    match EventStore::new(&dir) {
+        Err(e) => {
+            let err = e.to_string();
+            assert!(
+                err.contains("world-writable"),
+                "error must mention world-writable: {err}"
+            );
+        }
+        Ok(_) => panic!("EventStore::new must reject world-writable dir (AUDIT S2)"),
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
 }

@@ -44,6 +44,13 @@ async fn start_kernel_with_store(socket: &str, port: u16, data_dir: &Path) -> on
 fn tmp_data_dir(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("veyron_es_integ_{tag}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    // S2: set 0o700 so the ownership check in EventStore::new passes
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
     dir
 }
 

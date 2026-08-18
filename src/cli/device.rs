@@ -133,7 +133,10 @@ pub fn handle(cmd: DeviceCmd, config_path: &str) -> anyhow::Result<()> {
         cert_pem,
     };
     let json = serde_json::to_string(&payload)?;
-    let link = format!("vynkor://pair?d={}", URL_SAFE_NO_PAD.encode(json.as_bytes()));
+    let link = format!(
+        "vynkor://pair?d={}",
+        URL_SAFE_NO_PAD.encode(json.as_bytes())
+    );
 
     eprintln!(
         "\n⚠️  This QR carries the host's MASTER jwt_secret — anyone who scans it can mint \
@@ -249,28 +252,44 @@ mod tests {
 
     #[test]
     fn loopback_host_warns_but_resolves() {
-        let cfg = Config { port: 8080, tls: false, ..Config::default() };
+        let cfg = Config {
+            port: 8080,
+            tls: false,
+            ..Config::default()
+        };
         let url = resolve_advertise_url(&cfg, Some("localhost:8080")).unwrap();
         assert_eq!(url, "ws://localhost:8080/ws");
     }
 
     #[test]
     fn bare_host_gets_config_port() {
-        let cfg = Config { port: 25565, tls: false, ..Config::default() };
+        let cfg = Config {
+            port: 25565,
+            tls: false,
+            ..Config::default()
+        };
         let url = resolve_advertise_url(&cfg, Some("myhost.tailnet")).unwrap();
         assert_eq!(url, "ws://myhost.tailnet:25565/ws");
     }
 
     #[test]
     fn host_with_explicit_port_keeps_it() {
-        let cfg = Config { port: 25565, tls: true, ..Config::default() };
+        let cfg = Config {
+            port: 25565,
+            tls: true,
+            ..Config::default()
+        };
         let url = resolve_advertise_url(&cfg, Some("100.64.0.2:8443")).unwrap();
         assert_eq!(url, "wss://100.64.0.2:8443/ws");
     }
 
     #[test]
     fn full_url_keeps_path_and_drops_default_port() {
-        let cfg = Config { port: 9999, tls: true, ..Config::default() };
+        let cfg = Config {
+            port: 9999,
+            tls: true,
+            ..Config::default()
+        };
         let url = resolve_advertise_url(&cfg, Some("https://myhost.tailnet:443/ws")).unwrap();
         assert_eq!(url, "wss://myhost.tailnet/ws");
     }

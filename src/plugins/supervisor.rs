@@ -268,10 +268,7 @@ impl PluginSupervisor {
                         "VEYRON_RO_PATHS",
                         fsaccess::join_paths_env(&config.readonly_paths),
                     )
-                    .env(
-                        "VEYRON_RW_PATHS",
-                        fsaccess::join_paths_env(&writable_paths),
-                    );
+                    .env("VEYRON_RW_PATHS", fsaccess::join_paths_env(&writable_paths));
             }
             c
         } else {
