@@ -547,25 +547,10 @@ pub fn action_risk_str(risk: i32) -> &'static str {
 pub fn validate_plugin_id(id: &str) -> Result<(), VeyronError> {
     const MAX_LEN: usize = 32; // frame target field width
 
-    if id.is_empty() {
-        return Err(VeyronError::InvalidPluginId("must not be empty".into()));
-    }
-    if id.len() > MAX_LEN {
-        return Err(VeyronError::InvalidPluginId(format!(
-            "too long ({} bytes, max {MAX_LEN})",
-            id.len()
-        )));
-    }
+    // shared charset/shape gate (MA-17) — also rejects "."/".." as ids
+    crate::utils::validate::validate_identifier(id, MAX_LEN)?;
     if id == "kernel" || id == "*" {
         return Err(VeyronError::InvalidPluginId(format!("'{id}' is reserved")));
-    }
-    if !id
-        .bytes()
-        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
-    {
-        return Err(VeyronError::InvalidPluginId(
-            "only ASCII letters, digits, '.', '-', '_' are allowed".into(),
-        ));
     }
     Ok(())
 }

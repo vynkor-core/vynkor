@@ -611,21 +611,11 @@ pub fn uninstall(slug: &str, tmp_dir: &Path) -> Result<(), VeyronError> {
 /// traversal (`../`, `/`, `..`, empty). Applied to every path a slug is
 /// joined into — the CLI `remove` target is operator input, and registry
 /// slugs are remote-controlled, so neither may shape a filesystem path.
+/// Shape checks are shared with plugin-id validation (MA-17); this wrapper
+/// keeps the slug-specific error wording callers match on.
 fn validate_slug(slug: &str) -> Result<(), VeyronError> {
-    let ok = !slug.is_empty()
-        && slug.len() <= 64
-        && slug != "."
-        && slug != ".."
-        && slug
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.');
-    if ok {
-        Ok(())
-    } else {
-        Err(VeyronError::InvalidPluginId(format!(
-            "invalid slug '{slug}': only [A-Za-z0-9._-], no path separators"
-        )))
-    }
+    crate::utils::validate::validate_identifier(slug, 64)
+        .map_err(|e| VeyronError::InvalidPluginId(format!("invalid slug '{slug}': {e}")))
 }
 
 /// Write a per-plugin drop-in config `plugins_dir/<slug>.yaml` (R10-01) so the

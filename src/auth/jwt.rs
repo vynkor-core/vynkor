@@ -4,6 +4,11 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// T-12/MA-18: minimum `jwt_secret` length (bytes) accepted anywhere a JWT
+/// secret is used — kernel boot (orchestrator) and every mint site. HS256
+/// secrets shorter than this are brute-forceable.
+pub const MIN_JWT_SECRET_BYTES: usize = 32;
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PluginClaims {
     pub sub: String,
@@ -82,6 +87,15 @@ pub fn mint_device_token(
     ttl_secs: u64,
     audience: &str,
 ) -> Result<String, String> {
+    // MA-18: same threshold as boot-time validation — `vyn token mint` reads
+    // the secret straight from config with no orchestrator gate in between
+    if secret.len() < MIN_JWT_SECRET_BYTES {
+        return Err(format!(
+            "jwt_secret is {} bytes, must be at least {MIN_JWT_SECRET_BYTES} bytes \
+             (HS256 secrets shorter than this are brute-forceable)",
+            secret.len()
+        ));
+    }
     let device_id = device_id.trim();
     if device_id.is_empty() {
         return Err("device_id must not be empty".into());

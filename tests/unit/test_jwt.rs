@@ -3,7 +3,9 @@ use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use std::time::{SystemTime, UNIX_EPOCH};
 use veyron::auth::jwt::{mint_device_token, JwtValidator, PluginClaims};
 
-const SECRET: &[u8] = b"test-secret-key-for-unit-tests";
+// 32 bytes — must satisfy MIN_JWT_SECRET_BYTES, which mint_device_token now
+// enforces (MA-18)
+const SECRET: &[u8] = b"test-secret-key-for-unit-tests-0";
 
 fn unix_now() -> usize {
     SystemTime::now()
@@ -116,6 +118,14 @@ fn minted_device_tokens_are_distinct() {
 fn mint_device_token_rejects_empty_device_and_zero_ttl() {
     assert!(mint_device_token(SECRET, " ", vec![], vec![], 3600, "veyron").is_err());
     assert!(mint_device_token(SECRET, "phone-1", vec![], vec![], 0, "veyron").is_err());
+}
+
+#[test]
+fn mint_device_token_rejects_short_secret() {
+    // MA-18: same MIN_JWT_SECRET_BYTES threshold as kernel boot
+    assert!(mint_device_token(b"short", "phone-1", vec![], vec![], 3600, "veyron").is_err());
+    assert!(mint_device_token(&[b'x'; 31], "phone-1", vec![], vec![], 3600, "veyron").is_err());
+    assert!(mint_device_token(&[b'x'; 32], "phone-1", vec![], vec![], 3600, "veyron").is_ok());
 }
 
 #[test]

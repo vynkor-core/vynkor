@@ -22,6 +22,7 @@ use crate::ipc::framing::{
     serialize_header, Frame, FLAG_COMPRESSED, FLAG_FRAGMENTED, FLAG_MAC_PRESENT, MAX_PAYLOAD_SIZE,
 };
 use crate::ipc::messages::IncomingMessage;
+use crate::utils::sync::recover_poison;
 
 const FRAME_HEADER_SIZE: usize = 44;
 const MAX_WS_PARSE_ERRORS: u32 = 16;
@@ -129,7 +130,7 @@ async fn handle_socket(
                         match parse_frame(&data) {
                             Ok(frame) => {
                                 // Verify MAC on inbound frames once session key is active.
-                                let key = *session_key.lock().unwrap_or_else(|p| p.into_inner());
+                                let key = *session_key.lock().unwrap_or_else(recover_poison);
                                 if let Some(k) = key {
                                     let valid = frame.flags & FLAG_MAC_PRESENT != 0
                                         && match &frame.mac {
@@ -197,7 +198,7 @@ async fn handle_socket(
                     Some(Outbound::EnableMac(k, cell)) => {
                         registered = true;
                         outbound_key = Some(k);
-                        *cell.lock().unwrap_or_else(|p| p.into_inner()) = Some(k);
+                        *cell.lock().unwrap_or_else(recover_poison) = Some(k);
                     }
                     None => break,
                 }
