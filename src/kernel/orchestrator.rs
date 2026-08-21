@@ -9,7 +9,7 @@ use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
 use crate::api::server::ApiServer;
-use crate::auth::jwt::JwtValidator;
+use crate::auth::jwt::{JwtValidator, MIN_JWT_SECRET_BYTES};
 use crate::bridge::{Bridge, BridgeHandle};
 use crate::events::bus::{run_retry_worker, EventBus};
 use crate::events::store::EventStore;
@@ -25,11 +25,6 @@ use crate::proto::veyron::{envelope, Envelope, Event, PluginShutdown};
 use crate::utils::config::{resolve_device_id, Config, Role};
 
 pub struct Kernel;
-
-/// T-12: minimum `jwt_secret` length (bytes) accepted at kernel startup.
-/// HS256 secrets shorter than this are brute-forceable; reject rather than
-/// silently accept a weak secret.
-const MIN_JWT_SECRET_BYTES: usize = 32;
 
 /// Reload config from `config_file` (if set) and apply its log level.
 /// No-op (`Ok(())`) when `config_file` is `None` — matches the boot-time
