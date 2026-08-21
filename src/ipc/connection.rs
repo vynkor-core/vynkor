@@ -6,6 +6,7 @@ use crate::ipc::framing::{
 use crate::ipc::messages::IncomingMessage;
 use crate::proto::veyron::ErrorCode;
 use crate::utils::errors::VeyronError;
+use crate::utils::sync::recover_poison;
 use metrics::counter;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -162,7 +163,7 @@ impl ConnectionHandler {
         loop {
             match read_frame(&mut self.read_half).await {
                 Ok(frame) => {
-                    let key = *self.session_key.lock().unwrap_or_else(|p| p.into_inner());
+                    let key = *self.session_key.lock().unwrap_or_else(recover_poison);
                     if let Some(k) = key {
                         // Secured connection: every frame must carry a valid MAC.
                         // A well-formed frame with a bad/missing tag is active
@@ -392,7 +393,7 @@ async fn write_loop(mut write_half: OwnedWriteHalf, mut rx: mpsc::Receiver<Outbo
         let mut frame = match item {
             Outbound::EnableMac(k, cell) => {
                 key = Some(k);
-                *cell.lock().unwrap_or_else(|p| p.into_inner()) = Some(k);
+                *cell.lock().unwrap_or_else(recover_poison) = Some(k);
                 continue;
             }
             Outbound::Frame(frame) => *frame,

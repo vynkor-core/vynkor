@@ -1,6 +1,7 @@
 use crate::ipc::connection::ConnectionHandler;
 use crate::ipc::messages::IncomingMessage;
 use crate::utils::errors::VeyronError;
+use crate::utils::sync::recover_poison;
 use std::fs;
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::path::Path;
@@ -53,7 +54,7 @@ impl UdsServer {
         // the changed umask while creating their own files.
         #[cfg(unix)]
         let bind_result = {
-            let _guard = BIND_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let _guard = BIND_LOCK.lock().unwrap_or_else(recover_poison);
             let old_umask = nix::sys::stat::umask(nix::sys::stat::Mode::from_bits_truncate(0o177));
             let r = UnixListener::bind(socket_path);
             nix::sys::stat::umask(old_umask);

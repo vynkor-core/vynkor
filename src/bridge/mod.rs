@@ -11,6 +11,7 @@ use crate::ipc::messages::IncomingMessage;
 use crate::plugins::registry::{DeviceMeta, PluginRegistry};
 use crate::proto::veyron::{envelope, Envelope, PluginManifest, PluginRegister};
 use crate::utils::config::BridgeConfig;
+use crate::utils::sync::recover_poison;
 use axum::http::HeaderValue;
 use futures_util::{SinkExt, StreamExt};
 use prost::Message;
@@ -72,7 +73,7 @@ impl BridgeHandle {
     /// first live connection — the host sees the frame's sender as whichever
     /// capability owns that connection.
     pub fn relay_to_host(&self, frame: &Frame) -> bool {
-        let conns = self.conns.lock().unwrap_or_else(|p| p.into_inner());
+        let conns = self.conns.lock().unwrap_or_else(recover_poison);
         let Some(tx) = conns.first() else {
             return false;
         };
@@ -90,25 +91,18 @@ impl BridgeHandle {
     }
 
     pub fn register_conn(&self, tx: mpsc::Sender<Outbound>) {
-        self.conns
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .push(tx);
+        self.conns.lock().unwrap_or_else(recover_poison).push(tx);
     }
 
     pub fn unregister_conn(&self, tx: &mpsc::Sender<Outbound>) {
         self.conns
             .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .unwrap_or_else(recover_poison)
             .retain(|c| !c.same_channel(tx));
     }
 
     pub fn is_connected(&self) -> bool {
-        !self
-            .conns
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .is_empty()
+        !self.conns.lock().unwrap_or_else(recover_poison).is_empty()
     }
 }
 

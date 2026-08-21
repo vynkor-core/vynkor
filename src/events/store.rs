@@ -1,4 +1,5 @@
 use crate::proto::veyron::Event;
+use crate::utils::sync::recover_poison;
 use rusqlite::{params, Connection};
 use std::path::Path;
 use std::sync::Mutex;
@@ -53,7 +54,7 @@ impl EventStore {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs() as i64;
-        let conn = self.conn.lock().unwrap_or_else(|p| p.into_inner());
+        let conn = self.conn.lock().unwrap_or_else(recover_poison);
         if let Err(e) = conn.execute(
             "INSERT OR IGNORE INTO events \
              (event_id, event_type, payload_json, status, created_at, retry_count) \
@@ -65,7 +66,7 @@ impl EventStore {
     }
 
     pub fn mark_delivered(&self, event_id: &str) {
-        let conn = self.conn.lock().unwrap_or_else(|p| p.into_inner());
+        let conn = self.conn.lock().unwrap_or_else(recover_poison);
         if let Err(e) = conn.execute(
             "UPDATE events SET status='delivered' WHERE event_id=?1",
             params![event_id],
@@ -82,7 +83,7 @@ impl EventStore {
             .as_secs()
             .saturating_sub(age_secs) as i64;
 
-        let conn = self.conn.lock().unwrap_or_else(|p| p.into_inner());
+        let conn = self.conn.lock().unwrap_or_else(recover_poison);
         let mut stmt = match conn.prepare(
             "SELECT event_id, event_type, payload_json, retry_count \
              FROM events WHERE status='pending' AND created_at <= ?1",
@@ -121,7 +122,7 @@ impl EventStore {
             .as_secs()
             .saturating_sub(retention_secs) as i64;
 
-        let conn = self.conn.lock().unwrap_or_else(|p| p.into_inner());
+        let conn = self.conn.lock().unwrap_or_else(recover_poison);
         match conn.execute(
             "DELETE FROM events \
              WHERE status IN ('delivered', 'dead') AND created_at <= ?1",
@@ -137,7 +138,7 @@ impl EventStore {
 
     /// Increment retry_count by 1. If count reaches max_retries, mark the event 'dead'.
     pub fn increment_retry_or_dead(&self, event_id: &str, max_retries: u32) {
-        let conn = self.conn.lock().unwrap_or_else(|p| p.into_inner());
+        let conn = self.conn.lock().unwrap_or_else(recover_poison);
         let _ = conn.execute(
             "UPDATE events SET retry_count = retry_count + 1 WHERE event_id = ?1",
             params![event_id],
