@@ -64,7 +64,7 @@ async fn run_kernel(cli: Cli) -> Result<()> {
                 cfg.log_level = "debug".to_string();
             }
 
-            utils::logging::init(&cfg.log_level);
+            utils::logging::try_init(&cfg.log_level);
             if let Some(e) = load_err {
                 warn!("failed to load config '{}': {}, using defaults", config, e);
             }
@@ -98,12 +98,12 @@ async fn run_kernel(cli: Cli) -> Result<()> {
         }
         Commands::Stop { config } => {
             let cfg = load_config(&config).unwrap_or_default();
-            utils::logging::init(&cfg.log_level);
+            utils::logging::try_init(&cfg.log_level);
             stop_kernel(&cfg.pid_file)?;
         }
         Commands::Restart { config, debug } => {
             let cfg = load_config(&config).unwrap_or_default();
-            utils::logging::init(&cfg.log_level);
+            utils::logging::try_init(&cfg.log_level);
             ensure_auth_configured(&cfg)?;
             // Capture the PID before stop_kernel removes the pid file, so we can
             // confirm the actual process is gone rather than guessing with a sleep.
@@ -121,7 +121,7 @@ async fn run_kernel(cli: Cli) -> Result<()> {
         }
         Commands::Status { config } => {
             let cfg = load_config(&config).unwrap_or_default();
-            utils::logging::init(&cfg.log_level);
+            utils::logging::try_init(&cfg.log_level);
             if is_running(&cfg.pid_file)? {
                 let pid = read_pid(&cfg.pid_file)?;
                 println!("veyron is running (PID: {})", pid);
@@ -131,7 +131,7 @@ async fn run_kernel(cli: Cli) -> Result<()> {
         }
         Commands::Logs { lines, config } => {
             let cfg = load_config(&config).unwrap_or_default();
-            utils::logging::init(&cfg.log_level);
+            utils::logging::try_init(&cfg.log_level);
             show_logs(&cfg.log_file, lines)?;
         }
         Commands::Plugin { cmd, config, token } => {
