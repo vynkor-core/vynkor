@@ -1,6 +1,5 @@
 use crate::auth::permissions::normalize_permission;
 use crate::events::bus::EventBus;
-use crate::marketplace::installer::{validate_manifest, InstallManifest};
 use crate::plugins::manager::PluginManager;
 use crate::plugins::supervisor::{PluginConfig, RestartPolicy};
 use crate::utils::config::PluginDef;
@@ -9,6 +8,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{info, warn};
+// manifest types come from veyron-wire; the marketplace copy coexists until
+// V-07 deletes it — do not add new users of the marketplace one.
+use veyron_wire::manifest::{validate_manifest, InstallManifest};
 
 pub struct PluginLoader;
 
@@ -274,7 +276,11 @@ pub fn validate_plugin_def(def: &PluginDef) -> Result<Option<InstallManifest>, V
     let kernel_ver = semver::Version::parse(env!("CARGO_PKG_VERSION"))
         .map_err(|e| VeyronError::Internal(format!("kernel version parse: {e}")))?;
 
-    let manifest = validate_manifest(&manifest_path, &kernel_ver)?;
+    let manifest = validate_manifest(
+        &manifest_path,
+        &kernel_ver,
+        crate::auth::permissions::resolve_permission,
+    )?;
 
     // Cross-check manifest permissions against config-granted permissions.
     // An empty def.permissions list means the operator placed no restrictions.
