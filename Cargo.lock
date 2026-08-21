@@ -3428,9 +3428,9 @@ dependencies = [
 
 [[package]]
 name = "veyron-wire"
-version = "0.2.3"
+version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57d839f3d759fb0ba8cfe08e871804a7f18fd18e92d63926cb2731f7f3b5ecf3"
+checksum = "dd500e5594a870b2824507d58f25d86daef299e9d3738c29f929f515dde5dc02"
 dependencies = [
  "crc32fast",
  "hkdf",
@@ -3438,6 +3438,9 @@ dependencies = [
  "nix",
  "prost 0.13.5",
  "prost-build",
+ "semver",
+ "serde",
+ "serde_json",
  "sha2",
  "tokio",
  "zstd",
