@@ -424,11 +424,15 @@ backlog (polish).
   - Files: `src/cli/mod.rs`, `src/cli/plugin.rs`.
   - **Status (2026-08-14): OPEN.**
 
-- [ ] S4 — **Dependency advisories (Low, warnings):** RUSTSEC-2026-0190
+- [x] S4 — **Dependency advisories (Low, warnings):** RUSTSEC-2026-0190
       `anyhow` `Error::downcast_mut` unsoundness; RUSTSEC-2025-0119
       `number_prefix` unmaintained.
   - Files: `Cargo.lock`, `Cargo.toml`.
-  - **Status (2026-08-14): OPEN.**
+  - **Status (2026-08-21): FIXED** — `cargo update -p anyhow` → 1.0.104;
+    `indicatif` 0.17 → 0.18 (same `ProgressBar` API at the single call site)
+    drops `number_prefix` from the tree entirely; bonus: h2 0.4.15 → 0.4.18
+    clears RUSTSEC-2026-0258 (unbounded empty DATA frames, disclosed
+    2026-08-17). `cargo audit` exits 0 — zero vulnerabilities, zero warnings.
 
 ---
 
@@ -577,12 +581,19 @@ the audit's §E: **P0** before next release (monoliths + error-system unificatio
   - Acceptance: WS gateway reuses `veyron_wire::framing::read_frame` (or the
     WS-specific framing moves into `veyron_wire`); no duplicated frame parser.
 
-- [ ] MA-14 — **Reduce `utils/logging.rs` duplication + use `try_init()`:**
+- [x] MA-14 — **Reduce `utils/logging.rs` duplication + use `try_init()`:**
       4 `if json { with otel } else` branches duplicate 80% of `fmt::layer()`;
       `Registry::init()` panics on a second call (breaks tests).
   - Files: `src/utils/logging.rs`.
   - Acceptance: shared `fmt::layer()` builder; `try_init()` instead of
     `init()` so tests don't panic.
+  - **Status (2026-08-21): FIXED** — the json/plain choice is made once into
+    a boxed fmt layer (`Box<dyn Layer<BaseStack>>`, `BaseStack` =
+    `Layered<reload::Layer<EnvFilter, Registry>, Registry>`), so the field
+    config is no longer duplicated per branch and the otel tail composes
+    after it; `init()` renamed to `try_init() -> bool` (returns false when a
+    global subscriber is already installed instead of panicking); all five
+    `main.rs` call sites updated. Builds with and without the `otel` feature.
 
 - [x] MA-15 — **Check `veyron-wire` for dead code:** `cargo clippy -- -D
       warnings` on the `veyron-wire` workspace may flag `dead_code` (e.g.
@@ -596,12 +607,18 @@ the audit's §E: **P0** before next release (monoliths + error-system unificatio
     silenced via prost `type_attribute` in wire's build.rs (veyron-wire
     PR #5). clippy `--all-targets --all-features -- -D warnings` clean.
 
-- [ ] MA-16 — **Separate tests from prod code in `registry.rs`:** `registry.rs`
+- [x] MA-16 — **Separate tests from prod code in `registry.rs`:** `registry.rs`
       is ~800 LOC prod + ~700 LOC tests in one file — hard to scroll. Move
       tests to `#[cfg(test)] mod tests` in a separate file (or `tests.rs`).
   - Files: `src/marketplace/registry.rs`.
   - Acceptance: prod and test code separated; `cargo test` still discovers
     all tests.
+  - **Status (2026-08-21): FIXED** — tests moved verbatim to
+    `src/marketplace/registry_tests.rs`, wired via
+    `#[cfg(test)] #[path = "registry_tests.rs"] mod tests;` (keeps
+    `registry.rs` a file module, no directory reshuffle); `registry.rs` drops
+    to 665 LOC of prod code. All 41 registry tests still discovered, full
+    suite green.
 
 ### Security nits (confirmed sound, low priority)
 
@@ -1293,7 +1310,7 @@ surfaces cover every planned plugin).
 | PERF-4 | drop double CRC / offload zstd / `/proc` reads off the async runtime — **OPEN** (P3) | none |
 | UX-3 | config validation consistency + surface load errors to all CLI — **OPEN** (P3) | none |
 | UX-4 | CLI help/output polish — **OPEN** (P3) | none |
-| S4 | dependency advisories (anyhow / number_prefix) — **OPEN** (P3) | none |
+| S4 | dependency advisories (anyhow / number_prefix) — **FIXED** (2026-08-21): anyhow 1.0.104, h2 0.4.18, number_prefix dropped via indicatif 0.18 — cargo audit clean | none |
 | MA-01 | split `ipc/protocol.rs` + `marketplace/registry.rs` monoliths — **OPEN** (P0, 2026-08-20 audit) | MA-02 |
 | MA-02 | extract duplicated `target_bytes`/`build_frame` + `resolve_*_url` helpers — **OPEN** (P0) | none |
 | MA-03 | unify error system on `VeyronError`; `jwt::validate() -> VeyronError` — **OPEN** (P0) | none |
@@ -1307,9 +1324,9 @@ surfaces cover every planned plugin).
 | MA-11 | move `drain_to_log`/`proc_resource_usage` → `plugins/metrics.rs` — **FIXED** (2026-08-21): helpers moved verbatim, supervisor imports them | none |
 | MA-12 | log mutex poison instead of silently swallowing — **FIXED** (2026-08-21): shared `utils::sync::recover_poison`, all 14 sites | none |
 | MA-13 | reuse `veyron_wire` framing in WS gateway; drop custom `parse_frame` — **OPEN** (P2) | none |
-| MA-14 | `utils/logging.rs` dedup + `try_init()` — **OPEN** (P2) | none |
+| MA-14 | `utils/logging.rs` dedup + `try_init()` — **FIXED** (2026-08-21): one boxed fmt layer, `try_init()` no longer panics on re-init | none |
 | MA-15 | `veyron-wire` dead-code clippy check — **FIXED** (2026-08-21): large_enum_variant allowed on generated payload oneof (wire PR #5) | none |
-| MA-16 | separate tests from prod code in `registry.rs` — **OPEN** (P2) | MA-01 |
+| MA-16 | separate tests from prod code in `registry.rs` — **FIXED** (2026-08-21): tests moved verbatim to `registry_tests.rs`, wired via `#[path]`; registry.rs at 665 LOC prod | MA-01 |
 | MA-17 | unify `validate_slug`/`validate_plugin_id` regex — **FIXED** (2026-08-21): shared `utils::validate::validate_identifier`; `"."`/`".."` now rejected as plugin ids too | none |
 | MA-18 | `mint_device_token` length-checks `jwt_secret` — **FIXED** (2026-08-21): constant moved to `auth::jwt`, enforced at every mint site | none |
 | MA-19 | `debug_assert!` + SAFETY comment on `unsafe` in `main.rs:391` — **FIXED** (2026-08-21) | none |
