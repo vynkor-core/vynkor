@@ -523,13 +523,16 @@ the audit's §E: **P0** before next release (monoliths + error-system unificatio
     zero-invalid numeric is clamped or errors loudly; tests cover all clamped
     fields.
 
-- [ ] MA-08 — **Add `reset_for_test()` for global atomic sequences:**
+- [x] MA-08 — **Add `reset_for_test()` for global atomic sequences:**
       `MSG_SEQ`, `ACTION_CORRELATION_SEQ`, `EVENT_PUBLISH_SEQ`
       (`ipc/protocol.rs:30-32`) are process-wide and never reset; tests depend
       on ordering across runs.
   - Files: `src/ipc/protocol.rs`.
   - Acceptance: `#[cfg(test)] fn reset_for_test()` resets all three atomics;
     called in test setup where ordering matters.
+  - **Status (2026-08-21): FIXED** — `#[cfg(test)]
+    ipc::protocol::reset_for_test()` zeroes all three; locked in by
+    `reset_for_test_zeroes_all_sequence_atomics`.
 
 - [ ] MA-09 — **Split `plugins/supervisor.rs` (933 LOC):** `spawn_internal`
       is 200 LOC + `monitor_loop` + `watchdog_loop` + `graceful_shutdown` in
@@ -547,17 +550,24 @@ the audit's §E: **P0** before next release (monoliths + error-system unificatio
 
 ### P2 — polish
 
-- [ ] MA-11 — **Extract `drain_to_log` and `proc_resource_usage` into
+- [x] MA-11 — **Extract `drain_to_log` and `proc_resource_usage` into
       `plugins/metrics.rs`:** these helper functions are misplaced in the
       supervisor.
   - Files: `src/plugins/supervisor.rs`, new `src/plugins/metrics.rs`.
   - Acceptance: helpers moved; supervisor imports them; tests green.
+  - **Status (2026-08-21): FIXED** — both moved to `plugins::metrics`
+    (verbatim, incl. their doc comments); supervisor imports them,
+    `proc_resource_usage` import stays linux-gated. Suite green.
 
-- [ ] MA-12 — **Log mutex poison instead of silently swallowing it:**
+- [x] MA-12 — **Log mutex poison instead of silently swallowing it:**
       `unwrap_or_else(|p| p.into_inner())` (e.g. `events/store.rs`) discards
       the poison error silently.
   - Files: `src/events/store.rs` (+ any other `into_inner()` sites).
   - Acceptance: poison is logged at `warn!` before recovery.
+  - **Status (2026-08-21): FIXED** — shared `utils::sync::recover_poison`
+    (`warn!` then recover); all 14 `into_inner()` sites across
+    `events/store.rs`, `api/websocket.rs`, `ipc/connection.rs`,
+    `ipc/server.rs`, `bridge/mod.rs` now pass it to `unwrap_or_else`.
 
 - [ ] MA-13 — **Reuse `veyron_wire` framing in the WebSocket gateway:**
       `api/websocket.rs:229` has a custom `parse_frame` without
@@ -595,18 +605,30 @@ the audit's §E: **P0** before next release (monoliths + error-system unificatio
 
 ### Security nits (confirmed sound, low priority)
 
-- [ ] MA-17 — **Unify `validate_slug` / `validate_plugin_id` regex:**
+- [x] MA-17 — **Unify `validate_slug` / `validate_plugin_id` regex:**
       `installer.rs:614` and `registry.rs:547` use two different regexes for
       the same concept.
   - Files: `src/marketplace/installer.rs`, `src/marketplace/registry.rs`.
   - Acceptance: one shared `validate_slug` function; both call-sites use it.
+  - **Status (2026-08-21): FIXED** — shared `utils::validate::
+    validate_identifier(id, max_len)` (charset/length/path-component gate);
+    `installer::validate_slug` delegates and keeps its slug wording,
+    `registry::validate_plugin_id` delegates and keeps the `kernel`/`*`
+    reserved checks. Side effect: `"."`/`".."` are now rejected as plugin
+    ids too (previously only slugs).
 
-- [ ] MA-18 — **Add `jwt_secret` length check to `mint_device_token`:**
+- [x] MA-18 — **Add `jwt_secret` length check to `mint_device_token`:**
       `jwt_secret` length is validated only in `orchestrator.rs:123`;
       `mint_device_token` (`src/cli/token.rs`) does not check it.
   - Files: `src/cli/token.rs`, `src/auth/jwt.rs`.
   - Acceptance: `mint_device_token` rejects a short `jwt_secret` (same
     `MIN_JWT_SECRET_BYTES` threshold).
+  - **Status (2026-08-21): FIXED** — the constant moved to
+    `auth::jwt::MIN_JWT_SECRET_BYTES` (single source of truth, orchestrator
+    imports it); `mint_device_token` enforces it before minting, so `vyn
+    token mint` / `vyn device pair` can no longer sign with a brute-forceable
+    secret. Test SECRET bumped to 32 bytes;
+    `mint_device_token_rejects_short_secret` covers 31/32 boundary.
 
 - [x] MA-19 — **Add `debug_assert!` + safety comment to `unsafe` in
       `main.rs:391`:** `BorrowedFd::borrow_raw(ready_fd)` is valid only because
@@ -1279,17 +1301,17 @@ surfaces cover every planned plugin).
 | MA-05 | `docs/COMMENT_TAGS.md` + reduce comment duplication + consistent style — **OPEN** (P1) | none |
 | MA-06 | `create_router_full` → `RouterConfig` struct; move prune spawn out — **OPEN** (P1) | none |
 | MA-07 | `Config::Default` dedup + clamp all zero-invalid numerics — **OPEN** (P1) | none |
-| MA-08 | `reset_for_test()` for global atomics (`MSG_SEQ` etc.) — **OPEN** (P1) | none |
+| MA-08 | `reset_for_test()` for global atomics (`MSG_SEQ` etc.) — **FIXED** (2026-08-21): `#[cfg(test)]` reset + regression test | none |
 | MA-09 | split `plugins/supervisor.rs` (933 L) — **OPEN** (P1) | none |
 | MA-10 | split `kernel/orchestrator.rs` (470 L) — **OPEN** (P1) | none |
-| MA-11 | move `drain_to_log`/`proc_resource_usage` → `plugins/metrics.rs` — **OPEN** (P2) | none |
-| MA-12 | log mutex poison instead of silently swallowing — **OPEN** (P2) | none |
+| MA-11 | move `drain_to_log`/`proc_resource_usage` → `plugins/metrics.rs` — **FIXED** (2026-08-21): helpers moved verbatim, supervisor imports them | none |
+| MA-12 | log mutex poison instead of silently swallowing — **FIXED** (2026-08-21): shared `utils::sync::recover_poison`, all 14 sites | none |
 | MA-13 | reuse `veyron_wire` framing in WS gateway; drop custom `parse_frame` — **OPEN** (P2) | none |
 | MA-14 | `utils/logging.rs` dedup + `try_init()` — **OPEN** (P2) | none |
 | MA-15 | `veyron-wire` dead-code clippy check — **FIXED** (2026-08-21): large_enum_variant allowed on generated payload oneof (wire PR #5) | none |
 | MA-16 | separate tests from prod code in `registry.rs` — **OPEN** (P2) | MA-01 |
-| MA-17 | unify `validate_slug`/`validate_plugin_id` regex — **OPEN** (security nit) | none |
-| MA-18 | `mint_device_token` length-checks `jwt_secret` — **OPEN** (security nit) | none |
+| MA-17 | unify `validate_slug`/`validate_plugin_id` regex — **FIXED** (2026-08-21): shared `utils::validate::validate_identifier`; `"."`/`".."` now rejected as plugin ids too | none |
+| MA-18 | `mint_device_token` length-checks `jwt_secret` — **FIXED** (2026-08-21): constant moved to `auth::jwt`, enforced at every mint site | none |
 | MA-19 | `debug_assert!` + SAFETY comment on `unsafe` in `main.rs:391` — **FIXED** (2026-08-21) | none |
 | F1 | marketplace out of the kernel → standalone `vynm` binary (DC-1) — **OPEN** (P0, 2026-08-16 dumb-core audit) | none |
 | F2 | device surfaces as dumb pass-through; interpretation moves to a `discovery` plugin (DC-2) — **OPEN** (P0) | none |
