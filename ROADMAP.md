@@ -476,11 +476,14 @@ the audit's §E: **P0** before next release (monoliths + error-system unificatio
     in error paths; `main.rs` preserves the error chain (e.g. `{:?}` or
     `Error::source()`).
 
-- [ ] MA-04 — **Replace deprecated `rand::thread_rng()`:** `auth/jwt.rs:96`
+- [x] MA-04 — **Replace deprecated `rand::thread_rng()`:** `auth/jwt.rs:96`
       uses the deprecated `rand::thread_rng()`; replace with `rand::rng()` /
       `OsRng`.
   - Files: `src/auth/jwt.rs`.
   - Acceptance: no `thread_rng()` calls; clippy clean.
+  - **Status (2026-08-21): FIXED** — `mint_device_token` fills the jti nonce
+    from `rand::rngs::OsRng`; no `thread_rng()` remains. The kernel pins rand
+    0.8 where `rand::rng()` doesn't exist, so OsRng (valid on both) was used.
 
 ### P1 — hygiene
 
@@ -571,12 +574,17 @@ the audit's §E: **P0** before next release (monoliths + error-system unificatio
   - Acceptance: shared `fmt::layer()` builder; `try_init()` instead of
     `init()` so tests don't panic.
 
-- [ ] MA-15 — **Check `veyron-wire` for dead code:** `cargo clippy -- -D
+- [x] MA-15 — **Check `veyron-wire` for dead code:** `cargo clippy -- -D
       warnings` on the `veyron-wire` workspace may flag `dead_code` (e.g.
       `BLOOM`).
   - Files: `../veyron-wire/`.
   - Acceptance: `cargo clippy --all-targets -- -D warnings` clean on
     `veyron-wire`.
+  - **Status (2026-08-21): FIXED** — no dead_code found (`BLOOM` doesn't
+    exist in wire); the actual `-D warnings` blocker was
+    `clippy::large_enum_variant` on the generated `envelope::Payload` oneof,
+    silenced via prost `type_attribute` in wire's build.rs (veyron-wire
+    PR #5). clippy `--all-targets --all-features -- -D warnings` clean.
 
 - [ ] MA-16 — **Separate tests from prod code in `registry.rs`:** `registry.rs`
       is ~800 LOC prod + ~700 LOC tests in one file — hard to scroll. Move
@@ -600,13 +608,16 @@ the audit's §E: **P0** before next release (monoliths + error-system unificatio
   - Acceptance: `mint_device_token` rejects a short `jwt_secret` (same
     `MIN_JWT_SECRET_BYTES` threshold).
 
-- [ ] MA-19 — **Add `debug_assert!` + safety comment to `unsafe` in
+- [x] MA-19 — **Add `debug_assert!` + safety comment to `unsafe` in
       `main.rs:391`:** `BorrowedFd::borrow_raw(ready_fd)` is valid only because
       `ready_fd` is dup'd via `CommandExt::pre_exec` — the safety invariant is
       undocumented.
   - Files: `src/main.rs`.
   - Acceptance: `debug_assert!` + `// SAFETY:` comment explaining the
     `borrow_raw` validity.
+  - **Status (2026-08-21): FIXED** — `// SAFETY:` documents that ready_tx
+    outlives spawn() so the borrow never dangles and grants no ownership;
+    `debug_assert!(ready_fd >= 0)` added before the unsafe block.
 
 ---
 
@@ -1264,7 +1275,7 @@ surfaces cover every planned plugin).
 | MA-01 | split `ipc/protocol.rs` + `marketplace/registry.rs` monoliths — **OPEN** (P0, 2026-08-20 audit) | MA-02 |
 | MA-02 | extract duplicated `target_bytes`/`build_frame` + `resolve_*_url` helpers — **OPEN** (P0) | none |
 | MA-03 | unify error system on `VeyronError`; `jwt::validate() -> VeyronError` — **OPEN** (P0) | none |
-| MA-04 | replace deprecated `rand::thread_rng()` — **OPEN** (P0) | none |
+| MA-04 | replace deprecated `rand::thread_rng()` — **FIXED** (2026-08-21): jti nonce from OsRng | none |
 | MA-05 | `docs/COMMENT_TAGS.md` + reduce comment duplication + consistent style — **OPEN** (P1) | none |
 | MA-06 | `create_router_full` → `RouterConfig` struct; move prune spawn out — **OPEN** (P1) | none |
 | MA-07 | `Config::Default` dedup + clamp all zero-invalid numerics — **OPEN** (P1) | none |
@@ -1275,11 +1286,11 @@ surfaces cover every planned plugin).
 | MA-12 | log mutex poison instead of silently swallowing — **OPEN** (P2) | none |
 | MA-13 | reuse `veyron_wire` framing in WS gateway; drop custom `parse_frame` — **OPEN** (P2) | none |
 | MA-14 | `utils/logging.rs` dedup + `try_init()` — **OPEN** (P2) | none |
-| MA-15 | `veyron-wire` dead-code clippy check — **OPEN** (P2) | none |
+| MA-15 | `veyron-wire` dead-code clippy check — **FIXED** (2026-08-21): large_enum_variant allowed on generated payload oneof (wire PR #5) | none |
 | MA-16 | separate tests from prod code in `registry.rs` — **OPEN** (P2) | MA-01 |
 | MA-17 | unify `validate_slug`/`validate_plugin_id` regex — **OPEN** (security nit) | none |
 | MA-18 | `mint_device_token` length-checks `jwt_secret` — **OPEN** (security nit) | none |
-| MA-19 | `debug_assert!` + SAFETY comment on `unsafe` in `main.rs:391` — **OPEN** (security nit) | none |
+| MA-19 | `debug_assert!` + SAFETY comment on `unsafe` in `main.rs:391` — **FIXED** (2026-08-21) | none |
 | F1 | marketplace out of the kernel → standalone `vynm` binary (DC-1) — **OPEN** (P0, 2026-08-16 dumb-core audit) | none |
 | F2 | device surfaces as dumb pass-through; interpretation moves to a `discovery` plugin (DC-2) — **OPEN** (P0) | none |
 | F3 | bridge stays as transport; strip `device.<cap>` capability interpretation (DC-2) — **OPEN** (P1) | F2 |
