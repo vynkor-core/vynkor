@@ -31,6 +31,15 @@ static MSG_SEQ: AtomicU64 = AtomicU64::new(0);
 static ACTION_CORRELATION_SEQ: AtomicU64 = AtomicU64::new(0);
 static EVENT_PUBLISH_SEQ: AtomicU64 = AtomicU64::new(0);
 
+/// ma-08: process-wide and never reset in prod — tests that depend on
+/// sequence ordering across runs call this in their setup
+#[cfg(test)]
+pub(crate) fn reset_for_test() {
+    MSG_SEQ.store(0, Ordering::Relaxed);
+    ACTION_CORRELATION_SEQ.store(0, Ordering::Relaxed);
+    EVENT_PUBLISH_SEQ.store(0, Ordering::Relaxed);
+}
+
 /// D-10: process-unique trace id for kernel-stamped envelopes. Shared by
 /// `build_outbound` and the event bus so the two stamping sites can never
 /// collide on the same `k-{ts}-{seq}` value.
@@ -1385,5 +1394,27 @@ impl MessageRouter {
             // stream is dead the next time it tries to send a chunk.
             let _ = Self::try_send_envelope(&provider_entry.write_tx, abort_to_provider);
         }
+    }
+}
+
+#[cfg(test)]
+mod seq_reset_tests {
+    use super::*;
+
+    #[test]
+    fn reset_for_test_zeroes_all_sequence_atomics() {
+        // drive all three past zero first
+        let _ = kernel_message_id();
+        let _ = ACTION_CORRELATION_SEQ.fetch_add(1, Ordering::Relaxed);
+        let _ = EVENT_PUBLISH_SEQ.fetch_add(1, Ordering::Relaxed);
+        assert_ne!(MSG_SEQ.load(Ordering::Relaxed), 0);
+
+        reset_for_test();
+
+        // tight window: a concurrent lib-test bump between store and load is
+        // theoretically possible but the counters only move per envelope
+        assert_eq!(MSG_SEQ.load(Ordering::Relaxed), 0);
+        assert_eq!(ACTION_CORRELATION_SEQ.load(Ordering::Relaxed), 0);
+        assert_eq!(EVENT_PUBLISH_SEQ.load(Ordering::Relaxed), 0);
     }
 }
