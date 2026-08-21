@@ -1,4 +1,5 @@
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
+use rand::rngs::OsRng;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -93,7 +94,7 @@ pub fn mint_device_token(
         .unwrap_or_default()
         .as_secs() as usize;
     let mut nonce = [0u8; 16];
-    rand::thread_rng().fill_bytes(&mut nonce);
+    OsRng.fill_bytes(&mut nonce);
     let claims = PluginClaims {
         sub: device_id.to_string(),
         permissions,
