@@ -388,6 +388,11 @@ fn daemonize_and_run(cfg: &Config, config_path: &str, debug: bool) -> Result<()>
     if debug {
         command.arg("--debug");
     }
+    // SAFETY: the closure runs in the forked child before exec; ready_fd is
+    // borrowed from ready_tx, which stays open until after spawn() returns,
+    // so the descriptor is valid for the whole borrow. borrow_raw grants no
+    // ownership — the fcntl calls below never close it.
+    debug_assert!(ready_fd >= 0, "ready pipe fd must be open");
     unsafe {
         // keep the ready pipe open across exec in the child
         command.pre_exec(move || {
