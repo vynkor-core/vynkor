@@ -1,7 +1,8 @@
 # Veyron Threat Model
 
 Date: **2026-08-15** · Phase 12 remote devices (D-01…D-10 shipped, baseline
-proto v1.6). Consolidates §10 (auth/channel security), §19 (host reachability)
+proto v1.6). Residual updated: S2 fixed (PR #35, 2026-08-18), S3 fixed (PR #20,
+2026-08-14). Consolidates §10 (auth/channel security), §19 (host reachability)
 and §21 (AI tool-calling safety) of `docs/REMOTE_DEVICES_PLAN.md` into one
 focused threat model, so the security posture lives in a single place.
 Companion files: `AUDIT.md` (findings ledger) and
@@ -53,10 +54,11 @@ Denied by:
 - Protocol-version major-mismatch reject (`ERR_PROTOCOL_MISMATCH`, D-03).
 
 Residual: brute force of a weak or leaked shared secret (no per-device
-revocation until D-18); on a multi-user host the events DB defaulting to
-`/tmp/veyron` (S2) lets a local user read or forge pending events; low-severity
-dependency advisories (S3, S4) and internal detail in plugin-facing errors (S5)
-aid recon. All open items tracked in `AUDIT.md`.
+revocation until D-18); low-severity dependency advisories (S4) and internal
+detail in plugin-facing errors (S5) aid recon. S2 (events DB in `/tmp/veyron`)
+and S3 (`crossbeam-epoch` RUSTSEC) are closed: the event DB now lives in the
+per-user private runtime dir (0o700, PR #35, 2026-08-18) and `crossbeam-epoch`
+is at 0.9.20 (PR #20, 2026-08-14). All open items tracked in `AUDIT.md`.
 
 ### 2. compromised plugin
 
@@ -166,11 +168,14 @@ schema it reads.
 - **Single-user enforcement.** Same-user IPC is live (D-03), but event-bus
   user-scoping is not (D-23 deferred). With co-users on one kernel, a plugin
   could subscribe to `*` events.
-- **Open audit items** (tracked in `AUDIT.md`): S2 events DB in `/tmp/veyron`
-  (Low-Med, P1), S3 `crossbeam-epoch` RUSTSEC (Low, P1), S5 internals leak into
-  plugin-facing errors (Low, P2), S4 `anyhow`/`number_prefix` advisories (Low,
-  P3), PERF-1/PERF-2 (Medium, P1), PERF-3/UX-1/UX-2 (Low-Med, P2),
-  PERF-4/UX-3/UX-4 (Low, P3), M7 C++/Python fuzz harness (deferred). None of
-  these changes the controls above; they are hardening debt, not new exposures.
+- **Open audit items** (tracked in `AUDIT.md`/`ROADMAP.md`): S4
+  `anyhow`/`number_prefix` advisories (Low, P3), S5 internals leak into
+  plugin-facing errors (Low, P2), PERF-1/PERF-2 (Medium, P1),
+  PERF-3/UX-1/UX-2 (Low-Med, P2), PERF-4/UX-3/UX-4 (Low, P3), M7 C++/Python
+  fuzz harness (deferred), MA-01..MA-19 (2026-08-20 maintainability), and
+  DC-1..DC-5 (dumb-core). S2 (events DB in `/tmp/veyron`) and S3
+  (`crossbeam-epoch` RUSTSEC) are closed — see the external-attacker residual.
+  None of these changes the controls above; they are hardening debt, not new
+  exposures.
 - **Operator opt-outs.** `allow_no_auth: true` and `tls: false` exist for
   explicit downgrade; running either is a deliberate, documented posture change.

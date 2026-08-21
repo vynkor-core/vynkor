@@ -1,6 +1,6 @@
 # Remote Devices — Design & Plan
 
-Status: **draft** — architecture discussion, not implemented.
+Status: **partially shipped** — D-01..D-14 shipped (2026-08-14..2026-08-16, proto v1.6), D-15..D-23 deferred. Design decisions remain valid; kernel implementation lives in REMOTE_DEVICES_ROADMAP.md.
 
 Goal: let a single Veyron kernel (running on the user's own machine) act as a
 **hub** that additional "device" clients (phone, second PC, laptop) connect to
@@ -60,16 +60,19 @@ Flow: `pc-plugin → kernel → Kairo → kernel → phone-plugin`
    (install filtering) + `action_specs[]` (tool schema). New `DeviceInfo`.
 2. **registry**: `PluginEntry.device_id` (default `"local"`); new
    `devices: DashMap<device_id, DeviceInfo { os, arch, os_version,
-   capabilities, last_seen, state }>`.
+   capabilities, last_seen, state }>`. (SHIPPED D-02, see
+   REMOTE_DEVICES_ROADMAP.md)
 3. **protocol.rs**: parse new fields; device-scoped permission clamp (JWT
    `claims.permissions` already override manifest permissions at registration
-   — extend to key on `device_id`).
+   — extend to key on `device_id`). (SHIPPED D-03, see
+   REMOTE_DEVICES_ROADMAP.md)
 4. **events**: enrich `system.plugin_joined` / `system.plugin_left` payloads
-   with `device_id` / `os` / `capabilities`.
+   with `device_id` / `os` / `capabilities`. (SHIPPED D-04, see
+   REMOTE_DEVICES_ROADMAP.md)
 5. **API/CLI**: `GET /devices`; extend `GET /plugins` with `device_id` +
-   `last_seen`; `vyn devices`.
+   `last_seen`; `vyn devices`. (SHIPPED D-04, see REMOTE_DEVICES_ROADMAP.md)
 6. **liveness**: update `last_seen` on Ping/Pong (`pong_times` already tracked
-   in the registry).
+   in the registry). (SHIPPED D-02, see REMOTE_DEVICES_ROADMAP.md)
 
 ## 6. Permissions
 
@@ -257,7 +260,8 @@ Layered injection defense (structural, not prompt engineering):
 2. **Confirmation gate** — plugin-level by permission separation (`request_*`
    vs `confirm_*`; the AI's JWT cannot call `confirm_*`), not a kernel gate
    (a kernel gate would violate dumb-core). SDK helper + the
-   `requires_confirmation` flag. High · med · ~1 wk (after #1).
+   `requires_confirmation` flag. High · med · ~1 wk (after #1). — **DONE
+   (D-09, 2026-08-15, see REMOTE_DEVICES_ROADMAP.md)**
 3. **Multiuser** — add the identity seam now (§23), defer enforcement.
    Med · low (seam) · ~1 wk.
 4. **Versioning** — `PluginRegister.protocol_version` (semver; the kernel
@@ -270,9 +274,11 @@ Layered injection defense (structural, not prompt engineering):
    High (product) / low (kernel) · high (product) · months (separate repo).
 6. **Observability** — reuse `Envelope.message_id` as the correlation id; fix
    propagation (the event bus builds fresh envelopes without `message_id`
-   today) + log discipline. Med · low · ~2–3 days.
+   today) + log discipline. Med · low · ~2–3 days. — **DONE (D-10,
+   2026-08-15, see REMOTE_DEVICES_ROADMAP.md)**
 7. **Threat model** — one focused doc (assets / actors / controls),
-   consolidating §10/§19/§21. Med · low · ~1 day.
+   consolidating §10/§19/§21. Med · low · ~1 day. — **DONE (D-11,
+   2026-08-15, see REMOTE_DEVICES_ROADMAP.md)**
 
 Build order: **#1 + #4 together** (same proto change) → **#2** (rides #1's
 flag) → **#6 + #3 + #7** in parallel (cheap) → **#5** (separate track).

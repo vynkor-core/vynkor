@@ -8,7 +8,7 @@
 
 ## Manifesto (non-negotiable)
 
-- Kernel = dumb byte router + process supervisor. Zero business logic. Zero AI. Zero application databases.
+- Kernel = dumb byte router + process supervisor. Zero business logic. Zero AI. Zero databases for application state (the event-delivery outbox is the explicit exception, see DC-5/F6).
 - Intra-host IPC = UDS only. No TCP, no Redis, no queues.
 - Protocol = single `.proto` file. Changes propagate to all SDKs.
 - Plugin = isolated OS process. Cannot bypass kernel. Speaks only UDS.
@@ -429,6 +429,271 @@ backlog (polish).
       `number_prefix` unmaintained.
   - Files: `Cargo.lock`, `Cargo.toml`.
   - **Status (2026-08-14): OPEN.**
+
+---
+
+## Immediate — Maintainability & code-quality audit (2026-08-20)
+
+Findings from the manual full-`src/` audit (49 files, 14 251 LOC — see
+`AUDIT.md` → "Full src Audit — 2026-08-20"). All are **OPEN** (2026-08-20),
+kernel-local, and independent of each other unless noted. Priorities follow
+the audit's §E: **P0** before next release (monoliths + error-system unification)
+· **P1** hygiene (comments, config, test globals) · **P2** polish.
+
+### P0 — before next release
+
+- [ ] MA-01 — **Split `ipc/protocol.rs` (1389 LOC) and
+      `marketplace/registry.rs` (1509 LOC):** two files exceed the 250-LOC
+      guideline 5–6×; `protocol.rs` bundles the router + 12 handlers
+      (PluginRegister, ActionRequest, SessionClose, KernelCommand…);
+      `registry.rs` bundles cache + fetch + verify + parse + resolve. Review
+      is impractical at this size.
+  - Files: `src/ipc/protocol.rs`, `src/marketplace/registry.rs`.
+  - Acceptance: `protocol.rs` split into `ipc/router.rs` +
+    `ipc/handlers/{register,action,session,event,kernel}.rs`; `registry.rs`
+    split into `marketplace/registry/{cache,fetch,verify,parse}.rs` (or
+    `#[cfg(test)] mod tests` moved out). Full suite + clippy + fmt green.
+
+- [ ] MA-02 — **Extract duplicated frame/URL helpers:** `target_bytes` /
+      `frame_target` / `build_frame` copied in 5 sites
+      (`ipc/protocol.rs`, `bridge/mod.rs`, `events/bus.rs`,
+      `plugins/supervisor.rs`, `api/websocket.rs`); `resolve_ws_url` /
+      `resolve_advertise_url` / `resolve_relative_archive_urls` — 3 copies of
+      URL resolution (`bridge/mod.rs`, `cli/device.rs`,
+      `marketplace/registry.rs`). Any framing fix must be applied in 5 places.
+  - Files: `src/ipc/protocol.rs`, `src/bridge/mod.rs`, `src/events/bus.rs`,
+    `src/plugins/supervisor.rs`, `src/api/websocket.rs`, `src/cli/device.rs`,
+    `src/marketplace/registry.rs`.
+  - Acceptance: frame helpers live in `ipc/helpers.rs` or `veyron_wire`; URL
+    helpers in `utils/url.rs`; zero duplicated copies remain.
+
+- [ ] MA-03 — **Unify the error system on `VeyronError`:** three error types
+      coexist — `VeyronError`, `anyhow::Error`, and `Result<_, String>`
+      (`auth/jwt.rs:58,83`). `jwt::validate()` returns `String`, breaking
+      uniformity; `main.rs` formats `e.to_string()` and loses the error chain.
+  - Files: `src/auth/jwt.rs`, `src/main.rs`.
+  - Acceptance: `jwt::validate() -> Result<_, VeyronError>`; no `Result<_, String>`
+    in error paths; `main.rs` preserves the error chain (e.g. `{:?}` or
+    `Error::source()`).
+
+- [ ] MA-04 — **Replace deprecated `rand::thread_rng()`:** `auth/jwt.rs:96`
+      uses the deprecated `rand::thread_rng()`; replace with `rand::rng()` /
+      `OsRng`.
+  - Files: `src/auth/jwt.rs`.
+  - Acceptance: no `thread_rng()` calls; clippy clean.
+
+### P1 — hygiene
+
+- [ ] MA-05 — **Add `docs/COMMENT_TAGS.md` and reduce comment duplication:**
+      audit tags (`T-11`, `S1`, `BUG-006`, `R9-02`…) are opaque without a
+      glossary; the socket-0o600 rationale is duplicated 4×
+      (`config.rs:272`, `ipc/server.rs:52`, `main.rs:479`, `utils/tls.rs:50`);
+      comment/code ratio is ~1:1 in several files (every `Config` field has
+      2–3 lines of docs, every `match` arm has 5 lines). `//` inline comments
+      mix Capital+period and lowercase-no-period styles.
+  - Files: new `docs/COMMENT_TAGS.md`, `src/utils/config.rs`,
+    `src/ipc/server.rs`, `src/main.rs`, `src/utils/tls.rs`, tree-wide comment
+    pass.
+  - Acceptance: `docs/COMMENT_TAGS.md` maps every tag → issue → file;
+    socket-0o600 rationale lives in `docs/SECURITY.md` (or similar) and
+    in-code comments cross-reference it; `//` inline comments follow one
+    convention (lowercase, no trailing period per `CLAUDE.md`); trivial
+    restatements removed.
+
+- [ ] MA-06 — **Replace `create_router_full(10 args)` with a config struct:**
+      `api/server.rs`'s constructor is clippy-suppressed (`too_many_arguments`);
+      `tokio::spawn(prune limiter)` inside the constructor spawns a background
+      task with no `JoinHandle`, leaking in tests.
+  - Files: `src/api/server.rs`.
+  - Acceptance: `create_router_full` takes a `RouterConfig` struct; the prune
+    task is spawned by `Kernel::run` (or returns a handle), not inside the
+    constructor.
+
+- [ ] MA-07 — **Fix `Config::Default` duplication + clamp all zero-invalid
+      numerics:** `Default` hand-duplicates every `default_*()` fn — easy to
+      desync; `clamp_invalid_numerics` (N3) clamps only 4 fields
+      (`router_channel_capacity`, `max_connections`, `watchdog_*`), but
+      `max_archive_bytes = 0` and `max_ws_connections = 0` are not clamped.
+  - Files: `src/utils/config.rs`.
+  - Acceptance: `Config` uses `#[derive(Default)]` + `#[serde(default = …)]`
+    consistently (or `Default` delegates to the `default_*` fns); every
+    zero-invalid numeric is clamped or errors loudly; tests cover all clamped
+    fields.
+
+- [ ] MA-08 — **Add `reset_for_test()` for global atomic sequences:**
+      `MSG_SEQ`, `ACTION_CORRELATION_SEQ`, `EVENT_PUBLISH_SEQ`
+      (`ipc/protocol.rs:30-32`) are process-wide and never reset; tests depend
+      on ordering across runs.
+  - Files: `src/ipc/protocol.rs`.
+  - Acceptance: `#[cfg(test)] fn reset_for_test()` resets all three atomics;
+    called in test setup where ordering matters.
+
+- [ ] MA-09 — **Split `plugins/supervisor.rs` (933 LOC):** `spawn_internal`
+      is 200 LOC + `monitor_loop` + `watchdog_loop` + `graceful_shutdown` in
+      one file.
+  - Files: `src/plugins/supervisor.rs`.
+  - Acceptance: split into `supervisor/spawn.rs`, `supervisor/watchdog.rs`
+    (or equivalent); full suite green.
+
+- [ ] MA-10 — **Split `kernel/orchestrator.rs` (470 LOC):** bundles TLS
+      resolve + `bind_ip` logic + bridge spawn + supervisor + watchdog +
+      `disconnect_loop` ×2 + `graceful_shutdown`.
+  - Files: `src/kernel/orchestrator.rs`.
+  - Acceptance: split into `orchestrator/bind.rs`, `orchestrator/shutdown.rs`
+    (or equivalent).
+
+### P2 — polish
+
+- [ ] MA-11 — **Extract `drain_to_log` and `proc_resource_usage` into
+      `plugins/metrics.rs`:** these helper functions are misplaced in the
+      supervisor.
+  - Files: `src/plugins/supervisor.rs`, new `src/plugins/metrics.rs`.
+  - Acceptance: helpers moved; supervisor imports them; tests green.
+
+- [ ] MA-12 — **Log mutex poison instead of silently swallowing it:**
+      `unwrap_or_else(|p| p.into_inner())` (e.g. `events/store.rs`) discards
+      the poison error silently.
+  - Files: `src/events/store.rs` (+ any other `into_inner()` sites).
+  - Acceptance: poison is logged at `warn!` before recovery.
+
+- [ ] MA-13 — **Reuse `veyron_wire` framing in the WebSocket gateway:**
+      `api/websocket.rs:229` has a custom `parse_frame` without
+      `COMPRESSED`/`FRAGMENTED` support — any framing fix must be applied in
+      two places.
+  - Files: `src/api/websocket.rs`.
+  - Acceptance: WS gateway reuses `veyron_wire::framing::read_frame` (or the
+    WS-specific framing moves into `veyron_wire`); no duplicated frame parser.
+
+- [ ] MA-14 — **Reduce `utils/logging.rs` duplication + use `try_init()`:**
+      4 `if json { with otel } else` branches duplicate 80% of `fmt::layer()`;
+      `Registry::init()` panics on a second call (breaks tests).
+  - Files: `src/utils/logging.rs`.
+  - Acceptance: shared `fmt::layer()` builder; `try_init()` instead of
+    `init()` so tests don't panic.
+
+- [ ] MA-15 — **Check `veyron-wire` for dead code:** `cargo clippy -- -D
+      warnings` on the `veyron-wire` workspace may flag `dead_code` (e.g.
+      `BLOOM`).
+  - Files: `../veyron-wire/`.
+  - Acceptance: `cargo clippy --all-targets -- -D warnings` clean on
+    `veyron-wire`.
+
+- [ ] MA-16 — **Separate tests from prod code in `registry.rs`:** `registry.rs`
+      is ~800 LOC prod + ~700 LOC tests in one file — hard to scroll. Move
+      tests to `#[cfg(test)] mod tests` in a separate file (or `tests.rs`).
+  - Files: `src/marketplace/registry.rs`.
+  - Acceptance: prod and test code separated; `cargo test` still discovers
+    all tests.
+
+### Security nits (confirmed sound, low priority)
+
+- [ ] MA-17 — **Unify `validate_slug` / `validate_plugin_id` regex:**
+      `installer.rs:614` and `registry.rs:547` use two different regexes for
+      the same concept.
+  - Files: `src/marketplace/installer.rs`, `src/marketplace/registry.rs`.
+  - Acceptance: one shared `validate_slug` function; both call-sites use it.
+
+- [ ] MA-18 — **Add `jwt_secret` length check to `mint_device_token`:**
+      `jwt_secret` length is validated only in `orchestrator.rs:123`;
+      `mint_device_token` (`src/cli/token.rs`) does not check it.
+  - Files: `src/cli/token.rs`, `src/auth/jwt.rs`.
+  - Acceptance: `mint_device_token` rejects a short `jwt_secret` (same
+    `MIN_JWT_SECRET_BYTES` threshold).
+
+- [ ] MA-19 — **Add `debug_assert!` + safety comment to `unsafe` in
+      `main.rs:391`:** `BorrowedFd::borrow_raw(ready_fd)` is valid only because
+      `ready_fd` is dup'd via `CommandExt::pre_exec` — the safety invariant is
+      undocumented.
+  - Files: `src/main.rs`.
+  - Acceptance: `debug_assert!` + `// SAFETY:` comment explaining the
+    `borrow_raw` validity.
+
+---
+
+## Immediate — Dumb-core audit (2026-08-16)
+
+Boundary audit of the kernel against the Manifesto ("dumb byte router +
+process supervisor") — verdict: *declared, partially drifted*. Findings are
+mirrored as DC-1…DC-5 in `AUDIT.md`; the full fix plan and §7 decisions live
+in `docs/DUMB_CORE_AUDIT.md`. All items below are **OPEN** (2026-08-16).
+Priorities per the audit §6: **P0** = F1/F2 (clearest violations, unblock the
+rest) · **P1** = F3/F4/F5/F6 (this cycle).
+
+| Priority | Items | Source |
+|----------|-------|--------|
+| P0 | F1, F2 | `docs/DUMB_CORE_AUDIT.md` §6 |
+| P1 | F3, F4, F5, F6 | `docs/DUMB_CORE_AUDIT.md` §6 |
+
+- [ ] F1 (DC-1, P0) — **Extract the marketplace out of the kernel:**
+  `src/marketplace/` no longer ships in the `vyn` binary.
+  - Decision (§7): standalone binary **`vynm`** ("vyn manager") — no new
+    kernel surface, writes the same `plugins.d/` drop-ins the kernel already
+    reads; UX: `vynm install|search|list|remove|enable|disable`; new
+    code/docs use **vynkor** naming.
+  - Files: `src/marketplace/` (`registry.rs`, `installer.rs`, `state.rs`),
+    `src/cli/plugin.rs`, `src/cli/complete.rs`, `Cargo.toml` (drop
+    `zip`/`indicatif` if unused elsewhere), new `vynm` binary/crate.
+  - Acceptance: `vyn` contains no marketplace code; `vynm install` works
+    standalone; `database`/`secrets` still install and run against a kernel
+    with no marketplace module; marketplace unit tests move with it.
+
+- [ ] F2 (DC-2, P0) — **Keep device surfaces as dumb pass-through, move
+  interpretation:** the kernel keeps identity + liveness + raw metadata and
+  exposes them as observability (same shape as `GET /plugins`); interpretation
+  and friendly UX live outside (a `discovery` plugin / web frontend).
+  - Files: `src/plugins/registry.rs` (`device_os_str`/`device_state_str`
+    display mapping `:511-529` — reduce to raw wire values; `devices` map and
+    the online/offline transition `:239-247` stay), `src/api/routes.rs:107-136`,
+    `src/kernel/commands.rs:61-78`, `src/cli/devices.rs`.
+  - Acceptance: `GET /devices` stays and returns raw pass-through data; no
+    interpretation helpers in the kernel; a `discovery` plugin provides the
+    friendly view; device integration tests pass unchanged (no API break).
+
+- [ ] F3 (DC-2, P1) — **Keep the bridge as transport, strip capability
+  interpretation:** the `role: client` bridge stays in the kernel as transport
+  (remote connectivity, symmetric to the WS gateway); only `device.<cap>`
+  mirroring semantics move out to the remote agent.
+  - Files: `src/bridge/mod.rs` (810 L), `src/cli/device.rs`,
+    `src/cli/token.rs`, `src/utils/config.rs` (`Role::Client`,
+    `BridgeConfig`).
+  - Acceptance: the bridge still connects a client kernel to a host; no
+    capability semantics in the kernel; the Android agent (vynkor) still pairs
+    via the existing tooling; no `BridgeConfig` change needed.
+
+- [ ] F4 (DC-3, P1) — **Neutralize the AI tool-calling surface (generic
+  manifest feature):** `action_specs`/`get_manifest` stay in the protocol as a
+  generic per-action capability mechanism with the "for the AI" framing
+  removed (comments/wording only — no wire break, no feature removal).
+  - Files: `../veyron-wire/proto/veyron_protocol.proto:159-173`,
+    `src/kernel/commands.rs:79-127` (`get_manifest`),
+    `src/events/bus.rs:223-259`.
+  - Acceptance: no "for the AI"/"to the AI"/"AI" references in the protocol
+    schema or kernel comments for this mechanism; behavior unchanged; all
+    tests green.
+
+- [ ] F5 (DC-4, P1) — **Drop the hardcoded action→permission fallback
+  (three-step migration):** the kernel has no knowledge of any specific
+  plugin's actions; the data-driven v2 path is the single source of truth.
+  Step 1 is a hard dependency: the `network` plugin declares
+  `action_requirement: http_request → network` in its v2 manifest first.
+  - Files: `src/auth/permissions.rs:12-17`, `src/ipc/protocol.rs:652-653`,
+    `src/plugins/loader.rs:74-90`, `src/plugins/registry.rs:282-300`,
+    `docs/PLUGIN_REGISTRY_SCHEMA.md:264,294`.
+  - Acceptance: no plugin/action-name strings in `src/auth/`; a v2 action
+    without a declared permission is **denied by default**; legacy string-form
+    plugins keep working with a boot warning.
+
+- [ ] F6 (DC-5, P1) — **Manifesto wording + event-store hardening:** the "no
+  databases" clause says what it means (event-delivery outbox carve-out); the
+  SQLite outbox is safe (S2) and off the async hot path (PERF-2).
+  - Files: `README.md` §1, `ROADMAP.md` Manifesto (wording change applied by
+    the separate F6 wording task — tracked here), `src/events/store.rs`,
+    `src/events/bus.rs`, `src/utils/config.rs` (`data_dir` default),
+    `config.yaml`.
+  - Acceptance: manifesto wording matches reality; `events.db` lives in a
+    0o700 private dir (S2 already shipped — PR #35, 2026-08-18); the publish
+    path performs no synchronous SQLite I/O (PERF-2); event-delivery
+    integration tests stay green.
 
 ---
 
@@ -996,6 +1261,31 @@ surfaces cover every planned plugin).
 | UX-3 | config validation consistency + surface load errors to all CLI — **OPEN** (P3) | none |
 | UX-4 | CLI help/output polish — **OPEN** (P3) | none |
 | S4 | dependency advisories (anyhow / number_prefix) — **OPEN** (P3) | none |
+| MA-01 | split `ipc/protocol.rs` + `marketplace/registry.rs` monoliths — **OPEN** (P0, 2026-08-20 audit) | MA-02 |
+| MA-02 | extract duplicated `target_bytes`/`build_frame` + `resolve_*_url` helpers — **OPEN** (P0) | none |
+| MA-03 | unify error system on `VeyronError`; `jwt::validate() -> VeyronError` — **OPEN** (P0) | none |
+| MA-04 | replace deprecated `rand::thread_rng()` — **OPEN** (P0) | none |
+| MA-05 | `docs/COMMENT_TAGS.md` + reduce comment duplication + consistent style — **OPEN** (P1) | none |
+| MA-06 | `create_router_full` → `RouterConfig` struct; move prune spawn out — **OPEN** (P1) | none |
+| MA-07 | `Config::Default` dedup + clamp all zero-invalid numerics — **OPEN** (P1) | none |
+| MA-08 | `reset_for_test()` for global atomics (`MSG_SEQ` etc.) — **OPEN** (P1) | none |
+| MA-09 | split `plugins/supervisor.rs` (933 L) — **OPEN** (P1) | none |
+| MA-10 | split `kernel/orchestrator.rs` (470 L) — **OPEN** (P1) | none |
+| MA-11 | move `drain_to_log`/`proc_resource_usage` → `plugins/metrics.rs` — **OPEN** (P2) | none |
+| MA-12 | log mutex poison instead of silently swallowing — **OPEN** (P2) | none |
+| MA-13 | reuse `veyron_wire` framing in WS gateway; drop custom `parse_frame` — **OPEN** (P2) | none |
+| MA-14 | `utils/logging.rs` dedup + `try_init()` — **OPEN** (P2) | none |
+| MA-15 | `veyron-wire` dead-code clippy check — **OPEN** (P2) | none |
+| MA-16 | separate tests from prod code in `registry.rs` — **OPEN** (P2) | MA-01 |
+| MA-17 | unify `validate_slug`/`validate_plugin_id` regex — **OPEN** (security nit) | none |
+| MA-18 | `mint_device_token` length-checks `jwt_secret` — **OPEN** (security nit) | none |
+| MA-19 | `debug_assert!` + SAFETY comment on `unsafe` in `main.rs:391` — **OPEN** (security nit) | none |
+| F1 | marketplace out of the kernel → standalone `vynm` binary (DC-1) — **OPEN** (P0, 2026-08-16 dumb-core audit) | none |
+| F2 | device surfaces as dumb pass-through; interpretation moves to a `discovery` plugin (DC-2) — **OPEN** (P0) | none |
+| F3 | bridge stays as transport; strip `device.<cap>` capability interpretation (DC-2) — **OPEN** (P1) | F2 |
+| F4 | neutralize AI tool-calling surface → generic manifest feature (DC-3) — **OPEN** (P1) | none |
+| F5 | drop hardcoded action→permission fallback (DC-4) — **OPEN** (P1) | network plugin v2 manifest (veyron-plugins) |
+| F6 | manifesto wording + event-store hardening (DC-5) — **OPEN** (P1) | PERF-2 (S2 already shipped, PR #35) |
 
 **Ship gate:** R8-01..R8-05 are kernel-local and land together on `develop`;
 R8-06/R8-07 are cross-repo coordination items shipped from their own repos.

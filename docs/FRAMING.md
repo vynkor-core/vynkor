@@ -54,10 +54,12 @@ concurrent streams per connection, reassembled size ≤ 1 MiB (`MAX_PAYLOAD_SIZE
 incomplete sets discarded after 30 s. Violations drop the connection. Rejected on
 the WebSocket gateway (R5-03 ✓) — see below.
 
-> **SDK status:** the Rust SDK implements both sides — `VeyronClient::send_fragmented`
+> **SDK status:** Rust SDK implements both sides — `VeyronClient::send_fragmented`
 > emits spec-conformant fragments (each individually MAC'd when secured), and
 > `recv`/`recv_frame` reassemble inbound fragments with the same bounds as the kernel.
-> The Python and C++ SDKs do not implement fragmentation.
+> C++ SDK now implements fragmentation too: `absorb_fragment`/bounded reassembly plus
+> `send_fragmented`, gated by `MAX_REASSEMBLY_STREAMS`/`MAX_PAYLOAD_SIZE` (fixed per
+> AUDIT M11, 2026-08-11). Python SDK still does not implement fragmentation.
 
 ### FLAG_RAW_BINARY (Bit 4)
 

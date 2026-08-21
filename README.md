@@ -55,7 +55,7 @@ These rules are non-negotiable. PRs that violate them are rejected.
 
 ### 1. Dumb Core
 
-The kernel contains **no** business logic, **no** AI models, **no** databases for application state. It is a high-speed byte router and process supervisor. All intelligence lives in plugins.
+The kernel contains **no** business logic, **no** AI models, **no** databases for application state. The single exception is the event-delivery outbox (`<data_dir>/events.db`, SQLite, at-least-once delivery, see `docs/DUMB_CORE_AUDIT.md` DC-5): not application state, bounded 1h retention, infrastructure only. It is a high-speed byte router and process supervisor. All intelligence lives in plugins.
 
 ### 2. UDS-Only Intra-Host IPC
 
