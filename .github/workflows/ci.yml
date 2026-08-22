@@ -22,11 +22,11 @@ jobs:
       # Plain git clone: actions/checkout@v4 refuses `path: ../` (repo path
       # must stay under the workspace) since runner 2.319+.
       - name: Clone veyron-wire (sibling)
-        run: git clone --depth 1 https://github.com/veyron-core/vynkor-wire.git ../vynkor-wire
+        run: git clone --depth 1 https://github.com/vynkor-core/vynkor-wire.git ../vynkor-wire
       - name: Clone veyron-sdk-cpp (sibling)
-        run: git clone --depth 1 https://github.com/veyron-core/vynkor-sdk-cpp.git ../vynkor-sdk-cpp
+        run: git clone --depth 1 https://github.com/vynkor-core/vynkor-sdk-cpp.git ../vynkor-sdk-cpp
       - name: Clone veyron-sdk-python (sibling)
-        run: git clone --depth 1 https://github.com/veyron-core/vynkor-sdk-python.git ../vynkor-sdk-python
+        run: git clone --depth 1 https://github.com/vynkor-core/vynkor-sdk-python.git ../vynkor-sdk-python
 
       - name: Proto drift check (T-17)
         run: |
