@@ -5,7 +5,9 @@
 **Source:** architecture + decisions in `docs/VYNM_PLAN.md` (authoritative);
 this file is the task breakdown. Mirrors `ROADMAP.md` F1 and
 `docs/DUMB_CORE_AUDIT.md` §6-F1 / §7-decision-1.
-**Status:** V-01…V-07 **DONE** (2026-08-22) — stage 1 and 2 complete; stage 3 backlog (V-09…V-16) OPEN.
+**Status:** V-01…V-08 **DONE** (2026-08-22) — stages 1 and 2 complete.
+Stage-3 backlog OPEN: V-09…V-16 + productization tasks V-17…V-19
+(`docs/VYN_PRODUCT_LAYOUT.md` — authoritative layout/packaging decisions).
 
 > ID prefix `V-` = vynm. One task ≈ one reviewable PR; every merged commit is
 > green in its repo. Where this file and VYNM_PLAN differ, VYNM_PLAN wins.
@@ -56,6 +58,9 @@ Complexity: **S** ≤ half day · **M** ~1–2 days · **L** multi-session.
 | V-14 | key tooling: `keygen` + `sign` | P3 | M | vynkor-manager | V-09 |
 | V-15 | install from local archive / direct URL | P3 | M | vynkor-manager | V-05 |
 | V-16 | CLI polish package | P3 | M | vynkor-manager | V-09…V-15 |
+| V-17 | unified config home `~/.config/vyn/` + discovery chain + first-run | P3 | M | veyron + vynkor-manager | V-06 |
+| V-18 | path unification on `vyn` (`share/vyn`, `lib/vyn/plugins`) + migration | P3 | M | veyron + vynkor-manager | V-17 |
+| V-19 | packaging: single-package AUR (`vynkor`: vyn + vynm) | P3 | S | distro | V-17, V-18 |
 
 Parallel lanes after V-01: kernel lane (V-02) and manager lane
 (V-03 → V-04 → V-05 → V-06) proceed independently; V-07 joins them.
@@ -291,8 +296,10 @@ own release; the drop-in format mini-spec (field → type → since-version)
 lives in the manager repo and any format change is deliberate.
 
 - [ ] **V-09 — multi-source registries: config parsing + resolution engine.**
-  - Config schema (lives in the kernel `config.yaml` — same file vynm already
-    reads for `plugins_dir`): `registries:` list of `{name, url, public_key?,
+  - Config schema — AMENDED 2026-08-22 per `docs/VYN_PRODUCT_LAYOUT.md` §2:
+    sections live in the SHARED product config `~/.config/vyn/config.yaml`
+    (kernel reads its sections and ignores these; both parsers are
+    unknown-key-tolerant). `registries:` list of `{name, url, public_key?,
     allow_unsigned?, cache_ttl_secs?, enabled?}`. Back-compat: single keys
     (`registry_url:` / `marketplace_public_key:`) keep working, mapped to
     name `"official"`. Omitting `registries:` entirely → built-in official
@@ -375,6 +382,47 @@ lives in the manager repo and any format change is deliberate.
   scripting contract. Files: `src/cli.rs`, output formatting modules.
   Acceptance: `--json` machine-readable everywhere it applies; completions
   generated for bash/zsh/fish.
+
+- [ ] **V-17 — unified config home & discovery chain.**
+  Full design: `docs/VYN_PRODUCT_LAYOUT.md` §2/§4.
+  - Precedence chain: `--config` (alias `--kernel-config`) > `$VYN_CONFIG` >
+    `~/.config/vyn/config.yaml` > `./config.yaml` (legacy fallback).
+  - First run without a config: `vyn start` writes a commented template with
+    a random `jwt_secret`, prints the path, boots with auth ON. Idempotent
+    `vyn init [--force]`.
+  - Transparency: `vyn status` prints which file was loaded; warn when a cwd
+    file shadows the XDG one.
+  - Legacy single registry keys stay readable, marked deprecated.
+  - Files: kernel `main.rs`/`utils/config.rs`/cli status; manager `cli.rs`
+    discovery + docs.
+  - Acceptance: fresh machine, zero files → `vyn start` boots with generated
+    template; `vynm install <slug>` writes drop-ins under `~/.config/vyn/
+    plugins.d/`; status prints loaded path; shadowing warns.
+
+- [ ] **V-18 — path unification on `vyn`.**
+  Full design: `docs/VYN_PRODUCT_LAYOUT.md` §1/§6.
+  - Moves: `share/veyron → share/vyn`, `lib/veyron/plugins → lib/vyn/plugins`,
+    pid/log under `~/.local/state/vyn/`.
+  - One-time migration on first access (move-or-copy) + one-release fallback
+    READ of old paths.
+  - CRITICAL pitfall handled: drop-ins record ABSOLUTE `binary:` paths —
+    migration rewrites prefixes in every `plugins.d/*.yaml` (or regenerates
+    from ledger); acceptance test proves spawn still works post-migration.
+  - Socket rename (`veyron.sock → vyn.sock`) explicitly DEFERRED to the full
+    rename milestone — requires coordinated wire + all-SDK release (§6).
+  - `install.sh` aligned to generate `~/.config/vyn/`.
+  - Acceptance: pre-existing install migrates transparently; plugins still
+    spawn; no data loss; fresh installs never touch `veyron` paths.
+
+- [ ] **V-19 — packaging: single-package AUR.**
+  Full design: `docs/VYN_PRODUCT_LAYOUT.md` §5.
+  - PKGBUILD ships `/usr/bin/vyn` + `/usr/bin/vynm` from one source build;
+    pacman owns updates (NO self-update command, by policy).
+  - Version-skew tolerance rests on the drop-in mini-spec + advisory
+    `/health`; independent crate/tag releases remain possible (D7).
+  - Completions ride V-16 into the package later.
+  - Acceptance: clean chroot build; install → `vyn start` → `vynm install
+    database` works out-of-the-box touching only XDG dirs.
 
 **Parked (not promised):** `rollback <slug>` (the install pipeline's `.bak`
 mechanism is half of it), air-gapped `bundle export/import`.
