@@ -5,11 +5,16 @@
 **Source:** architecture + decisions in `docs/VYNM_PLAN.md` (authoritative);
 this file is the task breakdown. Mirrors `ROADMAP.md` F1 and
 `docs/DUMB_CORE_AUDIT.md` §6-F1 / §7-decision-1.
-**Status:** V-01…V-08 **DONE** (2026-08-22) — stages 1 and 2 complete.
-Stage-3 feature backlog (V-09…V-16) OPEN. **Stage 4 DECIDED
-(2026-08-22): the vynkor 0.0.1 big-bang — full ecosystem rename, package
-reboot at 0.0.1, registry on R2 — executes NEXT, before stage-3 features**
-(`docs/VYN_PRODUCT_LAYOUT.md` §8; V-17/V-18/V-19 reshaped into it).
+**Status:** stages 1–2 DONE (V-01…V-08). **Stage-4 FINALE EXECUTED &
+VERIFIED 2026-08-22**: all repos/dirs → `vynkor*` (org `veyron-core` stays
+— `vynkor` handle is TAKEN on GitHub; owner to pick alternative), protocol
+identifiers cutover everywhere (`proto::vynkor`, subprotocol `vynkor`,
+`vynkor-frame-mac-v1`; PROTOCOL_VERSION stays 1.6), published:
+`vynkor-wire 0.0.2`, `vynkor-sdk 0.0.3` (PyPI pending credentials).
+Gates re-run independently: kernel 430 / manager 92 / wire / sdk / cpp 62 /
+python 40 — all green; live-registry smoke OK. Remaining: **Phase B**
+(V-18: R2 + plugin re-sign at 0.0.1 — needs domain+key), **Phase C**
+(V-19: installer/docs/AUR), org-name decision, stage-3 features.
 
 > ID prefix `V-` = vynm. One task ≈ one reviewable PR; every merged commit is
 > green in its repo. Where this file and VYNM_PLAN differ, VYNM_PLAN wins.
