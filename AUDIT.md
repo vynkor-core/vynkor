@@ -415,7 +415,16 @@ findings below are **OPEN** (2026-08-16); fix plan in `docs/DUMB_CORE_AUDIT.md`.
 - **Issue:** a full plugin distribution/app-store client (catalog fetch, signature verification, revocation governance, install/uninstall, upgrade detection, package-state ledger) is compiled into the kernel. Package management and marketplace governance are product features, not byte-routing.
 - **Impact:** kernel grows product-specific policy (which registry, which maintainer key, which plugin is exempt from sandboxing); every marketplace change ships a kernel release.
 - **Fix:** extract to a `marketplace` plugin (or separate binary) that drives the kernel only through the existing plugin-lifecycle surface (`plugins.d/` drop-ins). The kernel may keep signed-archive verification only if it stays a security boundary.
-- **Status (2026-08-16): OPEN.**
+- **Status (2026-08-22): CLOSED (F1 shipped).** Extracted to the standalone
+  [`vynkor-manager`](https://github.com/veyron-core/vynkor-manager) repo
+  (binary `vynm`): `src/marketplace/` deleted from the kernel
+  (veyron PR #43); registry client, installer pipeline, ledger and drop-in
+  writer live there now. The hardcoded sandbox rule (`plugin_id != "network"`)
+  died in the port — sandbox preference comes from each plugin's own manifest
+  hint. Signed-archive verification moved with it; the kernel keeps only
+  boot-time manifest validation as a security boundary (loader via
+  veyron-wire's shared manifest module). CLI commands remain as delegation
+  shims to `vynm`, removal deferred to stage 3.
 
 ### DC-2. Device-fleet domain model in the kernel (D-01…D-14) (Medium)
 
