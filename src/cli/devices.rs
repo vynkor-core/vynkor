@@ -35,9 +35,35 @@ fn device_row(d: &DeviceView) -> [String; 6] {
         d.os.clone(),
         d.arch.clone(),
         d.state.clone(),
-        crate::marketplace::state::format_ts(d.last_seen / 1000),
+        format_ts(d.last_seen / 1000),
         d.capabilities.join(", "),
     ]
+}
+
+/// C3: inlined from the (deleted) marketplace `state.rs` — the only user
+/// left in the crate. Dependency-free UTC civil-from-days formatting
+/// (Howard Hinnant's algorithm), valid across the whole i64 day range.
+fn format_ts(epoch_secs: u64) -> String {
+    let days = (epoch_secs / 86_400) as i64;
+    let secs_of_day = epoch_secs % 86_400;
+
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+
+    format!(
+        "{y:04}-{m:02}-{d:02} {:02}:{:02}:{:02}",
+        secs_of_day / 3600,
+        (secs_of_day % 3600) / 60,
+        secs_of_day % 60
+    )
 }
 
 fn print_table(devices: &[DeviceView]) {

@@ -1,14 +1,4 @@
 use clap::Subcommand;
-use std::path::Path;
-
-use crate::marketplace::installer::{
-    disable_plugin_config, enable_plugin_config, install, remove_plugin_config, uninstall,
-    write_plugin_config, InstalledPlugin, Toggle,
-};
-use crate::marketplace::registry::{
-    fetch_registry, fetch_registry_with_url, RegistryEntry, DEFAULT_REGISTRY_URL,
-};
-use crate::utils::errors::VeyronError;
 
 #[derive(Subcommand)]
 pub enum PluginCmd {
@@ -61,67 +51,23 @@ pub enum PluginCmd {
 /// `port`/`tls`: derive the kernel API's base URL (scheme + host + port).
 /// `token`: presented as `Authorization: Bearer <token>` on every request —
 /// required against a secured kernel (R5-06, AUDIT H-02/H-03).
-/// `cert_path`: the certificate to trust when TLS is on (operator-provided or
-/// the kernel's auto-generated self-signed pair, D-07).
-#[allow(clippy::too_many_arguments)]
+///
+/// V-07 (D4): start/stop/restart/logs stay pure REST calls; the marketplace
+/// commands delegate to vynm — the grammar above is kept so existing scripts
+/// and muscle memory keep working while the implementation lives in
+/// vynkor-manager. Shim removal deferred to stage 3.
 pub async fn handle(
     cmd: PluginCmd,
     port: u16,
-    registry_url: Option<&str>,
     token: Option<&str>,
     tls: bool,
     cert_path: Option<&std::path::Path>,
-    cache_ttl_secs: u64,
-    tmp_dir: &std::path::Path,
-    max_archive_bytes: u64,
-    max_extracted_bytes: u64,
-    max_archive_entries: usize,
-    marketplace_public_key: Option<&str>,
     config_path: &str,
-    plugins_dir: &std::path::Path,
 ) -> anyhow::Result<()> {
-    let fetch = |refresh: bool| {
-        let url = registry_url.unwrap_or("");
-        async move {
-            if url.is_empty() {
-                fetch_registry(refresh, cache_ttl_secs, tmp_dir, marketplace_public_key).await
-            } else {
-                fetch_registry_with_url(
-                    url,
-                    refresh,
-                    cache_ttl_secs,
-                    tmp_dir,
-                    marketplace_public_key,
-                )
-                .await
-            }
-        }
-    };
     let base = base_url(port, tls);
     let client = build_client(tls, cert_path)?;
 
     match cmd {
-        PluginCmd::List { refresh, installed } => {
-            if installed {
-                print_installed(tmp_dir);
-            } else {
-                let entries = fetch(refresh).await?;
-                print_table(&entries);
-            }
-        }
-        PluginCmd::Search { query, refresh } => {
-            let entries = fetch(refresh).await?;
-            let q = query.to_lowercase();
-            let filtered: Vec<_> = entries
-                .into_iter()
-                .filter(|e| {
-                    e.slug.to_lowercase().contains(&q)
-                        || e.name.to_lowercase().contains(&q)
-                        || e.description.to_lowercase().contains(&q)
-                })
-                .collect();
-            print_table(&filtered);
-        }
         PluginCmd::Start { id } => {
             api_post(&client, &base, &format!("/plugins/{id}/start"), token).await?;
             println!("Plugin '{id}' started.");
@@ -144,109 +90,58 @@ pub async fn handle(
             .await?;
             print!("{body}");
         }
-        PluginCmd::Install { target, refresh } => {
-            let entries = fetch(refresh).await?;
-            let source_url = registry_url.unwrap_or(DEFAULT_REGISTRY_URL);
-            let installed: InstalledPlugin = install(
-                &entries,
-                &target,
-                tmp_dir,
-                max_archive_bytes,
-                max_extracted_bytes,
-                max_archive_entries,
-                marketplace_public_key,
-                source_url,
-            )
-            .await?;
-            if write_plugin_config(plugins_dir, &installed)? {
-                println!(
-                    "✓ Wrote auto-spawn config to {}/{}.yaml",
-                    plugins_dir.display(),
-                    installed.slug
-                );
-            } else {
-                println!(
-                    "Note: {}/{}.yaml already exists — left untouched.",
-                    plugins_dir.display(),
-                    installed.slug
-                );
-            }
+        // ── D4 delegation shims ─────────────────────────────────────────
+        // --config is forwarded so vynm resolves the same plugins.d the
+        // kernel boots from. Accepted-but-ignored flags (--refresh,
+        // --installed) keep the grammar stable.
+        PluginCmd::List { .. } => {
+            exec_vynm(&["list".into(), "--config".into(), config_path.into()])?
         }
-        PluginCmd::Remove { target } => {
-            uninstall(&target, tmp_dir)?;
-
-            match remove_plugin_config(plugins_dir, &target) {
-                Ok(true) => {
-                    println!(
-                        "✓ Removed auto-spawn config {}/{}.yaml",
-                        plugins_dir.display(),
-                        target
-                    );
-                }
-                Ok(false) => {}
-                Err(e) => return Err(e.into()),
-            }
-
-            // the drop-in can be gone while the plugin is still live in
-            // `plugins:` (deprecated inline list) or another drop-in — warn
-            if let Ok(cfg) = crate::utils::config::load_config(config_path) {
-                if cfg.plugins.iter().any(|p| p.id == target) {
-                    println!(
-                        "Note: '{target}' is still configured in `plugins:` or another drop-in — remove that entry too."
-                    );
-                }
-            }
+        PluginCmd::Search { query, .. } => exec_vynm(&[
+            "search".into(),
+            query,
+            "--config".into(),
+            config_path.into(),
+        ])?,
+        PluginCmd::Install { target, .. } => exec_vynm(&[
+            "install".into(),
+            target,
+            "--config".into(),
+            config_path.into(),
+        ])?,
+        PluginCmd::Remove { target } => exec_vynm(&[
+            "remove".into(),
+            target,
+            "--config".into(),
+            config_path.into(),
+        ])?,
+        PluginCmd::Disable { id } => {
+            exec_vynm(&["disable".into(), id, "--config".into(), config_path.into()])?
         }
-        PluginCmd::Disable { id } => match disable_plugin_config(plugins_dir, &id) {
-            Ok(Toggle::Toggled) => {
-                println!("✓ Disabled '{id}' — kept installed, no longer auto-spawns on boot.");
-                note_inline_still_configured(config_path, &id);
-            }
-            Ok(Toggle::Already) => println!("Note: '{id}' is already disabled."),
-            Ok(Toggle::Missing) => missing_dropin(config_path, plugins_dir, &id)?,
-            Err(e) => return Err(e.into()),
-        },
-        PluginCmd::Enable { id } => match enable_plugin_config(plugins_dir, &id) {
-            Ok(Toggle::Toggled) => println!("✓ Enabled '{id}' — will auto-spawn on boot."),
-            Ok(Toggle::Already) => println!("Note: '{id}' is already enabled."),
-            Ok(Toggle::Missing) => missing_dropin(config_path, plugins_dir, &id)?,
-            Err(e) => return Err(e.into()),
-        },
+        PluginCmd::Enable { id } => {
+            exec_vynm(&["enable".into(), id, "--config".into(), config_path.into()])?
+        }
     }
     Ok(())
 }
 
-/// The rename succeeded, but if `slug` also appears in the deprecated inline
-/// `plugins:` list (or another drop-in), that entry still auto-spawns it —
-/// surface it so the operator isn't surprised (mirrors `remove`).
-fn note_inline_still_configured(config_path: &str, slug: &str) {
-    if let Ok(cfg) = crate::utils::config::load_config(config_path) {
-        if cfg.plugins.iter().any(|p| p.id == slug) {
-            println!(
-                "Note: '{slug}' is still configured in `plugins:` or another drop-in — remove that entry too."
-            );
-        }
+/// D4 shim: announce the move, then hand off. A missing binary degrades to an
+/// actionable message instead of a bare ENOENT — zero silent breakage.
+fn exec_vynm(args: &[String]) -> anyhow::Result<()> {
+    println!(
+        "note: 'vyn plugin …' moved to vynm — running: vynm {}",
+        args.join(" ")
+    );
+    match std::process::Command::new("vynm").args(args).status() {
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => anyhow::bail!("vynm exited with {status}"),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => anyhow::bail!(
+            "'marketplace' commands moved to vynm — install it first \
+             (cargo install vynkor-manager), or run manually: vynm {}",
+            args.join(" ")
+        ),
+        Err(e) => Err(e.into()),
     }
-}
-
-/// No drop-in (active or disabled) exists for `slug`. If it is configured in
-/// the deprecated inline `plugins:` list, a rename can't stop it — print a
-/// note and succeed. Otherwise fail loudly: the slug is likely a typo or not
-/// installed.
-fn missing_dropin(config_path: &str, plugins_dir: &Path, slug: &str) -> anyhow::Result<()> {
-    if let Ok(cfg) = crate::utils::config::load_config(config_path) {
-        if cfg.plugins.iter().any(|p| p.id == slug) {
-            println!(
-                "Note: '{slug}' has no drop-in — it's configured in the inline `plugins:` list; remove that entry to stop it auto-spawning."
-            );
-            return Ok(());
-        }
-    }
-    Err(VeyronError::PluginNotFound(format!(
-        "no drop-in config for '{slug}' at {}/ — install the plugin first",
-        plugins_dir.display()
-    ))
-    .into())
 }
 
 /// The kernel API's base URL. TLS is on whenever the kernel config declares
@@ -255,140 +150,6 @@ fn missing_dropin(config_path: &str, plugins_dir: &Path, slug: &str) -> anyhow::
 fn base_url(port: u16, tls: bool) -> String {
     let scheme = if tls { "https" } else { "http" };
     format!("{scheme}://127.0.0.1:{port}")
-}
-
-/// Offline installed-plugin listing straight from the state store — no
-/// registry fetch (R10-02).
-fn print_installed(tmp_dir: &std::path::Path) {
-    let state = crate::marketplace::state::load_state(tmp_dir);
-    if state.entries.is_empty() {
-        println!("No plugins installed. Run 'vyn plugin install <slug>' to install one.");
-        return;
-    }
-
-    const HEADERS: [&str; 4] = ["SLUG", "VERSION", "INSTALLED_AT", "SOURCE"];
-    let mut widths: [usize; 4] = HEADERS.map(str::len);
-    let rows: Vec<[String; 4]> = state
-        .entries
-        .iter()
-        .map(|e| {
-            [
-                e.slug.clone(),
-                e.version.clone(),
-                crate::marketplace::state::format_ts(e.installed_at),
-                e.source_url.clone(),
-            ]
-        })
-        .collect();
-    for row in &rows {
-        for (i, cell) in row.iter().enumerate() {
-            widths[i] = widths[i].max(cell.len());
-        }
-    }
-
-    println!(
-        "{:<w0$}  {:<w1$}  {:<w2$}  {}",
-        HEADERS[0],
-        HEADERS[1],
-        HEADERS[2],
-        HEADERS[3],
-        w0 = widths[0],
-        w1 = widths[1],
-        w2 = widths[2],
-    );
-    for row in &rows {
-        println!(
-            "{:<w0$}  {:<w1$}  {:<w2$}  {}",
-            row[0],
-            row[1],
-            row[2],
-            row[3],
-            w0 = widths[0],
-            w1 = widths[1],
-            w2 = widths[2],
-        );
-    }
-}
-
-fn print_table(entries: &[RegistryEntry]) {
-    const HEADERS: [&str; 7] = [
-        "ID",
-        "SLUG",
-        "VERSION",
-        "MIN_KERNEL",
-        "MAX_KERNEL",
-        "PERMISSIONS",
-        "DESCRIPTION",
-    ];
-
-    // revoked entries stay listed so an operator sees why install fails
-    let display_slug = |e: &RegistryEntry| {
-        if e.is_revoked() {
-            format!("{} [revoked]", e.slug)
-        } else {
-            e.slug.clone()
-        }
-    };
-
-    // Compute column widths
-    let mut widths = [
-        HEADERS[0].len(),
-        HEADERS[1].len(),
-        HEADERS[2].len(),
-        HEADERS[3].len(),
-        HEADERS[4].len(),
-        HEADERS[5].len(),
-        HEADERS[6].len(),
-    ];
-
-    for e in entries {
-        let perms = e.permissions.join(", ");
-        let slug = display_slug(e);
-        widths[0] = widths[0].max(e.id.len());
-        widths[1] = widths[1].max(slug.len());
-        widths[2] = widths[2].max(e.version.len());
-        widths[3] = widths[3].max(e.min_kernel_version.len());
-        widths[4] = widths[4].max(e.max_kernel_version.len());
-        widths[5] = widths[5].max(perms.len());
-        widths[6] = widths[6].max(e.description.len());
-    }
-
-    println!(
-        "{:<w0$}  {:<w1$}  {:<w2$}  {:<w3$}  {:<w4$}  {:<w5$}  {}",
-        HEADERS[0],
-        HEADERS[1],
-        HEADERS[2],
-        HEADERS[3],
-        HEADERS[4],
-        HEADERS[5],
-        HEADERS[6],
-        w0 = widths[0],
-        w1 = widths[1],
-        w2 = widths[2],
-        w3 = widths[3],
-        w4 = widths[4],
-        w5 = widths[5],
-    );
-
-    for e in entries {
-        let perms = e.permissions.join(", ");
-        println!(
-            "{:<w0$}  {:<w1$}  {:<w2$}  {:<w3$}  {:<w4$}  {:<w5$}  {}",
-            e.id,
-            display_slug(e),
-            e.version,
-            e.min_kernel_version,
-            e.max_kernel_version,
-            perms,
-            e.description,
-            w0 = widths[0],
-            w1 = widths[1],
-            w2 = widths[2],
-            w3 = widths[3],
-            w4 = widths[4],
-            w5 = widths[5],
-        );
-    }
 }
 
 /// HTTP client for the kernel API. TLS (D-07, on by default) pins the exact

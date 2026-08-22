@@ -8,8 +8,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{info, warn};
-// manifest types come from veyron-wire; the marketplace copy coexists until
-// V-07 deletes it — do not add new users of the marketplace one.
+// manifest types come from veyron-wire — the single implementation shared
+// with vynm since V-01/V-02.
 use veyron_wire::manifest::{validate_manifest, InstallManifest};
 
 pub struct PluginLoader;
