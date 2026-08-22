@@ -79,7 +79,7 @@ V-13, V-14} → V-16; V-15 hangs off V-05 directly (needs only the pipeline).
 
 ---
 
-## P0 — Stage 1: wire repo (`../veyron-wire`)
+## P0 — Stage 1: wire repo (`../vynkor-wire`)
 
 - [x] **V-01 — wire: manifest module behind the `manifest` feature.**
   (shipped 2026-08-21: veyron-wire PR #6 merged; published to crates.io as
@@ -116,7 +116,7 @@ V-13, V-14} → V-16; V-15 hangs off V-05 directly (needs only the pipeline).
   - Move the R8-02 drift test here: every proto `PermissionType` variant must
     pass `validate_manifest` in both name forms (`PERMISSION_X` + lowercase).
   - CI guard: default-feature build unaffected (SDK weight); MSRV 1.85 holds.
-  - Files: `../veyron-wire/src/manifest.rs` (new), `src/lib.rs`,
+  - Files: `../vynkor-wire/src/manifest.rs` (new), `src/lib.rs`,
     `Cargo.toml`, tests (drift + manifest unit tests move from
     `tests/unit/test_installer.rs` manifest cases).
   - Acceptance: `cargo build` (no features) green; `cargo test --features

@@ -18,20 +18,20 @@ jobs:
 
       # SDKs/wire live in sibling repos (not submodules — temporary decision,
       # see ROADMAP). Clone them beside the workspace so tests and the
-      # proto drift check can reach their sources via ../veyron-* paths.
+      # proto drift check can reach their sources via ../vynkor-* paths.
       # Plain git clone: actions/checkout@v4 refuses `path: ../` (repo path
       # must stay under the workspace) since runner 2.319+.
       - name: Clone veyron-wire (sibling)
-        run: git clone --depth 1 https://github.com/veyron-core/veyron-wire.git ../veyron-wire
+        run: git clone --depth 1 https://github.com/veyron-core/vynkor-wire.git ../vynkor-wire
       - name: Clone veyron-sdk-cpp (sibling)
-        run: git clone --depth 1 https://github.com/veyron-core/veyron-sdk-cpp.git ../veyron-sdk-cpp
+        run: git clone --depth 1 https://github.com/veyron-core/vynkor-sdk-cpp.git ../vynkor-sdk-cpp
       - name: Clone veyron-sdk-python (sibling)
-        run: git clone --depth 1 https://github.com/veyron-core/veyron-sdk-python.git ../veyron-sdk-python
+        run: git clone --depth 1 https://github.com/veyron-core/vynkor-sdk-python.git ../vynkor-sdk-python
 
       - name: Proto drift check (T-17)
         run: |
-          diff -u ../veyron-wire/proto/veyron_protocol.proto ../veyron-sdk-cpp/proto/veyron_protocol.proto
-          diff -u ../veyron-wire/proto/veyron_protocol.proto ../veyron-sdk-python/proto/veyron_protocol.proto
+          diff -u ../vynkor-wire/proto/veyron_protocol.proto ../vynkor-sdk-cpp/proto/veyron_protocol.proto
+          diff -u ../vynkor-wire/proto/veyron_protocol.proto ../vynkor-sdk-python/proto/veyron_protocol.proto
 
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -49,8 +49,8 @@ jobs:
 
       - name: "Build C++ SDK echo_plugin (T-02: real C++ binary for cpp integration test)"
         run: |
-          cmake -B ../veyron-sdk-cpp/build -S ../veyron-sdk-cpp -DCMAKE_BUILD_TYPE=Release
-          cmake --build ../veyron-sdk-cpp/build --target echo_plugin -j"$(nproc)"
+          cmake -B ../vynkor-sdk-cpp/build -S ../vynkor-sdk-cpp -DCMAKE_BUILD_TYPE=Release
+          cmake --build ../vynkor-sdk-cpp/build --target echo_plugin -j"$(nproc)"
 
       - name: Build
         run: cargo build --all --all-features

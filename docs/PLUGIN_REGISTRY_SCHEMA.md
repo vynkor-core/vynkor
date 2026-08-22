@@ -11,7 +11,7 @@ derived from this document.
 **Canonical URL:**
 
 ```
-https://raw.githubusercontent.com/veyron-core/veyron-plugins/main/registry.json
+https://raw.githubusercontent.com/veyron-core/vynkor-plugins/main/registry.json
 ```
 
 Top-level structure: a JSON array of plugin entries.
@@ -33,8 +33,8 @@ Top-level structure: a JSON array of plugin entries.
   "description": "Speech-to-text via OpenAI Whisper. Supports 16kHz mono PCM input.",
   "version": "1.2.0",
   "permissions": ["audio_stream", "network"],
-  "archive_url": "https://github.com/veyron-core/veyron-plugins/releases/download/stt-whisper-1.2.0/stt-whisper-1.2.0.zip",
-  "source_url":  "https://github.com/veyron-core/veyron-plugins/releases/download/stt-whisper-1.2.0/stt-whisper-1.2.0-src.zip",
+  "archive_url": "https://github.com/veyron-core/vynkor-plugins/releases/download/stt-whisper-1.2.0/stt-whisper-1.2.0.zip",
+  "source_url":  "https://github.com/veyron-core/vynkor-plugins/releases/download/stt-whisper-1.2.0/stt-whisper-1.2.0-src.zip",
   "sha256": "<64-char lowercase hex>",
   "min_kernel_version": "0.3.0",
   "max_kernel_version": "1.0.0",
