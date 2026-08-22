@@ -10,7 +10,7 @@ use std::sync::Arc;
 use tracing::{info, warn};
 // manifest types come from veyron-wire — the single implementation shared
 // with vynm since V-01/V-02.
-use veyron_wire::manifest::{validate_manifest, InstallManifest};
+use vynkor_wire::manifest::{validate_manifest, InstallManifest};
 
 pub struct PluginLoader;
 

@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use std::process::Command;
 use std::time::Duration;
 use tokio::io::AsyncBufReadExt;
-use veyron::proto::veyron::{envelope, ActionStatus, PluginManifest};
-use veyron_sdk::VeyronClient;
+use vynkor::proto::veyron::{envelope, ActionStatus, PluginManifest};
+use vynkor_sdk::VeyronClient;
 
 use super::sdk_harness::SdkHarness;
 
@@ -189,7 +189,7 @@ asyncio.run(main())
     harness
         .event_bus
         .publish(
-            veyron::proto::veyron::Event {
+            vynkor::proto::veyron::Event {
                 event_id: "large-1".to_string(),
                 event_type: "large.event".to_string(),
                 payload_json: payload,
@@ -248,6 +248,8 @@ async fn python_sdk_streaming_action_round_trip() {
         .arg("-m")
         .arg("examples.echo_plugin")
         .current_dir(sdk_python_dir())
+        .env("VYN_SOCKET_PATH", &socket)
+        // legacy alias for pre-built plugins (stage 4/B drops it)
         .env("VEYRON_SOCKET_PATH", &socket)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -349,6 +351,8 @@ async fn python_sdk_publish_event_from_plugin() {
         .arg("-m")
         .arg("examples.echo_plugin")
         .current_dir(sdk_python_dir())
+        .env("VYN_SOCKET_PATH", &socket)
+        // legacy alias for pre-built plugins (stage 4/B drops it)
         .env("VEYRON_SOCKET_PATH", &socket)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -383,9 +387,9 @@ async fn python_sdk_publish_event_from_plugin() {
     sender
         .send(
             "kernel",
-            veyron::proto::veyron::Envelope {
+            vynkor::proto::veyron::Envelope {
                 payload: Some(envelope::Payload::ActionRequest(
-                    veyron::proto::veyron::ActionRequest {
+                    vynkor::proto::veyron::ActionRequest {
                         action_id: "py-publish-act-1".to_string(),
                         action: "publish_test".to_string(),
                         params_json: params.clone(),
@@ -454,6 +458,8 @@ async fn python_sdk_session_close_dispatch() {
         .arg("-m")
         .arg("examples.echo_plugin")
         .current_dir(sdk_python_dir())
+        .env("VYN_SOCKET_PATH", &socket)
+        // legacy alias for pre-built plugins (stage 4/B drops it)
         .env("VEYRON_SOCKET_PATH", &socket)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())

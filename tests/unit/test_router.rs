@@ -3,14 +3,14 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
-use veyron::auth::jwt::JwtValidator;
-use veyron::events::bus::EventBus;
-use veyron::ipc::connection::{out_frame, Outbound};
-use veyron::ipc::framing::{target_as_str, Frame, FLAG_MAC_PRESENT};
-use veyron::ipc::messages::IncomingMessage;
-use veyron::ipc::protocol::MessageRouter;
-use veyron::plugins::registry::PluginRegistry;
-use veyron::proto::veyron::{
+use vynkor::auth::jwt::JwtValidator;
+use vynkor::events::bus::EventBus;
+use vynkor::ipc::connection::{out_frame, Outbound};
+use vynkor::ipc::framing::{target_as_str, Frame, FLAG_MAC_PRESENT};
+use vynkor::ipc::messages::IncomingMessage;
+use vynkor::ipc::protocol::MessageRouter;
+use vynkor::plugins::registry::PluginRegistry;
+use vynkor::proto::veyron::{
     envelope, ActionRequest, Envelope, Ping, PluginManifest, PluginRegister, PluginRegisterAck,
 };
 
@@ -717,7 +717,7 @@ async fn router_denies_forward_to_unlisted_ipc_target() {
 /// After the fix, the key must be installed despite the prior poison.
 #[tokio::test]
 async fn poisoned_session_key_cell_still_installs_mac_key() {
-    use veyron::ipc::messages::IncomingMessage;
+    use vynkor::ipc::messages::IncomingMessage;
 
     // Poison the mutex on a dedicated OS thread, then join to confirm.
     let cell: Arc<Mutex<Option<[u8; 32]>>> = Arc::new(Mutex::new(None));
@@ -988,7 +988,7 @@ fn spawn_router_with_jwt_and_config_perms(
     event_bus: Arc<EventBus>,
     config_permissions: std::collections::HashMap<String, Vec<String>>,
 ) -> mpsc::Sender<IncomingMessage> {
-    use veyron::auth::jwt::JwtValidator;
+    use vynkor::auth::jwt::JwtValidator;
 
     let (tx, rx) = mpsc::channel::<IncomingMessage>(64);
     tokio::spawn(MessageRouter::run_with_context(
@@ -1505,7 +1505,7 @@ async fn router_rejects_protocol_major_mismatch() {
         Some(envelope::Payload::Error(err)) => {
             assert_eq!(
                 err.code,
-                veyron::proto::veyron::ErrorCode::ErrProtocolMismatch as i32,
+                vynkor::proto::veyron::ErrorCode::ErrProtocolMismatch as i32,
                 "major mismatch must use ERR_PROTOCOL_MISMATCH"
             );
             assert!(
@@ -1536,7 +1536,7 @@ async fn router_stores_device_metadata_from_wire() {
             version: "1.0.0".to_string(),
             manifest: Some(dummy_manifest()),
             device_id: "phone-7f3a".to_string(),
-            os: veyron::proto::veyron::DeviceOs::Android as i32,
+            os: vynkor::proto::veyron::DeviceOs::Android as i32,
             arch: "aarch64".to_string(),
             os_version: "14".to_string(),
             capabilities: vec!["geo".to_string()],
@@ -1562,7 +1562,7 @@ async fn router_stores_device_metadata_from_wire() {
     }
 
     let dev = reg.get_device("phone-7f3a").expect("device must exist");
-    assert_eq!(dev.os, veyron::proto::veyron::DeviceOs::Android as i32);
+    assert_eq!(dev.os, vynkor::proto::veyron::DeviceOs::Android as i32);
     assert_eq!(dev.arch, "aarch64");
     assert_eq!(dev.capabilities, vec!["geo".to_string()]);
     let entry = reg.get("geo").expect("plugin must exist");

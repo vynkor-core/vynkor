@@ -4,7 +4,7 @@
 
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use std::time::{SystemTime, UNIX_EPOCH};
-use veyron::auth::jwt::PluginClaims;
+use vynkor::auth::jwt::PluginClaims;
 
 pub fn create_test_token(
     plugin_id: &str,
@@ -40,6 +40,6 @@ pub fn create_device_token(
     secret: &[u8],
     ttl_secs: u64,
 ) -> String {
-    veyron::auth::jwt::mint_device_token(secret, device_id, permissions, vec![], ttl_secs, "veyron")
+    vynkor::auth::jwt::mint_device_token(secret, device_id, permissions, vec![], ttl_secs, "veyron")
         .expect("device token minting must not fail")
 }

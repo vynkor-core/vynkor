@@ -12,13 +12,13 @@
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use veyron::proto::veyron::{envelope, ActionRequest, ActionStatus, Envelope, PluginManifest};
-use veyron_sdk::VeyronClient;
+use vynkor::proto::veyron::{envelope, ActionRequest, ActionStatus, Envelope, PluginManifest};
+use vynkor_sdk::VeyronClient;
 
 use super::sdk_harness::SdkHarness;
 
 fn secrets_binary() -> Option<std::path::PathBuf> {
-    if let Ok(path) = std::env::var("VEYRON_SECRETS_PLUGIN") {
+    if let Ok(path) = std::env::var("VYN_SECRETS_PLUGIN") {
         let path = std::path::PathBuf::from(path);
         return path.exists().then_some(path);
     }
@@ -57,7 +57,7 @@ async fn secrets_plugin_round_trip_with_permission() {
         eprintln!(
             "[SKIP] secrets plugin binary not found — build via \
              `cargo build --release` in ../veyron-plugins/plugins/secrets/, \
-             or set VEYRON_SECRETS_PLUGIN to an existing binary path"
+             or set VYN_SECRETS_PLUGIN to an existing binary path"
         );
         return;
     };
@@ -67,6 +67,8 @@ async fn secrets_plugin_round_trip_with_permission() {
     let vault_dir = tempfile::tempdir().unwrap();
 
     let mut child = Command::new(&bin)
+        .env("VYN_SOCKET_PATH", &socket)
+        // legacy alias for pre-built plugins (stage 4/B drops it)
         .env("VEYRON_SOCKET_PATH", &socket)
         .env("SECRETS_PLUGIN_DATA_DIR", vault_dir.path())
         .env(
@@ -172,13 +174,13 @@ async fn secrets_plugin_round_trip_with_permission() {
 #[tokio::test]
 async fn secrets_plugin_denies_unprivileged_caller() {
     use std::collections::HashMap;
-    use veyron::proto::veyron::PermissionType;
+    use vynkor::proto::veyron::PermissionType;
 
     let Some(bin) = secrets_binary() else {
         eprintln!(
             "[SKIP] secrets plugin binary not found — build via \
              `cargo build --release` in ../veyron-plugins/plugins/secrets/, \
-             or set VEYRON_SECRETS_PLUGIN to an existing binary path"
+             or set VYN_SECRETS_PLUGIN to an existing binary path"
         );
         return;
     };
@@ -188,6 +190,8 @@ async fn secrets_plugin_denies_unprivileged_caller() {
     let vault_dir = tempfile::tempdir().unwrap();
 
     let mut child = Command::new(&bin)
+        .env("VYN_SOCKET_PATH", &socket)
+        // legacy alias for pre-built plugins (stage 4/B drops it)
         .env("VEYRON_SOCKET_PATH", &socket)
         .env("SECRETS_PLUGIN_DATA_DIR", vault_dir.path())
         .env(

@@ -1,10 +1,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::oneshot;
-use veyron::events::bus::EventBus;
-use veyron::kernel::Kernel;
-use veyron::plugins::registry::PluginRegistry;
-use veyron::utils::config::{Config, PluginDef};
+use vynkor::events::bus::EventBus;
+use vynkor::kernel::Kernel;
+use vynkor::plugins::registry::PluginRegistry;
+use vynkor::utils::config::{Config, PluginDef};
 
 /// Start a kernel whose config includes a `plugins:` list.
 /// Returns the shutdown sender and a reference to the registry/supervisor

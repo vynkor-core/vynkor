@@ -1,6 +1,6 @@
 use clap::CommandFactory;
 use clap_complete::{generate, Shell};
-use veyron::cli::Cli;
+use vynkor::cli::Cli;
 
 fn completion_output(shell: Shell) -> String {
     let mut cmd = Cli::command();

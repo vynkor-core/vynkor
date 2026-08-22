@@ -1,9 +1,9 @@
 use super::helpers::start_kernel;
 use std::time::Duration;
 use tokio::time::timeout;
-use veyron::ipc::framing::FLAG_RAW_BINARY;
-use veyron::proto::veyron::{envelope, ErrorCode, PluginManifest};
-use veyron_sdk::VeyronClient;
+use vynkor::ipc::framing::FLAG_RAW_BINARY;
+use vynkor::proto::veyron::{envelope, ErrorCode, PluginManifest};
+use vynkor_sdk::VeyronClient;
 
 /// Plugin without PERMISSION_AUDIO_STREAM sends a FLAG_RAW_BINARY frame →
 /// receives ERR_PERMISSION_DENIED; the target plugin receives nothing.

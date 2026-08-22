@@ -358,7 +358,7 @@ impl MessageRouter {
                 // D-03: reject on protocol_version *major* mismatch (minor/
                 // patch accepted). Empty protocol_version = a v1.5 host
                 // plugin (or a stale SDK) — accept, it predates the field.
-                let wire_major = veyron_wire::PROTOCOL_VERSION
+                let wire_major = vynkor_wire::PROTOCOL_VERSION
                     .split('.')
                     .next()
                     .unwrap_or("");
@@ -370,7 +370,7 @@ impl MessageRouter {
                         &format!(
                             "protocol version {} incompatible with kernel {}",
                             reg.protocol_version,
-                            veyron_wire::PROTOCOL_VERSION
+                            vynkor_wire::PROTOCOL_VERSION
                         ),
                     )
                     .await;

@@ -5,8 +5,8 @@ use prost::Message;
 use std::time::Duration;
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::protocol::Message as WsMsg;
-use veyron::auth::frame_mac::{compute_tag, derive_session_key, MAC_TAG_LEN};
-use veyron::proto::veyron::{envelope, Envelope, Ping, PluginManifest, PluginRegister};
+use vynkor::auth::frame_mac::{compute_tag, derive_session_key, MAC_TAG_LEN};
+use vynkor::proto::veyron::{envelope, Envelope, Ping, PluginManifest, PluginRegister};
 
 /// Build a frame with HMAC-SHA256 MAC (FLAG_MAC_PRESENT = 0x0001 set, 32-byte tag appended).
 fn build_mac_frame(target: &str, payload: &[u8], key: &[u8; 32]) -> Vec<u8> {
@@ -468,7 +468,7 @@ async fn ws_client_that_never_registers_is_dropped() {
     // registration never gets a session frame-MAC key — the gateway must drop
     // it after the register timeout instead of letting it idle forever.
     use super::helpers::{start_kernel_with_config, test_config};
-    use veyron::utils::config::Config;
+    use vynkor::utils::config::Config;
 
     let secret = "ws-register-deadline-secret-32-bytes-minimum";
     let cfg = Config {
@@ -504,7 +504,7 @@ async fn ws_client_that_registers_survives_the_deadline() {
     // registering within the deadline arms the session MAC key, and the
     // connection must stay alive past the register timeout
     use super::helpers::{start_kernel_with_config, test_config};
-    use veyron::utils::config::Config;
+    use vynkor::utils::config::Config;
 
     let secret = "ws-register-ok-secret-32-bytes-minimum";
     let cfg = Config {
@@ -550,7 +550,7 @@ async fn per_device_token_registers_device_plugin_end_to_end() {
     // registers any plugin of that device over WS and the frame-MAC flow
     // works with it — the same path a device agent uses.
     use super::helpers::{start_kernel_with_config, test_config};
-    use veyron::utils::config::Config;
+    use vynkor::utils::config::Config;
 
     let secret = "ws-device-token-secret-32-bytes-minimum";
     let cfg = Config {
@@ -606,7 +606,7 @@ async fn per_device_token_registers_device_plugin_end_to_end() {
 #[tokio::test]
 async fn ws_upgrade_rejected_once_connection_cap_reached() {
     use super::helpers::{start_kernel_with_config, test_config};
-    use veyron::utils::config::Config;
+    use vynkor::utils::config::Config;
 
     let cfg = Config {
         max_ws_connections: 1,

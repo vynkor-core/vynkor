@@ -1,7 +1,7 @@
 use crate::jwt_helper::{create_device_token, create_test_token};
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use std::time::{SystemTime, UNIX_EPOCH};
-use veyron::auth::jwt::{mint_device_token, JwtValidator, PluginClaims};
+use vynkor::auth::jwt::{mint_device_token, JwtValidator, PluginClaims};
 
 // 32 bytes — must satisfy MIN_JWT_SECRET_BYTES, which mint_device_token now
 // enforces (MA-18)

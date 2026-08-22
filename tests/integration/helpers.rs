@@ -2,12 +2,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::oneshot;
-use veyron::events::bus::EventBus;
-use veyron::kernel::Kernel;
-use veyron::plugins::registry::PluginRegistry;
-use veyron::proto::veyron::PluginManifest;
-use veyron::utils::config::Config;
-use veyron_sdk::VeyronClient;
+use vynkor::events::bus::EventBus;
+use vynkor::kernel::Kernel;
+use vynkor::plugins::registry::PluginRegistry;
+use vynkor::proto::veyron::PluginManifest;
+use vynkor::utils::config::Config;
+use vynkor_sdk::VeyronClient;
 
 pub fn test_config(socket: &str, port: u16) -> Config {
     Config {

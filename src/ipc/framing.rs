@@ -1,7 +1,7 @@
 use crate::utils::errors::VeyronError;
 use tokio::io::{AsyncRead, AsyncWrite};
 
-pub use veyron_wire::framing::{
+pub use vynkor_wire::framing::{
     parse_frag_header, serialize_header, target_as_str, FragmentHeader, Frame, COMPRESS_THRESHOLD,
     FLAG_COMPRESSED, FLAG_FRAGMENTED, FLAG_MAC_PRESENT, FLAG_RAW_BINARY, FRAG_HEADER_SIZE,
     MAX_PAYLOAD_SIZE,
@@ -16,7 +16,7 @@ pub async fn write_frame<W>(
 where
     W: AsyncWrite + Unpin,
 {
-    veyron_wire::framing::write_frame(stream, target, flags, payload)
+    vynkor_wire::framing::write_frame(stream, target, flags, payload)
         .await
         .map_err(Into::into)
 }
@@ -25,7 +25,7 @@ pub async fn write_frame_raw<W>(stream: &mut W, frame: &Frame) -> Result<(), Vey
 where
     W: AsyncWrite + Unpin,
 {
-    veyron_wire::framing::write_frame_raw(stream, frame)
+    vynkor_wire::framing::write_frame_raw(stream, frame)
         .await
         .map_err(Into::into)
 }
@@ -34,7 +34,7 @@ pub async fn read_frame<R>(stream: &mut R) -> Result<Frame, VeyronError>
 where
     R: AsyncRead + Unpin,
 {
-    veyron_wire::framing::read_frame(stream)
+    vynkor_wire::framing::read_frame(stream)
         .await
         .map_err(Into::into)
 }
@@ -46,7 +46,7 @@ pub async fn read_frame_with_timeout<R>(
 where
     R: AsyncRead + Unpin,
 {
-    veyron_wire::framing::read_frame_with_timeout(stream, timeout)
+    vynkor_wire::framing::read_frame_with_timeout(stream, timeout)
         .await
         .map_err(Into::into)
 }

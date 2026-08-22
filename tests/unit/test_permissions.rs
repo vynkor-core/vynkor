@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use veyron::auth::permissions::{check_ipc_target, check_permission, resolve_permission};
-use veyron::plugins::registry::PluginRegistry;
-use veyron::proto::veyron::{PermissionType, PluginManifest};
+use vynkor::auth::permissions::{check_ipc_target, check_permission, resolve_permission};
+use vynkor::plugins::registry::PluginRegistry;
+use vynkor::proto::veyron::{PermissionType, PluginManifest};
 
 fn registry_with(plugin_id: &str, permissions: Vec<&str>) -> Arc<PluginRegistry> {
     let registry = Arc::new(PluginRegistry::new());

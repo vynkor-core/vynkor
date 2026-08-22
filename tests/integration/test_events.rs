@@ -1,8 +1,8 @@
 use super::helpers::start_kernel;
 use std::time::Duration;
 use tokio::time::timeout;
-use veyron::proto::veyron::{envelope, ActionRisk, ActionSpec, Event, PluginManifest};
-use veyron_sdk::VeyronClient;
+use vynkor::proto::veyron::{envelope, ActionRisk, ActionSpec, Event, PluginManifest};
+use vynkor_sdk::VeyronClient;
 
 #[tokio::test]
 async fn subscribed_plugin_receives_event_via_event_bus() {
@@ -118,17 +118,17 @@ async fn joined_event_carries_device_fields() {
     let mut newcomer = VeyronClient::connect("/tmp/veyron_integ_joined_dev.sock")
         .await
         .unwrap();
-    let reg = veyron::proto::veyron::PluginRegister {
+    let reg = vynkor::proto::veyron::PluginRegister {
         plugin_id: "device-agent".to_string(),
         manifest: Some(PluginManifest::default()),
         device_id: "phone-1".to_string(),
-        os: veyron::proto::veyron::DeviceOs::Android as i32,
+        os: vynkor::proto::veyron::DeviceOs::Android as i32,
         arch: "aarch64".to_string(),
         os_version: "14".to_string(),
         capabilities: vec!["geo".to_string(), "battery".to_string()],
         ..Default::default()
     };
-    let env = veyron::proto::veyron::Envelope {
+    let env = vynkor::proto::veyron::Envelope {
         payload: Some(envelope::Payload::PluginRegister(reg)),
         ..Default::default()
     };
@@ -249,9 +249,9 @@ async fn publish_without_permission_is_denied() {
         .await
         .unwrap();
 
-    let env = veyron::proto::veyron::Envelope {
+    let env = vynkor::proto::veyron::Envelope {
         payload: Some(envelope::Payload::EventPublish(
-            veyron::proto::veyron::EventPublish {
+            vynkor::proto::veyron::EventPublish {
                 event_type: "request_completed".to_string(),
                 payload_json: b"{}".to_vec(),
             },
@@ -269,7 +269,7 @@ async fn publish_without_permission_is_denied() {
         Some(envelope::Payload::EventPublishAck(ack)) => {
             assert_eq!(
                 ack.status,
-                veyron::proto::veyron::EventPublishStatus::EventPublishPermissionDeny as i32
+                vynkor::proto::veyron::EventPublishStatus::EventPublishPermissionDeny as i32
             );
         }
         other => panic!("expected EventPublishAck, got: {:?}", other),
@@ -311,9 +311,9 @@ async fn publish_with_permission_namespaces_and_delivers_to_subscriber() {
 
     tokio::time::sleep(Duration::from_millis(30)).await;
 
-    let env = veyron::proto::veyron::Envelope {
+    let env = vynkor::proto::veyron::Envelope {
         payload: Some(envelope::Payload::EventPublish(
-            veyron::proto::veyron::EventPublish {
+            vynkor::proto::veyron::EventPublish {
                 event_type: "request_completed".to_string(),
                 payload_json: br#"{"status":200}"#.to_vec(),
             },
@@ -330,7 +330,7 @@ async fn publish_with_permission_namespaces_and_delivers_to_subscriber() {
         Some(envelope::Payload::EventPublishAck(ack)) => {
             assert_eq!(
                 ack.status,
-                veyron::proto::veyron::EventPublishStatus::EventPublishOk as i32
+                vynkor::proto::veyron::EventPublishStatus::EventPublishOk as i32
             );
             assert!(!ack.event_id.is_empty());
             ack.event_id
@@ -394,9 +394,9 @@ async fn two_plugins_publishing_same_event_type_land_on_distinct_namespaces() {
     tokio::time::sleep(Duration::from_millis(30)).await;
 
     for client in [&mut network, &mut weather] {
-        let env = veyron::proto::veyron::Envelope {
+        let env = vynkor::proto::veyron::Envelope {
             payload: Some(envelope::Payload::EventPublish(
-                veyron::proto::veyron::EventPublish {
+                vynkor::proto::veyron::EventPublish {
                     event_type: "request_completed".to_string(),
                     payload_json: b"{}".to_vec(),
                 },
@@ -475,7 +475,7 @@ async fn sdk_publish_event_returns_ack_and_delivers_to_subscriber() {
 
     assert_eq!(
         ack.status,
-        veyron::proto::veyron::EventPublishStatus::EventPublishOk as i32
+        vynkor::proto::veyron::EventPublishStatus::EventPublishOk as i32
     );
     assert!(!ack.event_id.is_empty());
 

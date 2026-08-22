@@ -6,11 +6,11 @@ use tempfile::tempdir;
 use tokio::time::sleep;
 
 use std::sync::Arc;
-use veyron::plugins::loader::{validate_plugin_def, PluginLoader};
-use veyron::plugins::manager::PluginManager;
-use veyron::plugins::registry::PluginRegistry;
-use veyron::plugins::supervisor::PluginSupervisor;
-use veyron::utils::config::PluginDef;
+use vynkor::plugins::loader::{validate_plugin_def, PluginLoader};
+use vynkor::plugins::manager::PluginManager;
+use vynkor::plugins::registry::PluginRegistry;
+use vynkor::plugins::supervisor::PluginSupervisor;
+use vynkor::utils::config::PluginDef;
 
 fn make_manager(socket: &str) -> Arc<PluginManager> {
     let sup = Arc::new(PluginSupervisor::new(socket));

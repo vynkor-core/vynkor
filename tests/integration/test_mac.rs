@@ -2,8 +2,8 @@ use super::helpers::start_kernel_secured;
 use crate::jwt_helper::create_test_token;
 use std::time::Duration;
 use tokio::time::timeout;
-use veyron::proto::veyron::{envelope, Envelope, ErrorCode, Ping, PluginManifest};
-use veyron_sdk::VeyronClient;
+use vynkor::proto::veyron::{envelope, Envelope, ErrorCode, Ping, PluginManifest};
+use vynkor_sdk::VeyronClient;
 
 #[tokio::test]
 async fn secured_kernel_completes_mac_handshake_and_pings() {

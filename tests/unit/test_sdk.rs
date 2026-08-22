@@ -2,12 +2,12 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::timeout;
-use veyron::events::bus::EventBus;
-use veyron::ipc::protocol::MessageRouter;
-use veyron::ipc::server::UdsServer;
-use veyron::plugins::registry::PluginRegistry;
-use veyron::proto::veyron::PluginManifest;
-use veyron_sdk::VeyronClient;
+use vynkor::events::bus::EventBus;
+use vynkor::ipc::protocol::MessageRouter;
+use vynkor::ipc::server::UdsServer;
+use vynkor::plugins::registry::PluginRegistry;
+use vynkor::proto::veyron::PluginManifest;
+use vynkor_sdk::VeyronClient;
 
 async fn start_kernel(socket_path: &'static str) {
     let registry = Arc::new(PluginRegistry::new());
@@ -117,7 +117,7 @@ async fn client_send_recv_roundtrip_via_broadcast() {
         .unwrap();
 
     use prost::Message;
-    use veyron::proto::veyron::{envelope, Envelope, Ping};
+    use vynkor::proto::veyron::{envelope, Envelope, Ping};
     let payload = Envelope {
         payload: Some(envelope::Payload::Ping(Ping { timestamp: 42 })),
         ..Default::default()

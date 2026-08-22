@@ -1,10 +1,10 @@
 use std::time::Duration;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
-use veyron::kernel::Kernel;
-use veyron::proto::veyron::PluginManifest;
-use veyron::utils::config::Config;
-use veyron_sdk::VeyronClient;
+use vynkor::kernel::Kernel;
+use vynkor::proto::veyron::PluginManifest;
+use vynkor::utils::config::Config;
+use vynkor_sdk::VeyronClient;
 
 #[test]
 fn pid_flock_prevents_double_start() {

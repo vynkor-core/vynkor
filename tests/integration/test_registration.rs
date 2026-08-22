@@ -1,8 +1,8 @@
 use super::helpers::start_kernel;
 use std::time::Duration;
 use tokio::time::timeout;
-use veyron::proto::veyron::PluginManifest;
-use veyron_sdk::VeyronClient;
+use vynkor::proto::veyron::PluginManifest;
+use vynkor_sdk::VeyronClient;
 
 #[tokio::test]
 async fn plugin_registration_accepted_and_appears_in_registry() {

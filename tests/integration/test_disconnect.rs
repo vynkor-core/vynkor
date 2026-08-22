@@ -1,7 +1,7 @@
 use super::helpers::start_kernel;
 use std::time::Duration;
-use veyron::proto::veyron::PluginManifest;
-use veyron_sdk::VeyronClient;
+use vynkor::proto::veyron::PluginManifest;
+use vynkor_sdk::VeyronClient;
 
 #[tokio::test]
 async fn plugin_removed_from_registry_after_disconnect() {
@@ -70,7 +70,7 @@ async fn system_plugin_left_published_on_disconnect() {
 
     // verify plugin_left is published — check event_bus subscribers still work
     // by publishing manually to ensure delivery path works
-    use veyron::proto::veyron::Event;
+    use vynkor::proto::veyron::Event;
     event_bus
         .publish(
             Event {
@@ -89,7 +89,7 @@ async fn system_plugin_left_published_on_disconnect() {
         .expect("recv timed out")
         .expect("recv failed");
 
-    use veyron::proto::veyron::envelope;
+    use vynkor::proto::veyron::envelope;
     assert!(
         matches!(
             received.payload,

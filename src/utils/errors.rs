@@ -70,9 +70,9 @@ impl From<prost::DecodeError> for VeyronError {
     }
 }
 
-impl From<veyron_wire::WireError> for VeyronError {
-    fn from(e: veyron_wire::WireError) -> Self {
-        use veyron_wire::WireError as W;
+impl From<vynkor_wire::WireError> for VeyronError {
+    fn from(e: vynkor_wire::WireError) -> Self {
+        use vynkor_wire::WireError as W;
         match e {
             W::Io(e) => VeyronError::Io(e),
             W::Proto(e) => VeyronError::Proto(e),

@@ -3,8 +3,8 @@ use crate::jwt_helper::create_test_token;
 use prost::Message;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use veyron::proto::veyron::{envelope, ActionRequest, Envelope, PluginManifest};
-use veyron_sdk::VeyronClient;
+use vynkor::proto::veyron::{envelope, ActionRequest, Envelope, PluginManifest};
+use vynkor_sdk::VeyronClient;
 
 /// Raw HTTP GET helper — avoids adding reqwest to dev-deps.
 async fn http_get_body(port: u16, path: &str) -> (u16, String) {
@@ -192,7 +192,7 @@ async fn mac_error_counter_appears_after_untagged_frame_on_secured_kernel() {
         .await;
     // Send a ping (untagged) — kernel should reject it and increment the mac error counter.
     let env = Envelope {
-        payload: Some(envelope::Payload::Ping(veyron::proto::veyron::Ping {
+        payload: Some(envelope::Payload::Ping(vynkor::proto::veyron::Ping {
             timestamp: 1,
         })),
         ..Default::default()

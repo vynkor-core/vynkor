@@ -199,13 +199,13 @@ pub struct Config {
     /// different key.
     #[serde(default)]
     pub marketplace_public_key: Option<String>,
-    /// How long the registry cache (`~/.cache/veyron/registry.json`) is considered
+    /// How long the registry cache (`~/.cache/vyn/registry.json`) is considered
     /// fresh before `plugin list --refresh` re-fetches it. Default: 3600 (1h).
     #[serde(default = "default_registry_cache_ttl_secs")]
     pub registry_cache_ttl_secs: u64,
     /// Base directory for scratch/cache files (marketplace registry cache, plugin
     /// install staging). Defaults to a per-user private dir — never the shared
-    /// `/tmp` (AUDIT M-09) — via `XDG_RUNTIME_DIR`/`/run/user/<uid>`/`~/.veyron/run`.
+    /// `/tmp` (AUDIT M-09) — via `XDG_RUNTIME_DIR`/`/run/user/<uid>`/`~/.local/state/vyn/run`.
     #[serde(default = "default_tmp_dir")]
     pub tmp_dir: PathBuf,
     /// Default action timeout (ms) when a plugin's `ActionRequest.timeout_ms` is 0.
@@ -267,30 +267,30 @@ pub struct Config {
 }
 
 /// Public so SDKs resolve the same default as the kernel when
-/// `VEYRON_SOCKET_PATH` is not set.
-pub use veyron_wire::socket::default_socket_path;
+/// `VYN_SOCKET_PATH` is not set.
+pub use vynkor_wire::socket::default_socket_path;
 
 /// pid/log files got the same symlink-attack surface as the socket
 /// (AUDIT M-09) — default them out of the shared `/tmp` the same way.
 fn default_pid_path() -> PathBuf {
-    veyron_wire::socket::default_private_dir()
-        .map(|dir| dir.join("veyron.pid"))
-        .unwrap_or_else(|| PathBuf::from("veyron.pid"))
+    vynkor_wire::socket::default_private_dir()
+        .map(|dir| dir.join("vyn.pid"))
+        .unwrap_or_else(|| PathBuf::from("vyn.pid"))
 }
 
 fn default_log_path() -> PathBuf {
-    veyron_wire::socket::default_private_dir()
-        .map(|dir| dir.join("veyron.log"))
-        .unwrap_or_else(|| PathBuf::from("veyron.log"))
+    vynkor_wire::socket::default_private_dir()
+        .map(|dir| dir.join("vyn.log"))
+        .unwrap_or_else(|| PathBuf::from("vyn.log"))
 }
 
 /// Per-user private data dir for the event store and per-plugin state.
 /// S2: the events DB must never live in world-writable `/tmp` — a local user
 /// could pre-create the path and forge pending events.
 fn default_data_dir() -> PathBuf {
-    veyron_wire::socket::default_private_dir()
-        .map(|dir| dir.join("veyron-data"))
-        .unwrap_or_else(|| PathBuf::from("veyron-data"))
+    vynkor_wire::socket::default_private_dir()
+        .map(|dir| dir.join("vyn-data"))
+        .unwrap_or_else(|| PathBuf::from("vyn-data"))
 }
 
 fn default_watchdog_interval() -> u64 {
@@ -311,7 +311,7 @@ fn default_registry_cache_ttl_secs() -> u64 {
 /// Per-user private scratch dir — mirrors `default_pid_path`/`default_log_path`'s
 /// refusal to fall back into the shared, world-writable `/tmp` (AUDIT M-09).
 fn default_tmp_dir() -> PathBuf {
-    veyron_wire::socket::default_private_dir().unwrap_or_else(std::env::temp_dir)
+    vynkor_wire::socket::default_private_dir().unwrap_or_else(std::env::temp_dir)
 }
 fn default_action_timeout_ms() -> u32 {
     30_000
@@ -375,7 +375,7 @@ impl Default for Config {
             log_level: "info".to_string(),
             pid_file: default_pid_path(),
             log_file: default_log_path(),
-            data_dir: PathBuf::from("/var/lib/veyron"),
+            data_dir: PathBuf::from("/var/lib/vyn"),
             socket_path: default_socket_path(),
             jwt_secret: None,
             allow_no_auth: false,
@@ -519,10 +519,10 @@ pub fn resolve_device_id(config: &Config) -> String {
 }
 
 /// Where the kernel auto-generates TLS material when none is configured
-/// (D-07): `<private dir>/veyron-tls/` — same per-user private location as
+/// (D-07): `<private dir>/vyn-tls/` — same per-user private location as
 /// the pid/log files (never the shared /tmp, AUDIT M-09).
 pub fn default_tls_dir() -> Option<PathBuf> {
-    veyron_wire::socket::default_private_dir().map(|d| d.join("veyron-tls"))
+    vynkor_wire::socket::default_private_dir().map(|d| d.join("vyn-tls"))
 }
 
 /// The certificate a local `vyn` client must trust when TLS is on: the
@@ -545,7 +545,7 @@ mod tests {
     fn default_socket_path_uses_xdg_runtime_dir() {
         temp_env::with_var("XDG_RUNTIME_DIR", Some("/run/user/1000"), || {
             let path = default_socket_path();
-            assert_eq!(path, "/run/user/1000/veyron.sock");
+            assert_eq!(path, "/run/user/1000/vyn.sock");
         });
     }
 
@@ -554,13 +554,13 @@ mod tests {
         temp_env::with_var_unset("XDG_RUNTIME_DIR", || {
             let path = default_socket_path();
             assert_ne!(
-                path, "/tmp/veyron.sock",
+                path, "/tmp/vyn.sock",
                 "must not default into world-writable shared /tmp (BUG-006)"
             );
             // Must land in a per-user location: either the kernel-provided
             // /run/user/<uid>, or a private 0o700 dir under $HOME.
             assert!(
-                path.starts_with("/run/user/") || path.contains("/.veyron/"),
+                path.starts_with("/run/user/") || path.contains("/.local/state/vyn/"),
                 "expected a per-user private socket dir, got {path}"
             );
         });
@@ -572,8 +572,8 @@ mod tests {
             let pid = default_pid_path();
             let log = default_log_path();
 
-            assert_eq!(pid, PathBuf::from("/run/user/1000/veyron.pid"));
-            assert_eq!(log, PathBuf::from("/run/user/1000/veyron.log"));
+            assert_eq!(pid, PathBuf::from("/run/user/1000/vyn.pid"));
+            assert_eq!(log, PathBuf::from("/run/user/1000/vyn.log"));
             assert!(
                 !pid.starts_with("/tmp"),
                 "pid file must not default into /tmp (AUDIT M-09)"
@@ -589,7 +589,7 @@ mod tests {
     fn default_data_dir_uses_xdg_runtime_dir() {
         temp_env::with_var("XDG_RUNTIME_DIR", Some("/run/user/1000"), || {
             let path = default_data_dir();
-            assert_eq!(path, PathBuf::from("/run/user/1000/veyron-data"));
+            assert_eq!(path, PathBuf::from("/run/user/1000/vyn-data"));
         });
     }
 
@@ -603,7 +603,7 @@ mod tests {
             );
             let path_str = path.to_string_lossy();
             assert!(
-                path.starts_with("/run/user/") || path_str.contains("/.veyron/"),
+                path.starts_with("/run/user/") || path_str.contains("/.local/state/vyn/"),
                 "expected a per-user private data dir, got {}",
                 path.display()
             );
@@ -915,7 +915,7 @@ mod tests {
         temp_env::with_var("XDG_RUNTIME_DIR", Some(dir.path()), || {
             assert_eq!(
                 effective_tls_cert_path(&auto),
-                Some(dir.path().join("veyron-tls/cert.pem"))
+                Some(dir.path().join("vyn-tls/cert.pem"))
             );
         });
     }

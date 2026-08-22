@@ -1,13 +1,13 @@
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio::net::UnixStream;
-use veyron::auth::frame_mac::{compute_tag, derive_session_key, verify_tag};
-use veyron::ipc::framing::{
+use vynkor::auth::frame_mac::{compute_tag, derive_session_key, verify_tag};
+use vynkor::ipc::framing::{
     read_frame, read_frame_with_timeout, serialize_header, target_as_str, write_frame,
     write_frame_raw, Frame, COMPRESS_THRESHOLD, FLAG_COMPRESSED, FLAG_MAC_PRESENT,
     MAX_PAYLOAD_SIZE,
 };
-use veyron::utils::errors::VeyronError;
+use vynkor::utils::errors::VeyronError;
 
 async fn make_pair() -> (UnixStream, UnixStream) {
     UnixStream::pair().expect("UnixStream::pair failed")
@@ -90,7 +90,7 @@ async fn target_padded_to_32_bytes_in_frame() {
 
 #[tokio::test]
 async fn mac_frame_round_trips_with_tag() {
-    use veyron::ipc::framing::{write_frame_raw, FLAG_MAC_PRESENT};
+    use vynkor::ipc::framing::{write_frame_raw, FLAG_MAC_PRESENT};
     let (mut w, mut r) = make_pair().await;
 
     let payload = b"secured".to_vec();
