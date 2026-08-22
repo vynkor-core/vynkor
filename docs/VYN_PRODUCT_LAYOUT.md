@@ -116,9 +116,11 @@ Filesystem moves (data, lib, config) are cheap and local:
   rename milestone, then flip wire+SDKs together. Operators who care today
   can set `socket_path:` explicitly in config.
 
-Env-var policy this cycle: keep current names working (`VYNM_STATE_DIR`,
-`VYNM_PLUGIN_DIR`, `VEYRON_SOCKET_PATH`, …). Full `VEYRON_*` → `VYN_*` env
-rename rides the same future milestone as the socket.
+~~Socket/env renames were initially deferred to a future milestone~~
+**SUPERSEDED 2026-08-22: the vynkor 0.0.1 big-bang does the HARD CUTOVER
+now** (§8). Pre-production status means zero external users ⇒ no fallback
+windows, no `VEYRON_*` shims: everything flips to `vyn.sock`, `share/vyn`,
+`lib/vyn/plugins`, `VYN_*`/`VYNM_*` env vars in one coordinated wave.
 
 ## 7. Task breakdown (amends stage-3 backlog)
 
@@ -139,3 +141,43 @@ Acceptance for the whole block: fresh machine + `pacman -U vynkor.pkg` →
 `vyn start` → `vynm install database` works touching ONLY `~/.config/vyn`,
 `~/.local/share/vyn`, `~/.local/lib/vyn` — no source checkouts, no manual
 paths.
+
+
+## 8. Decision: vynkor 0.0.1 big-bang (2026-08-22)
+
+Full ecosystem rename + package reboot happens NOW, not at a future
+milestone. Uniquely cheap window: zero external users (hard cutover beats
+migration shims), the registry needs re-signing anyway (S1 fix, PR
+veyron-plugins#23 folds in), and `install.sh` is being born right now.
+
+| Layer | Now | Becomes |
+|---|---|---|
+| GitHub | org `veyron-core`, repos `veyron*` | org `vynkor`, repos `vynkor*` (renames last — redirects cover old clones) |
+| crates.io | `veyron-wire 0.2.6`, `veyron-sdk 0.1.3` | **new packages** `vynkor-wire 0.0.1`, `vynkor-sdk 0.0.1` (names verified free); old crates frozen forever + final deprecation notice patch each |
+| PyPI | `veyron-sdk` (module `veyron`) | `vynkor-sdk 0.0.1`, module `vynkor` |
+| Kernel crate | lib name `veyron` (unpublished) | `vynkor`; binary stays `vyn` |
+| Manager | already `vynkor-manager` ✓ | dep swap to `vynkor-wire` |
+| Env vars | `VEYRON_*` | `VYN_*` / `VYNM_*` hard cutover |
+| Paths/socket | `veyron.sock`, `share/veyron`, `lib/veyron/plugins` | `vyn.sock`, `share/vyn`, `lib/vyn/plugins` (§1) |
+| Registry artifacts | GitHub raw URLs | **Cloudflare R2** behind `cdn.vynkor.dev` |
+
+### Phases (every phase leaves all repos green)
+
+- **Phase A — code & packages rename:** wire 0.0.1 → sdk-rust + pypi 0.0.1 →
+  kernel crate/env/paths hard cutover → manager dep swap → GitHub renames
+  LAST (redirects cover everything meanwhile).
+- **Phase B — registry on R2:** domain + bucket + `cdn.vynkor.dev`;
+  `package.sh` gains upload step AND the S1 seven-field signature
+  (absorbs veyron-plugins Sequencing #4); all plugins re-signed as **0.0.1**
+  against the new URLs (maintainer key required). `registry.json` STAYS IN
+  GIT — PR review + revocation history; R2 hosts archives only.
+- **Phase C — installer & docs sweep:** `install.sh` targets
+  `~/.config/vyn/` + `https://vynkor.dev/install.sh`; docs/tracker closure;
+  AUR PKGBUILD (V-19) lands on the renamed world.
+
+### Prerequisites (owner-side)
+
+1. Buy `vynkor.dev` (~$10–15/yr; `.dev` is HSTS-preloaded — fine, served via
+   Cloudflare TLS). Short-term fallback: `vynkor.veyron.online`.
+2. Cloudflare account + R2 bucket + custom-domain binding.
+3. Signing key (`VYN_SIGNING_KEY_HEX`) available for the re-sign pass.
