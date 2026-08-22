@@ -24,11 +24,11 @@ fn python3_available() -> bool {
 fn sdk_python_dir() -> std::path::PathBuf {
     std::env::current_dir()
         .unwrap_or_default()
-        .join("../veyron-sdk-python")
+        .join("../vynkor-sdk-python")
 }
 
 /// Cross-SDK integration tests spawn the real `examples/echo_plugin.py`
-/// subprocess from the sibling repo `../veyron-sdk-python` (not a submodule)
+/// subprocess from the sibling repo `../vynkor-sdk-python` (not a submodule)
 /// — it needs `google.protobuf` on
 /// the system python3 (same dependency the existing `python_sdk_*` tests
 /// skip on via `ModuleNotFoundError`/`ImportError` string-matching), checked

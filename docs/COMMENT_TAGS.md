@@ -75,7 +75,7 @@ incl. MA-*), `docs/DUMB_CORE_AUDIT.md` (DC-* dumb-core findings + F1–F6 fixes)
 | MA-12 | log mutex poison instead of silently swallowing | ROADMAP | `utils/` |
 | MA-13 | reuse `veyron_wire` framing in WS gateway | ROADMAP | `api/websocket.rs` |
 | MA-14 | `utils/logging.rs` dedup + `try_init()` | ROADMAP | `utils/logging.rs` |
-| MA-15 | `veyron-wire` dead-code clippy check | ROADMAP | `../veyron-wire` |
+| MA-15 | `veyron-wire` dead-code clippy check | ROADMAP | `../vynkor-wire` |
 | MA-16 | separate tests from prod code in `registry.rs` | ROADMAP | `plugins/registry.rs` |
 | MA-17 | unify `validate_slug`/`validate_plugin_id` regex | ROADMAP | `utils/` |
 | MA-18 | `mint_device_token` length-checks `jwt_secret` | ROADMAP | `auth/jwt.rs` |

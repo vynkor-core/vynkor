@@ -2,13 +2,13 @@
 /// kernel.
 ///
 /// Spawns the actual plugin built from
-/// `../veyron-plugins/plugins/secrets/` (sibling repo veyron-core/veyron-plugins)
+/// `../vynkor-plugins/plugins/secrets/` (sibling repo veyron-core/vynkor-plugins)
 /// over the real UDS wire and verifies the kernel routes `secret_set`/
 /// `secret_get`/`secret_list` to it, that the per-action `permission: "secrets"`
 /// gate (Manifest v2) denies a caller without `PERMISSION_SECRETS`, and that
 /// the plugin's caller identity is kernel-stamped (per-caller vault isolation).
 /// Tests are skipped locally when the binary has not been built — run
-/// `cargo build --release` in `../veyron-plugins/plugins/secrets/`.
+/// `cargo build --release` in `../vynkor-plugins/plugins/secrets/`.
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -23,7 +23,7 @@ fn secrets_binary() -> Option<std::path::PathBuf> {
         return path.exists().then_some(path);
     }
     let cwd = std::env::current_dir().ok()?;
-    let rel = "../veyron-plugins/plugins/secrets/target/release/secrets";
+    let rel = "../vynkor-plugins/plugins/secrets/target/release/secrets";
     let p = cwd.join(rel);
     p.exists().then_some(p)
 }
@@ -56,7 +56,7 @@ async fn secrets_plugin_round_trip_with_permission() {
     let Some(bin) = secrets_binary() else {
         eprintln!(
             "[SKIP] secrets plugin binary not found — build via \
-             `cargo build --release` in ../veyron-plugins/plugins/secrets/, \
+             `cargo build --release` in ../vynkor-plugins/plugins/secrets/, \
              or set VYN_SECRETS_PLUGIN to an existing binary path"
         );
         return;
@@ -179,7 +179,7 @@ async fn secrets_plugin_denies_unprivileged_caller() {
     let Some(bin) = secrets_binary() else {
         eprintln!(
             "[SKIP] secrets plugin binary not found — build via \
-             `cargo build --release` in ../veyron-plugins/plugins/secrets/, \
+             `cargo build --release` in ../vynkor-plugins/plugins/secrets/, \
              or set VYN_SECRETS_PLUGIN to an existing binary path"
         );
         return;

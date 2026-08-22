@@ -327,7 +327,7 @@ explicit consent is not.
 # single-entry back-compat form, mapped to name "official")
 registries:
   - name: official                 # default source when omitted entirely
-    url: https://raw.githubusercontent.com/veyron-core/veyron-plugins/main/registry.json
+    url: https://raw.githubusercontent.com/veyron-core/vynkor-plugins/main/registry.json
     # public_key omitted → built-in pinned key applies by default;
     # relaxing official to unsigned needs allow_unsigned like any source
     cache_ttl_secs: 3600

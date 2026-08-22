@@ -43,12 +43,12 @@
     requires_confirmation }`); keep `actions[]` for the router.
   - New `DeviceInfo { device_id, os, arch, os_version, capabilities,
     last_seen, state }`.
-  - Files: `../veyron-wire/proto/veyron_protocol.proto`, `veyron_wire::PROTOCOL_VERSION`,
+  - Files: `../vynkor-wire/proto/veyron_protocol.proto`, `veyron_wire::PROTOCOL_VERSION`,
     vendored copies, `tests/unit/test_proto_sync.rs`.
   - Acceptance: regen compiles; six copies byte-identical; drift test green;
     `PROTOCOL_VERSION`/header/`Cargo.toml` bumped in one commit.
   - **Status (2026-08-14): SHIPPED** — proto v1.6 landed in `veyron-wire`
-    (`657b528`, merged via PR veyron-core/veyron-wire#4) as **0.2.3** (patch —
+    (`657b528`, merged via PR veyron-core/vynkor-wire#4) as **0.2.3** (patch —
     additive per the release rule); **published to crates.io 2026-08-14**.
     `PROTOCOL_VERSION` 1.6 + header + `Cargo.toml` in **one commit**. Vendored
     copies re-synced byte-identical in `veyron-sdk-python#3` (+ regenerated
@@ -69,7 +69,7 @@
   - Files: `src/plugins/registry.rs`.
   - Acceptance: registration stores device/user; `devices` populated;
     `last_seen` advances on ping/pong.
-  - **Status (2026-08-14): SHIPPED** — merged via PR veyron-core/veyron#23
+  - **Status (2026-08-14): SHIPPED** — merged via PR veyron-core/vynkor#23
     (`543c758`). `PluginEntry` gains `device_id`/`user_id` (empty →
     `"local"`/`"default"`); `devices: DashMap<device_id, DeviceInfo>` is
     populated at registration and `last_seen` advances on ping/pong (reuses
@@ -139,10 +139,10 @@
   Mirror the UDS client semantics (register, MAC enable, reconnect) over a WS
   backend. Respect the WS-gateway limits (no `FLAG_COMPRESSED`/`FLAG_FRAGMENTED`
   inbound; `FLAG_RAW_BINARY` passes).
-  - Files: `../veyron-sdk-rust/`.
+  - Files: `../vynkor-sdk-rust/`.
   - Acceptance: an SDK plugin connects to the WS endpoint, registers, and
     round-trips actions; integration test against the kernel WS gateway.
-  - **Status (2026-08-14): SHIPPED** — merged via PR veyron-core/veyron-sdk-rust#4
+  - **Status (2026-08-14): SHIPPED** — merged via PR veyron-core/vynkor-sdk-rust#4
     (`d0a7695`, commit `22bd761`). `VeyronClient::connect_ws(url, jwt, secret)`
     mirrors the UDS semantics over the kernel's WS gateway: the `veyron`
     subprotocol is always offered and the JWT rides the
@@ -250,7 +250,7 @@
   Permission-separation pattern: high-risk actions split into `request_*` (the
   AI's JWT can call) and `confirm_*` (only the user's device can call). SDK
   one-liner + a reference high-risk plugin demonstrating `requires_confirmation`.
-  - Files: `../veyron-sdk-rust/`, `../veyron-plugins/`.
+  - Files: `../vynkor-sdk-rust/`, `../vynkor-plugins/`.
   - Acceptance: the AI cannot call `confirm_*`; the user confirm path works.
   - **Status (2026-08-15): SHIPPED** — veyron-sdk-rust#5
     (`feat/d-09-confirmation-gate`): new `ConfirmationGate` SDK helper splits
@@ -280,7 +280,7 @@
   - Files: `src/ipc/protocol.rs`, `src/events/bus.rs`.
   - Acceptance: one action is traceable device → bridge → kernel → plugin via
     `message_id`.
-  - **Status (2026-08-15): SHIPPED** — merged via PR veyron-core/veyron#30
+  - **Status (2026-08-15): SHIPPED** — merged via PR veyron-core/vynkor#30
     (`68da36a`, commit `5b663a6`). `build_outbound` keeps a caller-set
     `message_id` (fresh `k-{ts}-{seq}` only when absent) and shares the id
     sequence with the event bus via `kernel_message_id()` so the two stamping
@@ -304,7 +304,7 @@
   overlay, confirmation gate, least-privilege AI) — consolidating §10/§19/§21.
   - Files: `docs/THREAT_MODEL.md` (new).
   - Acceptance: doc exists and covers the four actors.
-  - **Status (2026-08-15): SHIPPED** — merged via PR veyron-core/veyron#31
+  - **Status (2026-08-15): SHIPPED** — merged via PR veyron-core/vynkor#31
     (`3c111bb`, commit `2926b51`). `docs/THREAT_MODEL.md` (new, 176 lines)
     documents assets and the four actors (external attacker, compromised
     plugin, compromised device, malicious prompt) with per-actor threat
@@ -316,10 +316,10 @@
   Local STT plugin (whisper.cpp/vosk) emits text to the host; host TTS streams
   Opus to the client speaker via the existing `FLAG_RAW_BINARY` +
   `AudioStreamChunk` path. Audio never leaves the device for STT.
-  - Files: `../veyron-plugins/`.
+  - Files: `../vynkor-plugins/`.
   - Acceptance: local STT → text event; host TTS → Opus → client speaker.
   - **Status (2026-08-15): SHIPPED** — merged via PR
-    veyron-core/veyron-plugins#13 (`daae966`). Both legs of the pipeline
+    veyron-core/vynkor-plugins#13 (`daae966`). Both legs of the pipeline
     landed in the plugins repo. Host-TTS → client-speaker: `tts` gains
     `tts_speak` — synthesize locally (sherpa), encode PCM as Opus (new
     `provider/opus.rs`, 20 ms frames), and stream `AudioStreamChunk`
@@ -347,10 +347,10 @@
   timer; host `get_snapshot` action + subscribe to delta events; on reconnect,
   pull snapshot then subscribe (event bus is at-least-once to connected
   subscribers only).
-  - Files: `../veyron-plugins/` (sync/database plugin), client scheduler.
+  - Files: `../vynkor-plugins/` (sync/database plugin), client scheduler.
   - Acceptance: offline client catches up on reconnect; state push works.
   - **Status (2026-08-15): SHIPPED** — merged via PR
-    veyron-core/veyron-plugins#14 (`7ab76ba`, commit message `feat(d-13)`).
+    veyron-core/vynkor-plugins#14 (`7ab76ba`, commit message `feat(d-13)`).
     `sync` (host-side versioned SQLite KV store): `sync_get_snapshot` /
     `sync_get` / `sync_set` / `sync_del`; every mutation bumps a monotonic
     persisted version and publishes `plugin.sync.sync.delta` (op/key/value/
@@ -423,7 +423,7 @@
 - [ ] **D-15 — Web companion (wss chat/control) + Web Push.**
   Browser/PWA client speaking the frame protocol over wss (TS), chat with the
   AI, control panel; Web Push (VAPID) for notifications.
-  - Files: `../veyron-web` or new.
+  - Files: `../vynkor-web` or new.
   - Acceptance: browser chats with the agent + controls the host + receives push.
 
 - [ ] **D-16 — Android distribution.**

@@ -403,7 +403,7 @@ backlog (polish).
       compress/decompress on async threads (`wire/src/framing.rs:137-152,240`);
       sync `/proc` reads in the watchdog loop (`supervisor.rs:852,864`); WS
       double payload copy per frame (`websocket.rs:220,246-258`).
-  - Files: `../veyron-wire/src/framing.rs`, `src/plugins/supervisor.rs`,
+  - Files: `../vynkor-wire/src/framing.rs`, `src/plugins/supervisor.rs`,
     `src/api/websocket.rs`.
   - **Status (2026-08-14): OPEN.**
 
@@ -598,7 +598,7 @@ the audit's §E: **P0** before next release (monoliths + error-system unificatio
 - [x] MA-15 — **Check `veyron-wire` for dead code:** `cargo clippy -- -D
       warnings` on the `veyron-wire` workspace may flag `dead_code` (e.g.
       `BLOOM`).
-  - Files: `../veyron-wire/`.
+  - Files: `../vynkor-wire/`.
   - Acceptance: `cargo clippy --all-targets -- -D warnings` clean on
     `veyron-wire`.
   - **Status (2026-08-21): FIXED** — no dead_code found (`BLOOM` doesn't
@@ -725,7 +725,7 @@ rest) · **P1** = F3/F4/F5/F6 (this cycle).
   manifest feature):** `action_specs`/`get_manifest` stay in the protocol as a
   generic per-action capability mechanism with the "for the AI" framing
   removed (comments/wording only — no wire break, no feature removal).
-  - Files: `../veyron-wire/proto/veyron_protocol.proto:159-173`,
+  - Files: `../vynkor-wire/proto/veyron_protocol.proto:159-173`,
     `src/kernel/commands.rs:79-127` (`get_manifest`),
     `src/events/bus.rs:223-259`.
   - Acceptance: no "for the AI"/"to the AI"/"AI" references in the protocol
@@ -1136,7 +1136,7 @@ surfaces cover every planned plugin).
   - Acceptance: Python/C++ SDK examples exercise `publish_event` and
     storage-permission manifests against a v1.4 kernel.
   - **Status (2026-08-13): SHIPPED** — all three sibling copies
-    (`../veyron-wire`, `../veyron-sdk-python`, `../veyron-sdk-cpp` proto
+    (`../vynkor-wire`, `../vynkor-sdk-python`, `../vynkor-sdk-cpp` proto
     files) are byte-identical at v1.4; R8-05 was extended with a staleness
     check on the generated Python binding asserting the five new
     permission names plus `caller_plugin_id`, so a regen skip fails loudly.
@@ -1162,7 +1162,7 @@ surfaces cover every planned plugin).
   instead of 0. Renumbering flips the default to "unknown", so a missed
   `set_status()` fails loudly downstream instead of faking success.
 
-  **Current → target** (in `../veyron-wire/proto/veyron_protocol.proto`):
+  **Current → target** (in `../vynkor-wire/proto/veyron_protocol.proto`):
 
   | `ActionStatus` | now | after | | `CommandStatus` | now | after |
   |---|---|---|---|---|---|---|
@@ -1181,20 +1181,20 @@ surfaces cover every planned plugin).
 
   **Where** (every location that must move in lockstep — one wire-breaking
   version, no partial landings):
-  - `../veyron-wire/proto/veyron_protocol.proto` — the renumber itself;
+  - `../vynkor-wire/proto/veyron_protocol.proto` — the renumber itself;
     header `// v 1.4` → `// v 1.5`.
-  - `../veyron-wire/src/lib.rs` — `PROTOCOL_VERSION` `"1.4"` → `"1.5"`,
+  - `../vynkor-wire/src/lib.rs` — `PROTOCOL_VERSION` `"1.4"` → `"1.5"`,
     same commit as the header (they must stay in sync).
-  - `../veyron-wire/Cargo.toml` — `0.2.1` → `0.3.0`: breaking wire changes
+  - `../vynkor-wire/Cargo.toml` — `0.2.1` → `0.3.0`: breaking wire changes
     bump the **minor** (additive changes bump patch), per the wire README.
-  - `../veyron-sdk-python/proto/veyron_protocol.proto`,
-    `../veyron-sdk-cpp/proto/veyron_protocol.proto` — re-sync byte-identical
+  - `../vynkor-sdk-python/proto/veyron_protocol.proto`,
+    `../vynkor-sdk-cpp/proto/veyron_protocol.proto` — re-sync byte-identical
     (R8-05 reads these sibling paths directly and fails on drift).
-  - `../veyron-sdk-python/veyron/veyron_protocol_pb2.py` — regenerate via
-    `../veyron-sdk-python/scripts/gen_proto_python.py`. Caveat: the R8-05 staleness marker check
+  - `../vynkor-sdk-python/veyron/veyron_protocol_pb2.py` — regenerate via
+    `../vynkor-sdk-python/scripts/gen_proto_python.py`. Caveat: the R8-05 staleness marker check
     asserts symbol **names**, not values, so a pure renumber with a skipped
     regen would NOT fail loudly — the regen must be done deliberately.
-  - `../veyron-sdk-rust/Cargo.toml` — `veyron-wire = "0.2.1"` → `"0.3.0"`.
+  - `../vynkor-sdk-rust/Cargo.toml` — `veyron-wire = "0.2.1"` → `"0.3.0"`.
   - `Cargo.toml` (this repo) — keep the `[patch.crates-io]` override until
     wire 0.3.0 publishes, then drop the wire entry (the `veyron-sdk 0.1.3`
     entry stays until that crate publishes).
@@ -1263,13 +1263,13 @@ surfaces cover every planned plugin).
   sibling-repo paths directly and now also checks the generated Python
   binding for staleness.
 - **sdk/python/proto**, **sdk/cpp/proto** vendored copies: guarded by the R8-05
-  drift test, which reads them via sibling-repo paths (`../veyron-sdk-python`,
-  `../veyron-sdk-cpp`) after the submodule removal below.
+  drift test, which reads them via sibling-repo paths (`../vynkor-sdk-python`,
+  `../vynkor-sdk-cpp`) after the submodule removal below.
 - **Submodules removed (temporary decision, 2026-08-11):** `sdk/*` and `wire/`
   are no longer git submodules of this repo. The kernel consumes `veyron-wire`
   and `veyron-sdk` from crates.io; cross-SDK integration tests and the proto
-  drift guard read sources from the sibling repos (`../veyron-wire`,
-  `../veyron-sdk-cpp`, `../veyron-sdk-python`), which CI checks out itself.
+  drift guard read sources from the sibling repos (`../vynkor-wire`,
+  `../vynkor-sdk-cpp`, `../vynkor-sdk-python`), which CI checks out itself.
   **Revisit in the future:** decide between a true monorepo, restored
   submodules, or published-artifact-only consumption — see the trade-offs
   (lockstep proto iteration vs. release cadence) recorded at removal time.
@@ -1386,9 +1386,9 @@ D-04** (identity + versioning + discovery, one proto bump), then D-05 → D-07
   requires_confirmation }`); new `DeviceInfo`/`DeviceState`/`ActionRisk`.
   `PROTOCOL_VERSION` 1.5 → 1.6, `veyron-wire` 0.2.2 → 0.2.3 (patch —
   additive), header + const + `Cargo.toml` in one commit.
-  - Files: `../veyron-wire/proto/veyron_protocol.proto`,
-    `../veyron-wire/src/lib.rs`, `../veyron-wire/Cargo.toml`, vendored
-    copies (`../veyron-sdk-python`, `../veyron-sdk-cpp`), regenerated
+  - Files: `../vynkor-wire/proto/veyron_protocol.proto`,
+    `../vynkor-wire/src/lib.rs`, `../vynkor-wire/Cargo.toml`, vendored
+    copies (`../vynkor-sdk-python`, `../vynkor-sdk-cpp`), regenerated
     `veyron_protocol_pb2.py`, `tests/unit/test_proto_sync.rs`.
   - Acceptance: regen compiles; copies byte-identical; drift test green;
     header/`PROTOCOL_VERSION`/`Cargo.toml` bumped in one commit.

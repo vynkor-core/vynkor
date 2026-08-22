@@ -3,7 +3,7 @@
 **Date:** 2026-08-16
 **Scope:** full kernel — `src/kernel`, `src/api`, `src/plugins`, `src/events`,
 `src/ipc`, `src/auth`, `src/marketplace`, `src/bridge`, `src/cli`, `src/utils`,
-plus the wire protocol (`../veyron-wire/proto/veyron_protocol.proto`).
+plus the wire protocol (`../vynkor-wire/proto/veyron_protocol.proto`).
 **Companion:** findings mirrored as DC-1…DC-5 in `AUDIT.md`.
 **Status:** all findings **OPEN**. This file is the working plan for the fixes.
 
@@ -128,7 +128,7 @@ signed-archive verification stays a kernel security boundary.
   per-device JWTs (`src/cli/token.rs`).
 - Bridge: `src/bridge/mod.rs` (810 L) — `role: client` mirrors local plugins to
   a host kernel over WS as `device.<cap>` (`:199-201,283-297`).
-- Wire protocol: `PluginRegister` device fields (`../veyron-wire/proto/...:
+- Wire protocol: `PluginRegister` device fields (`../vynkor-wire/proto/...:
   79-88`), `DeviceInfo`/`DeviceOs`/`DeviceState` (`:107-133`).
 - Config: `Role::{Host,Client}`, `BridgeConfig`, `device_id`
   (`src/utils/config.rs:61-91,110-118`).
@@ -160,7 +160,7 @@ move interpretation/UX outside; keep transport and auth tooling.
 
 **Where:**
 - Wire proto: `ActionSpec`/`ActionRisk` — comment: *"tool schema for the AI
-  (D-08)"* (`../veyron-wire/proto/veyron_protocol.proto:159-173`).
+  (D-08)"* (`../vynkor-wire/proto/veyron_protocol.proto:159-173`).
 - `src/kernel/commands.rs` `get_manifest` (`:79-127`) — comment: *"D-08:
   tool-calling surface — serve a plugin's manifest (incl. action_specs) to the
   AI"*.
@@ -356,7 +356,7 @@ files, steps and acceptance criteria.
   per-action capability mechanism**, with the "for the AI" framing removed.
 - **Decision (§7):** generic manifest feature — no wire break, no feature
   removal; neutral wording everywhere.
-- **Files:** `../veyron-wire/proto/veyron_protocol.proto:159-173`,
+- **Files:** `../vynkor-wire/proto/veyron_protocol.proto:159-173`,
   `src/kernel/commands.rs:79-127` (`get_manifest`), `src/events/bus.rs:223-259`.
 - **Steps:**
   1. Reword the proto comments on `ActionSpec`/`ActionRisk` from "tool schema
