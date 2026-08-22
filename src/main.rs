@@ -8,7 +8,7 @@ use veyron::cli::{complete, device, devices, plugin, token};
 use veyron::cli::{Cli, Commands};
 use veyron::kernel;
 use veyron::utils;
-use veyron::utils::config::{load_config, resolve_plugins_dir, BridgeConfig, Config, Role};
+use veyron::utils::config::{load_config, BridgeConfig, Config, Role};
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -137,23 +137,14 @@ async fn run_kernel(cli: Cli) -> Result<()> {
         Commands::Plugin { cmd, config, token } => {
             let cfg = load_config(&config).unwrap_or_default();
             let token = token.or_else(|| std::env::var("VEYRON_JWT_TOKEN").ok());
-            let plugins_dir = resolve_plugins_dir(&config, cfg.plugins_dir.as_deref());
             let cert_path = veyron::utils::config::effective_tls_cert_path(&cfg);
             plugin::handle(
                 cmd,
                 cfg.port,
-                cfg.registry_url.as_deref(),
                 token.as_deref(),
                 cfg.tls,
                 cert_path.as_deref(),
-                cfg.registry_cache_ttl_secs,
-                &cfg.tmp_dir,
-                cfg.max_archive_bytes,
-                cfg.max_extracted_bytes,
-                cfg.max_archive_entries,
-                cfg.marketplace_public_key.as_deref(),
                 &config,
-                &plugins_dir,
             )
             .await?;
         }
