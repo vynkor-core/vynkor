@@ -674,8 +674,19 @@ rest) · **P1** = F3/F4/F5/F6 (this cycle).
 | P0 | F1, F2 | `docs/DUMB_CORE_AUDIT.md` §6 |
 | P1 | F3, F4, F5, F6 | `docs/DUMB_CORE_AUDIT.md` §6 |
 
-- [ ] F1 (DC-1, P0) — **Extract the marketplace out of the kernel:**
+- [x] F1 (DC-1, P0) — **Extract the marketplace out of the kernel:**
   `src/marketplace/` no longer ships in the `vyn` binary.
+  **SHIPPED 2026-08-22** — standalone repo
+  [`vynkor-manager`](https://github.com/veyron-core/vynkor-manager) (`vynm`),
+  manifest module in veyron-wire 0.2.4–0.2.6 behind the `manifest` feature,
+  kernel marketplace deleted in veyron PR #43; `vyn plugin install/search/…`
+  are delegation shims to `vynm`. Task breakdown: `docs/VYNM_ROADMAP.md`
+  (V-01…V-07 done; V-08 closes stage 2).
+  - **Authoritative plan: `docs/VYNM_PLAN.md`** (finalized 2026-08-21 —
+    separate repo `vynkor-manager`, manifest module in veyron-wire behind a
+    feature, independent versioning, multi-source registries with optional
+    keys). The decision below is kept for history; where it differs from
+    VYNM_PLAN, VYNM_PLAN wins.
   - Decision (§7): standalone binary **`vynm`** ("vyn manager") — no new
     kernel surface, writes the same `plugins.d/` drop-ins the kernel already
     reads; UX: `vynm install|search|list|remove|enable|disable`; new
@@ -1330,7 +1341,7 @@ surfaces cover every planned plugin).
 | MA-17 | unify `validate_slug`/`validate_plugin_id` regex — **FIXED** (2026-08-21): shared `utils::validate::validate_identifier`; `"."`/`".."` now rejected as plugin ids too | none |
 | MA-18 | `mint_device_token` length-checks `jwt_secret` — **FIXED** (2026-08-21): constant moved to `auth::jwt`, enforced at every mint site | none |
 | MA-19 | `debug_assert!` + SAFETY comment on `unsafe` in `main.rs:391` — **FIXED** (2026-08-21) | none |
-| F1 | marketplace out of the kernel → standalone `vynm` binary (DC-1) — **OPEN** (P0, 2026-08-16 dumb-core audit) | none |
+| F1 | marketplace out of the kernel → standalone `vynm` binary (DC-1) — **SHIPPED** 2026-08-22 (`vynkor-manager` + veyron PR #43) (P0, 2026-08-16 dumb-core audit) | none |
 | F2 | device surfaces as dumb pass-through; interpretation moves to a `discovery` plugin (DC-2) — **OPEN** (P0) | none |
 | F3 | bridge stays as transport; strip `device.<cap>` capability interpretation (DC-2) — **OPEN** (P1) | F2 |
 | F4 | neutralize AI tool-calling surface → generic manifest feature (DC-3) — **OPEN** (P1) | none |

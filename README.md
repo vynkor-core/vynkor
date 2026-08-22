@@ -136,14 +136,25 @@ max_restarts: 5
 sandbox: true        # Linux only
 ```
 
-`vyn plugin install` writes `plugins.d/<slug>.yaml`; `vyn plugin remove`
-deletes it. `vyn plugin disable <slug>` keeps a plugin installed but stops it
-auto-spawning by renaming its drop-in to `<slug>.yaml.disabled` (R10-04);
-`vyn plugin enable <slug>` restores it. The legacy inline `plugins:` list in
-`config.yaml` still works but is deprecated — install/remove no longer touch
-`config.yaml`. SIGHUP re-reads config + drop-ins (surfacing parse errors /
-duplicate ids) but does not respawn the plugin set — restart the kernel to
-apply plugin changes.
+`vynm` (the [vynkor-manager](https://github.com/veyron-core/vynkor-manager)
+companion tool) installs plugins: it fetches a registry, verifies maintainer
+signatures + archive digests, extracts into `~/.local/lib/veyron/plugins/`,
+and writes the drop-in `plugins.d/<slug>.yaml`. The kernel itself ships no
+marketplace code — drop-ins are just files it reads.
+
+```bash
+cargo install vynkor-manager   # provides the vynm binary
+vynm install my-plugin         # same --config as the kernel
+```
+
+`vynm remove <slug>` deletes it; `vynm disable/enable <slug>` toggles
+auto-spawn by renaming the drop-in to `<slug>.yaml.disabled` (R10-04).
+The legacy `vyn plugin install/search/...` commands still work as
+delegation shims that exec `vynm` with forwarded args — they will be removed
+in stage 3. The legacy inline `plugins:` list in `config.yaml` also still
+works but is deprecated. SIGHUP re-reads config + drop-ins (surfacing parse
+errors / duplicate ids) but does not respawn the plugin set — restart the
+kernel to apply plugin changes.
 
 ### Run
 
