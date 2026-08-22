@@ -5,7 +5,7 @@ use tokio::sync::mpsc;
 use vynkor::events::bus::EventBus;
 use vynkor::ipc::framing::Frame;
 use vynkor::plugins::registry::PluginRegistry;
-use vynkor::proto::veyron::{envelope, Envelope, Event, PluginManifest};
+use vynkor::proto::vynkor::{envelope, Envelope, Event, PluginManifest};
 
 fn empty_frame() -> Frame {
     Frame {

@@ -2,8 +2,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use vynkor::plugins::registry::{DeviceMeta, DeviceOs, DeviceState, PluginRegistry, PluginState};
-use vynkor::proto::veyron::PluginManifest;
-use vynkor::utils::errors::VeyronError;
+use vynkor::proto::vynkor::PluginManifest;
+use vynkor::utils::errors::VynkorError;
 
 fn dummy_write_tx() -> mpsc::Sender<vynkor::ipc::connection::Outbound> {
     mpsc::channel::<vynkor::ipc::connection::Outbound>(1).0
@@ -67,7 +67,7 @@ fn register_rejects_invalid_plugin_ids() {
             "",
         );
         assert!(
-            matches!(res, Err(VeyronError::InvalidPluginId(_))),
+            matches!(res, Err(VynkorError::InvalidPluginId(_))),
             "id {id:?} must be rejected, got {res:?}"
         );
     }
@@ -108,7 +108,7 @@ fn duplicate_plugin_id_rejected() {
     );
 
     assert!(
-        matches!(result, Err(VeyronError::PluginAlreadyRegistered(_))),
+        matches!(result, Err(VynkorError::PluginAlreadyRegistered(_))),
         "expected PluginAlreadyRegistered, got {:?}",
         result
     );
@@ -138,7 +138,7 @@ fn second_registration_on_same_conn_rejected_without_orphaning() {
         "",
     );
     assert!(
-        matches!(result, Err(VeyronError::PluginAlreadyRegistered(_))),
+        matches!(result, Err(VynkorError::PluginAlreadyRegistered(_))),
         "re-registration on a live conn must be rejected, got {:?}",
         result
     );

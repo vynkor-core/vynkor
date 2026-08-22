@@ -30,7 +30,7 @@ impl SdkHarness {
     /// Start a kernel with no auth on a unique socket path and port.
     pub async fn start() -> Self {
         let port = alloc_port();
-        let socket_path = PathBuf::from(format!("/tmp/veyron_sdk_test_{port}.sock"));
+        let socket_path = PathBuf::from(format!("/tmp/vynkor_sdk_test_{port}.sock"));
         Self::start_at(socket_path, port, None).await
     }
 
@@ -38,7 +38,7 @@ impl SdkHarness {
     #[allow(dead_code)]
     pub async fn start_secured(secret: &str) -> Self {
         let port = alloc_port();
-        let socket_path = PathBuf::from(format!("/tmp/veyron_sdk_sec_{port}.sock"));
+        let socket_path = PathBuf::from(format!("/tmp/vynkor_sdk_sec_{port}.sock"));
         Self::start_at(socket_path, port, Some(secret.to_string())).await
     }
 
@@ -49,8 +49,8 @@ impl SdkHarness {
         let cfg = Config {
             socket_path: socket_str,
             port,
-            pid_file: format!("/tmp/veyron_sdk_{port}.pid").into(),
-            log_file: format!("/tmp/veyron_sdk_{port}.log").into(),
+            pid_file: format!("/tmp/vynkor_sdk_{port}.pid").into(),
+            log_file: format!("/tmp/vynkor_sdk_{port}.log").into(),
             allow_no_auth: jwt_secret.is_none(),
             jwt_secret: jwt_secret.clone(),
             ..Config::default()

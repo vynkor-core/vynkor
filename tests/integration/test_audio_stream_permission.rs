@@ -2,20 +2,20 @@ use super::helpers::start_kernel;
 use std::time::Duration;
 use tokio::time::timeout;
 use vynkor::ipc::framing::FLAG_RAW_BINARY;
-use vynkor::proto::veyron::{envelope, ErrorCode, PluginManifest};
-use vynkor_sdk::VeyronClient;
+use vynkor::proto::vynkor::{envelope, ErrorCode, PluginManifest};
+use vynkor_sdk::VynkorClient;
 
 /// Plugin without PERMISSION_AUDIO_STREAM sends a FLAG_RAW_BINARY frame →
 /// receives ERR_PERMISSION_DENIED; the target plugin receives nothing.
 #[tokio::test]
 async fn audio_stream_denied_without_permission() {
     let (shutdown_tx, _registry, _bus) =
-        start_kernel("/tmp/veyron_integ_audio_perm.sock", 19250).await;
+        start_kernel("/tmp/vynkor_integ_audio_perm.sock", 19250).await;
 
-    let mut sender = VeyronClient::connect("/tmp/veyron_integ_audio_perm.sock")
+    let mut sender = VynkorClient::connect("/tmp/vynkor_integ_audio_perm.sock")
         .await
         .unwrap();
-    let mut target = VeyronClient::connect("/tmp/veyron_integ_audio_perm.sock")
+    let mut target = VynkorClient::connect("/tmp/vynkor_integ_audio_perm.sock")
         .await
         .unwrap();
 
@@ -74,12 +74,12 @@ async fn audio_stream_denied_without_permission() {
 #[tokio::test]
 async fn audio_stream_allowed_with_permission() {
     let (shutdown_tx, _registry, _bus) =
-        start_kernel("/tmp/veyron_integ_audio_perm2.sock", 19251).await;
+        start_kernel("/tmp/vynkor_integ_audio_perm2.sock", 19251).await;
 
-    let mut sender = VeyronClient::connect("/tmp/veyron_integ_audio_perm2.sock")
+    let mut sender = VynkorClient::connect("/tmp/vynkor_integ_audio_perm2.sock")
         .await
         .unwrap();
-    let mut target = VeyronClient::connect("/tmp/veyron_integ_audio_perm2.sock")
+    let mut target = VynkorClient::connect("/tmp/vynkor_integ_audio_perm2.sock")
         .await
         .unwrap();
 

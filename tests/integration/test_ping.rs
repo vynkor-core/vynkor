@@ -1,14 +1,14 @@
 use super::helpers::start_kernel;
 use std::time::Duration;
 use tokio::time::timeout;
-use vynkor::proto::veyron::{envelope, PluginManifest};
-use vynkor_sdk::VeyronClient;
+use vynkor::proto::vynkor::{envelope, PluginManifest};
+use vynkor_sdk::VynkorClient;
 
 #[tokio::test]
 async fn ping_pong_round_trip() {
-    let (shutdown_tx, _registry, _bus) = start_kernel("/tmp/veyron_integ_ping.sock", 19206).await;
+    let (shutdown_tx, _registry, _bus) = start_kernel("/tmp/vynkor_integ_ping.sock", 19206).await;
 
-    let mut client = VeyronClient::connect("/tmp/veyron_integ_ping.sock")
+    let mut client = VynkorClient::connect("/tmp/vynkor_integ_ping.sock")
         .await
         .unwrap();
     client
@@ -31,9 +31,9 @@ async fn ping_pong_round_trip() {
 
 #[tokio::test]
 async fn pong_carries_original_timestamp() {
-    let (shutdown_tx, _registry, _bus) = start_kernel("/tmp/veyron_integ_pong.sock", 19207).await;
+    let (shutdown_tx, _registry, _bus) = start_kernel("/tmp/vynkor_integ_pong.sock", 19207).await;
 
-    let mut client = VeyronClient::connect("/tmp/veyron_integ_pong.sock")
+    let mut client = VynkorClient::connect("/tmp/vynkor_integ_pong.sock")
         .await
         .unwrap();
     client
@@ -42,7 +42,7 @@ async fn pong_carries_original_timestamp() {
         .unwrap();
 
     use prost::Message;
-    use vynkor::proto::veyron::{Envelope, Ping};
+    use vynkor::proto::vynkor::{Envelope, Ping};
     let ping_env = Envelope {
         payload: Some(envelope::Payload::Ping(Ping { timestamp: 12345 })),
         ..Default::default()

@@ -84,13 +84,13 @@ fn mint_device_token_round_trips_claims() {
         vec!["PERMISSION_IPC_SEND".into()],
         vec!["kernel".into()],
         3600,
-        "veyron",
+        "vynkor",
     )
     .unwrap();
     let validator = JwtValidator::new(SECRET);
     let claims = validator.validate(&token).unwrap();
     assert_eq!(claims.sub, "phone-1");
-    assert_eq!(claims.aud.as_deref(), Some("veyron"));
+    assert_eq!(claims.aud.as_deref(), Some("vynkor"));
     let nonce = claims
         .jti
         .as_deref()
@@ -116,22 +116,22 @@ fn minted_device_tokens_are_distinct() {
 
 #[test]
 fn mint_device_token_rejects_empty_device_and_zero_ttl() {
-    assert!(mint_device_token(SECRET, " ", vec![], vec![], 3600, "veyron").is_err());
-    assert!(mint_device_token(SECRET, "phone-1", vec![], vec![], 0, "veyron").is_err());
+    assert!(mint_device_token(SECRET, " ", vec![], vec![], 3600, "vynkor").is_err());
+    assert!(mint_device_token(SECRET, "phone-1", vec![], vec![], 0, "vynkor").is_err());
 }
 
 #[test]
 fn mint_device_token_rejects_short_secret() {
     // MA-18: same MIN_JWT_SECRET_BYTES threshold as kernel boot
-    assert!(mint_device_token(b"short", "phone-1", vec![], vec![], 3600, "veyron").is_err());
-    assert!(mint_device_token(&[b'x'; 31], "phone-1", vec![], vec![], 3600, "veyron").is_err());
-    assert!(mint_device_token(&[b'x'; 32], "phone-1", vec![], vec![], 3600, "veyron").is_ok());
+    assert!(mint_device_token(b"short", "phone-1", vec![], vec![], 3600, "vynkor").is_err());
+    assert!(mint_device_token(&[b'x'; 31], "phone-1", vec![], vec![], 3600, "vynkor").is_err());
+    assert!(mint_device_token(&[b'x'; 32], "phone-1", vec![], vec![], 3600, "vynkor").is_ok());
 }
 
 #[test]
 fn audience_enforced_when_configured() {
     let token = create_device_token("phone-1", vec![], SECRET, 3600);
-    let matching = JwtValidator::with_audience(SECRET, Some("veyron".into()));
+    let matching = JwtValidator::with_audience(SECRET, Some("vynkor".into()));
     assert!(matching.validate(&token).is_ok());
 
     let mismatched = JwtValidator::with_audience(SECRET, Some("other-hub".into()));
@@ -152,7 +152,7 @@ fn audience_scoped_token_without_nonce_rejected() {
         ipc_targets: vec![],
         exp: unix_now() + 3600,
         iat: unix_now(),
-        aud: Some("veyron".into()),
+        aud: Some("vynkor".into()),
         jti: None,
     };
     let token = encode(

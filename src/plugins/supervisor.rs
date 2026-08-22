@@ -5,8 +5,8 @@ use crate::plugins::metrics::drain_to_log;
 #[cfg(target_os = "linux")]
 use crate::plugins::metrics::proc_resource_usage;
 use crate::plugins::registry::PluginRegistry;
-use crate::proto::veyron::{envelope, Envelope, Event, Ping};
-use crate::utils::errors::VeyronError;
+use crate::proto::vynkor::{envelope, Envelope, Event, Ping};
+use crate::utils::errors::VynkorError;
 use dashmap::DashMap;
 use metrics::{counter, gauge};
 use prost::Message;
@@ -200,7 +200,7 @@ impl PluginSupervisor {
         locked.iter().skip(skip).cloned().collect()
     }
 
-    pub async fn spawn_plugin(&self, config: PluginConfig) -> Result<PluginProcess, VeyronError> {
+    pub async fn spawn_plugin(&self, config: PluginConfig) -> Result<PluginProcess, VynkorError> {
         self.spawn_internal(config, 0, None).await
     }
 
@@ -209,12 +209,12 @@ impl PluginSupervisor {
         config: PluginConfig,
         restart_count: u32,
         replace_epoch: Option<u64>,
-    ) -> Result<PluginProcess, VeyronError> {
+    ) -> Result<PluginProcess, VynkorError> {
         // B3: a manual start must never clobber a live entry. A supervised
         // restart carries a token (Some) — it replaces its own dead entry;
         // a route-level start has none and refuses while one is registered.
         if replace_epoch.is_none() && self.entries.contains_key(&config.plugin_id) {
-            return Err(VeyronError::PluginAlreadyRunning(config.plugin_id.clone()));
+            return Err(VynkorError::PluginAlreadyRunning(config.plugin_id.clone()));
         }
 
         let epoch = self.next_epoch.fetch_add(1, Ordering::Relaxed) + 1;
@@ -362,7 +362,7 @@ impl PluginSupervisor {
                 if let Some(cg) = &cgroup_path {
                     crate::plugins::runner::cleanup_pids_cgroup(cg);
                 }
-                return Err(VeyronError::Io(e));
+                return Err(VynkorError::Io(e));
             }
         };
 
@@ -384,11 +384,11 @@ impl PluginSupervisor {
             let line = tokio::time::timeout(Duration::from_secs(15), lines.next_line())
                 .await
                 .map_err(|_| {
-                    VeyronError::Internal(
+                    VynkorError::Internal(
                         "sandbox shim did not report a plugin pid within 15s".into(),
                     )
                 })?
-                .map_err(VeyronError::Io)?;
+                .map_err(VynkorError::Io)?;
             let plugin_pid = match line.as_deref().and_then(|l| l.trim().parse::<u32>().ok()) {
                 Some(p) if p > 0 => p,
                 _ => {
@@ -401,14 +401,14 @@ impl PluginSupervisor {
                     if let Some(cg) = &cgroup_path {
                         crate::plugins::runner::cleanup_pids_cgroup(cg);
                     }
-                    return Err(VeyronError::Internal(format!(
+                    return Err(VynkorError::Internal(format!(
                         "sandbox shim exited before the plugin started (line: {line:?})"
                     )));
                 }
             };
             let shim_pid = child
                 .id()
-                .ok_or_else(|| VeyronError::Internal("no shim pid".into()))?;
+                .ok_or_else(|| VynkorError::Internal("no shim pid".into()))?;
             // leftover shim stdout (should be empty) drains like a normal stream
             let buf = Arc::clone(&log_buf);
             tokio::spawn(async move {
@@ -424,7 +424,7 @@ impl PluginSupervisor {
         } else {
             let pid = child
                 .id()
-                .ok_or_else(|| VeyronError::Internal("no pid".into()))?;
+                .ok_or_else(|| VynkorError::Internal("no pid".into()))?;
             if let Some(stdout) = child.stdout.take() {
                 drain_to_log(stdout, Arc::clone(&log_buf), max_lines);
             }
@@ -531,11 +531,11 @@ impl PluginSupervisor {
         Ok(PluginProcess { plugin_id, pid })
     }
 
-    pub async fn stop_plugin(&self, plugin_id: &str) -> Result<(), VeyronError> {
+    pub async fn stop_plugin(&self, plugin_id: &str) -> Result<(), VynkorError> {
         let entry = self
             .entries
             .remove(plugin_id)
-            .ok_or_else(|| VeyronError::PluginNotFound(plugin_id.to_string()))?;
+            .ok_or_else(|| VynkorError::PluginNotFound(plugin_id.to_string()))?;
 
         // B3: an explicit stop is terminal — record the instance so an
         // in-flight backoff restart can't resurrect the plugin.
@@ -574,12 +574,12 @@ impl PluginSupervisor {
     // Sends SIGTERM without removing the entry so monitor_loop restarts the plugin.
     // Marks the plugin for forced restart so it respawns even under a Never /
     // OnFailure policy or after max_restarts — a manual restart overrides policy.
-    pub async fn restart_plugin(&self, plugin_id: &str) -> Result<(), VeyronError> {
+    pub async fn restart_plugin(&self, plugin_id: &str) -> Result<(), VynkorError> {
         let target = self
             .entries
             .get(plugin_id)
             .map(|e| e.signal_target())
-            .ok_or_else(|| VeyronError::PluginNotFound(plugin_id.to_string()))?;
+            .ok_or_else(|| VynkorError::PluginNotFound(plugin_id.to_string()))?;
 
         self.forced_restarts.insert(plugin_id.to_string(), ());
         let _ = nix::sys::signal::kill(
@@ -794,9 +794,9 @@ impl PluginSupervisor {
                 // reads the plugin pid, not the shim's
                 #[cfg(target_os = "linux")]
                 if let Some((cpu, rss)) = proc_resource_usage(pid) {
-                    gauge!("veyron_plugin_cpu_seconds_total", "plugin_id" => plugin_id.clone())
+                    gauge!("vynkor_plugin_cpu_seconds_total", "plugin_id" => plugin_id.clone())
                         .set(cpu);
-                    gauge!("veyron_plugin_memory_rss_bytes", "plugin_id" => plugin_id.clone())
+                    gauge!("vynkor_plugin_memory_rss_bytes", "plugin_id" => plugin_id.clone())
                         .set(rss);
                 }
 

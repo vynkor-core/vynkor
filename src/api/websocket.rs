@@ -43,14 +43,14 @@ pub struct WsGateway {
     pub register_timeout_secs: u64,
 }
 
-/// Extract JWT from `Sec-WebSocket-Protocol: veyron, <jwt>`.
-/// Token is the first comma-separated entry that isn't "veyron".
+/// Extract JWT from `Sec-WebSocket-Protocol: vynkor, <jwt>`.
+/// Token is the first comma-separated entry that isn't "vynkor".
 /// Credentials stay in a request header, never in the URL.
 fn extract_ws_token(headers: &HeaderMap) -> &str {
     headers
         .get("sec-websocket-protocol")
         .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.split(',').map(str::trim).find(|p| *p != "veyron"))
+        .and_then(|s| s.split(',').map(str::trim).find(|p| *p != "vynkor"))
         .unwrap_or("")
 }
 
@@ -93,7 +93,7 @@ pub async fn ws_handler(
         0
     };
 
-    ws.protocols(["veyron"])
+    ws.protocols(["vynkor"])
         .on_upgrade(move |socket| async move {
             handle_socket(socket, conn_id, router_tx, disconnect_tx, register_timeout).await;
             open_conns.fetch_sub(1, Ordering::Relaxed);

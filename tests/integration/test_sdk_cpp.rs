@@ -12,8 +12,8 @@ use std::collections::HashMap;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 use tokio::io::AsyncBufReadExt;
-use vynkor::proto::veyron::{envelope, ActionRequest, ActionStatus, Envelope, PluginManifest};
-use vynkor_sdk::VeyronClient;
+use vynkor::proto::vynkor::{envelope, ActionRequest, ActionStatus, Envelope, PluginManifest};
+use vynkor_sdk::VynkorClient;
 
 use super::sdk_harness::SdkHarness;
 
@@ -58,7 +58,7 @@ async fn cpp_sdk_echo_plugin_round_trip() {
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let mut client = VeyronClient::connect(&socket)
+    let mut client = VynkorClient::connect(&socket)
         .await
         .expect("SDK connect failed");
     client
@@ -142,7 +142,7 @@ async fn cpp_sdk_streaming_action_round_trip() {
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let mut client = VeyronClient::connect(&socket)
+    let mut client = VynkorClient::connect(&socket)
         .await
         .expect("SDK connect failed");
     client
@@ -244,7 +244,7 @@ async fn cpp_sdk_publish_event_from_plugin() {
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let mut subscriber = VeyronClient::connect(&socket)
+    let mut subscriber = VynkorClient::connect(&socket)
         .await
         .expect("subscriber connect failed");
     subscriber
@@ -256,7 +256,7 @@ async fn cpp_sdk_publish_event_from_plugin() {
         .await
         .expect("subscribe failed");
 
-    let mut sender = VeyronClient::connect(&socket)
+    let mut sender = VynkorClient::connect(&socket)
         .await
         .expect("sender connect failed");
     sender
@@ -348,7 +348,7 @@ async fn cpp_sdk_session_close_dispatch() {
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let mut client = VeyronClient::connect(&socket)
+    let mut client = VynkorClient::connect(&socket)
         .await
         .expect("SDK connect failed");
     client

@@ -2,9 +2,9 @@ use std::time::Duration;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
 use vynkor::kernel::Kernel;
-use vynkor::proto::veyron::PluginManifest;
+use vynkor::proto::vynkor::PluginManifest;
 use vynkor::utils::config::Config;
-use vynkor_sdk::VeyronClient;
+use vynkor_sdk::VynkorClient;
 
 #[test]
 fn pid_flock_prevents_double_start() {
@@ -12,7 +12,7 @@ fn pid_flock_prevents_double_start() {
     use std::fs;
     use std::path::Path;
 
-    let pid_file = Path::new("/tmp/veyron_flock_double_start_test.pid");
+    let pid_file = Path::new("/tmp/vynkor_flock_double_start_test.pid");
 
     let h1 = fs::OpenOptions::new()
         .write(true)
@@ -38,8 +38,8 @@ fn test_config(socket: &str, port: u16) -> Config {
     Config {
         socket_path: socket.to_string(),
         port,
-        pid_file: "/tmp/veyron_kernel_test.pid".into(),
-        log_file: "/tmp/veyron_kernel_test.log".into(),
+        pid_file: "/tmp/vynkor_kernel_test.pid".into(),
+        log_file: "/tmp/vynkor_kernel_test.log".into(),
         allow_no_auth: true, // tests exercise the no-auth path deliberately
         ..Config::default()
     }
@@ -47,7 +47,7 @@ fn test_config(socket: &str, port: u16) -> Config {
 
 #[tokio::test]
 async fn kernel_refuses_to_start_without_auth() {
-    let mut cfg = test_config("/tmp/veyron_kernel_noauth.sock", 19199);
+    let mut cfg = test_config("/tmp/vynkor_kernel_noauth.sock", 19199);
     // no JWT secret and no explicit opt-out → must refuse
     cfg.jwt_secret = None;
     cfg.allow_no_auth = false;
@@ -61,7 +61,7 @@ async fn kernel_refuses_to_start_without_auth() {
 
 #[tokio::test]
 async fn kernel_refuses_weak_jwt_secret() {
-    let mut cfg = test_config("/tmp/veyron_kernel_weak_secret.sock", 19198);
+    let mut cfg = test_config("/tmp/vynkor_kernel_weak_secret.sock", 19198);
     cfg.allow_no_auth = false;
     cfg.jwt_secret = Some("too-short".to_string());
 
@@ -75,7 +75,7 @@ async fn kernel_refuses_weak_jwt_secret() {
 #[tokio::test]
 async fn kernel_accepts_jwt_secret_at_minimum_length() {
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-    let mut cfg = test_config("/tmp/veyron_kernel_min_secret.sock", 19197);
+    let mut cfg = test_config("/tmp/vynkor_kernel_min_secret.sock", 19197);
     cfg.allow_no_auth = false;
     cfg.jwt_secret = Some("x".repeat(32));
 
@@ -93,7 +93,7 @@ async fn kernel_accepts_jwt_secret_at_minimum_length() {
 #[tokio::test]
 async fn kernel_starts_and_accepts_plugin_registration() {
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-    let cfg = test_config("/tmp/veyron_kernel_a11_reg.sock", 19100);
+    let cfg = test_config("/tmp/vynkor_kernel_a11_reg.sock", 19100);
 
     tokio::spawn(async move {
         Kernel::run_with_shutdown(cfg, async {
@@ -108,7 +108,7 @@ async fn kernel_starts_and_accepts_plugin_registration() {
 
     let mut client = timeout(
         Duration::from_secs(2),
-        VeyronClient::connect("/tmp/veyron_kernel_a11_reg.sock"),
+        VynkorClient::connect("/tmp/vynkor_kernel_a11_reg.sock"),
     )
     .await
     .expect("connect timed out")
@@ -130,7 +130,7 @@ async fn kernel_starts_and_accepts_plugin_registration() {
 #[tokio::test]
 async fn kernel_ping_pong_works_after_registration() {
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-    let cfg = test_config("/tmp/veyron_kernel_a11_ping.sock", 19101);
+    let cfg = test_config("/tmp/vynkor_kernel_a11_ping.sock", 19101);
 
     tokio::spawn(async move {
         Kernel::run_with_shutdown(cfg, async {
@@ -142,7 +142,7 @@ async fn kernel_ping_pong_works_after_registration() {
 
     tokio::time::sleep(Duration::from_millis(30)).await;
 
-    let mut client = VeyronClient::connect("/tmp/veyron_kernel_a11_ping.sock")
+    let mut client = VynkorClient::connect("/tmp/vynkor_kernel_a11_ping.sock")
         .await
         .unwrap();
     client
@@ -163,7 +163,7 @@ async fn kernel_ping_pong_works_after_registration() {
 #[tokio::test]
 async fn kernel_graceful_shutdown_does_not_panic() {
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-    let cfg = test_config("/tmp/veyron_kernel_a11_shutdown.sock", 19102);
+    let cfg = test_config("/tmp/vynkor_kernel_a11_shutdown.sock", 19102);
 
     let handle = tokio::spawn(async move {
         Kernel::run_with_shutdown(cfg, async {
@@ -175,7 +175,7 @@ async fn kernel_graceful_shutdown_does_not_panic() {
     tokio::time::sleep(Duration::from_millis(30)).await;
 
     // connect and register a plugin so shutdown has something to notify
-    let mut client = VeyronClient::connect("/tmp/veyron_kernel_a11_shutdown.sock")
+    let mut client = VynkorClient::connect("/tmp/vynkor_kernel_a11_shutdown.sock")
         .await
         .unwrap();
     client

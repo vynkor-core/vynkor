@@ -1,4 +1,4 @@
-use crate::proto::veyron::Event;
+use crate::proto::vynkor::Event;
 use crate::utils::sync::recover_poison;
 use rusqlite::{params, Connection};
 use std::path::Path;

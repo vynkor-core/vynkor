@@ -40,6 +40,6 @@ pub fn create_device_token(
     secret: &[u8],
     ttl_secs: u64,
 ) -> String {
-    vynkor::auth::jwt::mint_device_token(secret, device_id, permissions, vec![], ttl_secs, "veyron")
+    vynkor::auth::jwt::mint_device_token(secret, device_id, permissions, vec![], ttl_secs, "vynkor")
         .expect("device token minting must not fail")
 }

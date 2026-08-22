@@ -1,9 +1,9 @@
 use prost::Message;
 use std::time::Duration;
-use vynkor::proto::veyron::{
+use vynkor::proto::vynkor::{
     envelope, ActionRequest, ActionResponse, ActionStatus, CommandStatus, Envelope, PluginManifest,
 };
-use vynkor_sdk::VeyronClient;
+use vynkor_sdk::VynkorClient;
 
 use super::sdk_harness::SdkHarness;
 
@@ -13,7 +13,7 @@ async fn rust_sdk_register_and_ping() {
     let harness = SdkHarness::start().await;
     let socket = harness.socket_path.to_str().unwrap();
 
-    let mut client = VeyronClient::connect(socket)
+    let mut client = VynkorClient::connect(socket)
         .await
         .expect("SDK connect failed");
 
@@ -35,7 +35,7 @@ async fn rust_sdk_send_action_request_and_receive_response() {
     let harness = SdkHarness::start().await;
     let socket = harness.socket_path.to_str().unwrap();
 
-    let mut client_a = VeyronClient::connect(socket)
+    let mut client_a = VynkorClient::connect(socket)
         .await
         .expect("connect A failed");
     client_a
@@ -50,7 +50,7 @@ async fn rust_sdk_send_action_request_and_receive_response() {
         .await
         .expect("register A failed");
 
-    let mut client_b = VeyronClient::connect(socket)
+    let mut client_b = VynkorClient::connect(socket)
         .await
         .expect("connect B failed");
     client_b
@@ -138,7 +138,7 @@ async fn rust_sdk_kernel_command_health_check() {
     let harness = SdkHarness::start().await;
     let socket = harness.socket_path.to_str().unwrap();
 
-    let mut client = VeyronClient::connect(socket)
+    let mut client = VynkorClient::connect(socket)
         .await
         .expect("SDK connect failed");
 

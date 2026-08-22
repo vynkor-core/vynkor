@@ -1,14 +1,14 @@
 use super::helpers::start_kernel;
 use std::time::Duration;
-use vynkor::proto::veyron::PluginManifest;
-use vynkor_sdk::VeyronClient;
+use vynkor::proto::vynkor::PluginManifest;
+use vynkor_sdk::VynkorClient;
 
 #[tokio::test]
 async fn plugin_removed_from_registry_after_disconnect() {
     let (shutdown_tx, registry, _bus) =
-        start_kernel("/tmp/veyron_integ_disconnect.sock", 19204).await;
+        start_kernel("/tmp/vynkor_integ_disconnect.sock", 19204).await;
 
-    let mut client = VeyronClient::connect("/tmp/veyron_integ_disconnect.sock")
+    let mut client = VynkorClient::connect("/tmp/vynkor_integ_disconnect.sock")
         .await
         .unwrap();
     client
@@ -38,10 +38,10 @@ async fn plugin_removed_from_registry_after_disconnect() {
 #[tokio::test]
 async fn system_plugin_left_published_on_disconnect() {
     let (shutdown_tx, registry, event_bus) =
-        start_kernel("/tmp/veyron_integ_left.sock", 19205).await;
+        start_kernel("/tmp/vynkor_integ_left.sock", 19205).await;
 
     // observer subscribes to system events
-    let mut observer = VeyronClient::connect("/tmp/veyron_integ_left.sock")
+    let mut observer = VynkorClient::connect("/tmp/vynkor_integ_left.sock")
         .await
         .unwrap();
     observer
@@ -56,7 +56,7 @@ async fn system_plugin_left_published_on_disconnect() {
 
     // another plugin connects, then disconnects
     {
-        let mut leavee = VeyronClient::connect("/tmp/veyron_integ_left.sock")
+        let mut leavee = VynkorClient::connect("/tmp/vynkor_integ_left.sock")
             .await
             .unwrap();
         leavee
@@ -70,7 +70,7 @@ async fn system_plugin_left_published_on_disconnect() {
 
     // verify plugin_left is published — check event_bus subscribers still work
     // by publishing manually to ensure delivery path works
-    use vynkor::proto::veyron::Event;
+    use vynkor::proto::vynkor::Event;
     event_bus
         .publish(
             Event {
@@ -89,7 +89,7 @@ async fn system_plugin_left_published_on_disconnect() {
         .expect("recv timed out")
         .expect("recv failed");
 
-    use vynkor::proto::veyron::envelope;
+    use vynkor::proto::vynkor::envelope;
     assert!(
         matches!(
             received.payload,

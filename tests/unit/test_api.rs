@@ -10,7 +10,7 @@ use vynkor::auth::jwt::JwtValidator;
 use vynkor::plugins::manager::PluginManager;
 use vynkor::plugins::registry::PluginRegistry;
 use vynkor::plugins::supervisor::PluginSupervisor;
-use vynkor::proto::veyron::PluginManifest;
+use vynkor::proto::vynkor::PluginManifest;
 use vynkor::utils::config::PluginDef;
 
 fn make_registry() -> Arc<PluginRegistry> {
@@ -18,7 +18,7 @@ fn make_registry() -> Arc<PluginRegistry> {
 }
 
 fn make_supervisor() -> Arc<PluginSupervisor> {
-    Arc::new(PluginSupervisor::new("/tmp/veyron_test.sock"))
+    Arc::new(PluginSupervisor::new("/tmp/vynkor_test.sock"))
 }
 
 fn make_manager(
@@ -54,7 +54,7 @@ fn register_with_device(registry: &PluginRegistry, plugin_id: &str, conn_id: u64
             vynkor::plugins::registry::DeviceMeta {
                 device_id: "phone-1".to_string(),
                 user_id: "default".to_string(),
-                os: vynkor::proto::veyron::DeviceOs::Android,
+                os: vynkor::proto::vynkor::DeviceOs::Android,
                 arch: "aarch64".to_string(),
                 os_version: "14".to_string(),
                 capabilities: vec!["geo".to_string(), "battery".to_string()],

@@ -1,6 +1,6 @@
 use crate::ipc::connection::ConnectionHandler;
 use crate::ipc::messages::IncomingMessage;
-use crate::utils::errors::VeyronError;
+use crate::utils::errors::VynkorError;
 use crate::utils::sync::recover_poison;
 use std::fs;
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
@@ -28,7 +28,7 @@ impl UdsServer {
         max_connections: usize,
         fragment_timeout_secs: u64,
         max_reassembly_streams: usize,
-    ) -> Result<(JoinHandle<()>, tokio::sync::mpsc::Receiver<u64>), VeyronError> {
+    ) -> Result<(JoinHandle<()>, tokio::sync::mpsc::Receiver<u64>), VynkorError> {
         // Never blindly unlink whatever sits at socket_path (BUG-006) — only
         // remove it if it's actually a socket (i.e. a stale one we or a prior
         // instance created). A pre-existing regular file/symlink there is
@@ -38,7 +38,7 @@ impl UdsServer {
                 let _ = std::fs::remove_file(socket_path);
             }
             Ok(_) => {
-                return Err(VeyronError::Internal(format!(
+                return Err(VynkorError::Internal(format!(
                     "refusing to bind UDS socket: {} exists and is not a socket",
                     socket_path.display()
                 )));
@@ -65,7 +65,7 @@ impl UdsServer {
 
         let listener = bind_result?;
         fs::set_permissions(socket_path, fs::Permissions::from_mode(0o600))
-            .map_err(VeyronError::Io)?;
+            .map_err(VynkorError::Io)?;
         info!(
             "socket {} bound with 0o600 permissions",
             socket_path.display()
@@ -127,7 +127,7 @@ mod tests {
 
     #[tokio::test]
     async fn uds_connection_limit_rejects_excess() {
-        let sock_path = "/tmp/veyron_test_conn_limit.sock";
+        let sock_path = "/tmp/vynkor_test_conn_limit.sock";
         let _ = std::fs::remove_file(sock_path);
 
         let (tx, _rx) = tokio::sync::mpsc::channel(16);

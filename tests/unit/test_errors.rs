@@ -1,9 +1,9 @@
 use std::io;
-use vynkor::utils::errors::VeyronError;
+use vynkor::utils::errors::VynkorError;
 
 #[test]
 fn error_display_shows_message() {
-    let e = VeyronError::PluginNotFound("weather".to_string());
+    let e = VynkorError::PluginNotFound("weather".to_string());
     let s = format!("{}", e);
     assert!(s.contains("weather"), "display must include plugin id");
 }
@@ -11,34 +11,34 @@ fn error_display_shows_message() {
 #[test]
 fn from_io_error_converts() {
     let io_err = io::Error::new(io::ErrorKind::BrokenPipe, "pipe broken");
-    let e: VeyronError = VeyronError::from(io_err);
-    assert!(matches!(e, VeyronError::Io(_)));
+    let e: VynkorError = VynkorError::from(io_err);
+    assert!(matches!(e, VynkorError::Io(_)));
 }
 
 #[test]
 fn from_prost_decode_error_converts() {
     let decode_err = prost::DecodeError::new("bad bytes");
-    let e: VeyronError = VeyronError::from(decode_err);
-    assert!(matches!(e, VeyronError::Proto(_)));
+    let e: VynkorError = VynkorError::from(decode_err);
+    assert!(matches!(e, VynkorError::Proto(_)));
 }
 
 #[test]
 fn all_variants_constructible() {
-    let _io = VeyronError::Io(io::Error::other("x"));
-    let _proto = VeyronError::Proto(prost::DecodeError::new("x"));
-    let _magic = VeyronError::FrameMagicMismatch;
-    let _crc = VeyronError::FrameCrcMismatch;
-    let _large = VeyronError::PayloadTooLarge(2_000_000);
-    let _not_found = VeyronError::PluginNotFound("x".to_string());
-    let _dup = VeyronError::PluginAlreadyRegistered("x".to_string());
-    let _denied = VeyronError::PermissionDenied("x".to_string());
-    let _timeout = VeyronError::Timeout;
-    let _internal = VeyronError::Internal("x".to_string());
+    let _io = VynkorError::Io(io::Error::other("x"));
+    let _proto = VynkorError::Proto(prost::DecodeError::new("x"));
+    let _magic = VynkorError::FrameMagicMismatch;
+    let _crc = VynkorError::FrameCrcMismatch;
+    let _large = VynkorError::PayloadTooLarge(2_000_000);
+    let _not_found = VynkorError::PluginNotFound("x".to_string());
+    let _dup = VynkorError::PluginAlreadyRegistered("x".to_string());
+    let _denied = VynkorError::PermissionDenied("x".to_string());
+    let _timeout = VynkorError::Timeout;
+    let _internal = VynkorError::Internal("x".to_string());
 }
 
 #[test]
 fn error_is_std_error() {
     fn assert_std_error<E: std::error::Error>(_: &E) {}
-    let e = VeyronError::Timeout;
+    let e = VynkorError::Timeout;
     assert_std_error(&e);
 }

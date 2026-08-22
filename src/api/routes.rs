@@ -11,7 +11,7 @@ use crate::auth::jwt::JwtValidator;
 use crate::plugins::loader::{validate_plugin_def, PluginLoader};
 use crate::plugins::manager::PluginManager;
 use crate::utils::config::PluginDef;
-use crate::utils::errors::VeyronError;
+use crate::utils::errors::VynkorError;
 
 pub struct AppState {
     pub manager: Arc<PluginManager>,
@@ -151,7 +151,7 @@ pub async fn start_plugin(
     };
     match validate_plugin_def(def) {
         Ok(_) => {}
-        Err(VeyronError::PermissionDenied(_)) => return StatusCode::FORBIDDEN,
+        Err(VynkorError::PermissionDenied(_)) => return StatusCode::FORBIDDEN,
         Err(_) => return StatusCode::UNPROCESSABLE_ENTITY,
     }
     let config = PluginLoader::config_from_def(def);
@@ -167,7 +167,7 @@ pub async fn stop_plugin(State(state): State<Arc<AppState>>, Path(id): Path<Stri
     }
     match state.manager.stop(&id).await {
         Ok(()) => StatusCode::OK,
-        Err(VeyronError::PluginNotFound(_)) => StatusCode::OK,
+        Err(VynkorError::PluginNotFound(_)) => StatusCode::OK,
         Err(_) => StatusCode::UNPROCESSABLE_ENTITY,
     }
 }

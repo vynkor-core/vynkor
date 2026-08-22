@@ -4,8 +4,8 @@ use crate::ipc::framing::{
     FLAG_MAC_PRESENT, FRAG_HEADER_SIZE, MAX_PAYLOAD_SIZE,
 };
 use crate::ipc::messages::IncomingMessage;
-use crate::proto::veyron::ErrorCode;
-use crate::utils::errors::VeyronError;
+use crate::proto::vynkor::ErrorCode;
+use crate::utils::errors::VynkorError;
 use crate::utils::sync::recover_poison;
 use metrics::counter;
 use std::collections::HashMap;
@@ -318,17 +318,17 @@ impl ConnectionHandler {
                         }
                     }
                 }
-                Err(VeyronError::FrameCrcMismatch) => {
+                Err(VynkorError::FrameCrcMismatch) => {
                     warn!(conn_id = self.conn_id, "CRC mismatch on incoming frame");
                     counter!("ipc_frame_errors_total", "error" => "crc").increment(1);
                     break;
                 }
-                Err(VeyronError::FrameMagicMismatch) => {
+                Err(VynkorError::FrameMagicMismatch) => {
                     warn!(conn_id = self.conn_id, "frame magic mismatch");
                     counter!("ipc_frame_errors_total", "error" => "magic").increment(1);
                     break;
                 }
-                Err(VeyronError::PayloadTooLarge(n)) => {
+                Err(VynkorError::PayloadTooLarge(n)) => {
                     warn!(
                         conn_id = self.conn_id,
                         bytes = n,
@@ -337,7 +337,7 @@ impl ConnectionHandler {
                     counter!("ipc_frame_errors_total", "error" => "oversized").increment(1);
                     break;
                 }
-                Err(VeyronError::FrameReadTimeout) => {
+                Err(VynkorError::FrameReadTimeout) => {
                     warn!(
                         conn_id = self.conn_id,
                         "frame read timed out — dropping connection"
@@ -355,8 +355,8 @@ impl ConnectionHandler {
     /// Best-effort notice sent immediately before dropping a connection for a
     /// wire-level violation (bad/missing MAC). CRC-only — MAC tagging isn't
     /// meaningful here since the frame is what failed verification.
-    async fn send_error(tx: &mpsc::Sender<Outbound>, code: crate::proto::veyron::ErrorCode) {
-        use crate::proto::veyron::{envelope, Envelope, ErrorMessage};
+    async fn send_error(tx: &mpsc::Sender<Outbound>, code: crate::proto::vynkor::ErrorCode) {
+        use crate::proto::vynkor::{envelope, Envelope, ErrorMessage};
         use prost::Message;
 
         let env = Envelope {
@@ -410,7 +410,7 @@ async fn write_loop(mut write_half: OwnedWriteHalf, mut rx: mpsc::Receiver<Outbo
             Ok(()) => {}
             // An oversized frame is a kernel-side fault — drop that frame but keep
             // the connection; tearing it down would punish the plugin for our bug.
-            Err(VeyronError::PayloadTooLarge(n)) => {
+            Err(VynkorError::PayloadTooLarge(n)) => {
                 warn!(bytes = n, "dropping oversized outbound frame");
                 counter!("ipc_frame_errors_total", "error" => "oversized_outbound").increment(1);
             }
@@ -537,8 +537,8 @@ mod tests {
         );
     }
 
-    fn decode_error(frame: &Frame) -> crate::proto::veyron::ErrorMessage {
-        use crate::proto::veyron::{envelope, Envelope};
+    fn decode_error(frame: &Frame) -> crate::proto::vynkor::ErrorMessage {
+        use crate::proto::vynkor::{envelope, Envelope};
         use prost::Message;
         let env = Envelope::decode(frame.payload.as_ref()).expect("valid Envelope");
         match env.payload {
@@ -549,7 +549,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_loop_sends_mac_invalid_before_dropping_on_bad_tag() {
-        use crate::proto::veyron::ErrorCode;
+        use crate::proto::vynkor::ErrorCode;
 
         let (client, server) = UnixStream::pair().unwrap();
         let (incoming_tx, _incoming_rx) = mpsc::channel(8);
@@ -576,7 +576,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_loop_sends_mac_missing_before_dropping_on_untagged_frame() {
-        use crate::proto::veyron::ErrorCode;
+        use crate::proto::vynkor::ErrorCode;
 
         let (client, server) = UnixStream::pair().unwrap();
         let (incoming_tx, _incoming_rx) = mpsc::channel(8);

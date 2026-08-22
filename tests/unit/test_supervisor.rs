@@ -34,7 +34,7 @@ fn sleep_config(plugin_id: &str) -> PluginConfig {
 
 #[tokio::test]
 async fn spawn_plugin_starts_process() {
-    let sup = Arc::new(PluginSupervisor::new("/tmp/veyron_test.sock"));
+    let sup = Arc::new(PluginSupervisor::new("/tmp/vynkor_test.sock"));
 
     sup.spawn_plugin(sleep_config("long_runner"))
         .await
@@ -51,7 +51,7 @@ async fn spawn_plugin_starts_process() {
 
 #[tokio::test]
 async fn stop_plugin_removes_process() {
-    let sup = Arc::new(PluginSupervisor::new("/tmp/veyron_test.sock"));
+    let sup = Arc::new(PluginSupervisor::new("/tmp/vynkor_test.sock"));
 
     sup.spawn_plugin(sleep_config("stoppable")).await.unwrap();
     assert!(sup.is_running("stoppable"));
@@ -68,14 +68,14 @@ async fn stop_plugin_removes_process() {
 
 #[tokio::test]
 async fn stop_nonexistent_plugin_returns_error() {
-    let sup = PluginSupervisor::new("/tmp/veyron_test.sock");
+    let sup = PluginSupervisor::new("/tmp/vynkor_test.sock");
     let result = sup.stop_plugin("ghost").await;
     assert!(result.is_err(), "stopping unknown plugin must return error");
 }
 
 #[tokio::test]
 async fn restart_policy_always_triggers_restart_after_exit() {
-    let sup = Arc::new(PluginSupervisor::new("/tmp/veyron_test.sock"));
+    let sup = Arc::new(PluginSupervisor::new("/tmp/vynkor_test.sock"));
 
     sup.spawn_plugin(quick_exit_config("restartable", RestartPolicy::Always, 5))
         .await
@@ -97,7 +97,7 @@ async fn restart_policy_always_triggers_restart_after_exit() {
 
 #[tokio::test]
 async fn stop_cancels_in_flight_backoff_restart() {
-    let sup = Arc::new(PluginSupervisor::new("/tmp/veyron_test.sock"));
+    let sup = Arc::new(PluginSupervisor::new("/tmp/vynkor_test.sock"));
 
     // long-lived process with Always policy: the only exit comes from the
     // SIGKILL below, and the monitor then schedules a restart (B3 window).
@@ -142,7 +142,7 @@ async fn stop_cancels_in_flight_backoff_restart() {
 
 #[tokio::test]
 async fn restart_policy_never_does_not_restart() {
-    let sup = Arc::new(PluginSupervisor::new("/tmp/veyron_test.sock"));
+    let sup = Arc::new(PluginSupervisor::new("/tmp/vynkor_test.sock"));
 
     sup.spawn_plugin(quick_exit_config("no_restart", RestartPolicy::Never, 0))
         .await
@@ -165,7 +165,7 @@ async fn restart_policy_never_does_not_restart() {
 
 #[tokio::test]
 async fn manual_restart_overrides_never_policy() {
-    let sup = Arc::new(PluginSupervisor::new("/tmp/veyron_test.sock"));
+    let sup = Arc::new(PluginSupervisor::new("/tmp/vynkor_test.sock"));
 
     // long-running plugin with Never policy: it never exits on its own, so the
     // only exit comes from the manual restart's SIGTERM.
@@ -197,7 +197,7 @@ async fn manual_restart_overrides_never_policy() {
 
 #[tokio::test]
 async fn max_restarts_honored() {
-    let sup = Arc::new(PluginSupervisor::new("/tmp/veyron_test.sock"));
+    let sup = Arc::new(PluginSupervisor::new("/tmp/vynkor_test.sock"));
 
     sup.spawn_plugin(quick_exit_config("capped", RestartPolicy::Always, 2))
         .await
@@ -219,7 +219,7 @@ async fn max_restarts_honored() {
 
 #[tokio::test]
 async fn is_running_returns_false_after_max_restarts_exceeded() {
-    let sup = Arc::new(PluginSupervisor::new("/tmp/veyron_test.sock"));
+    let sup = Arc::new(PluginSupervisor::new("/tmp/vynkor_test.sock"));
 
     // Always policy, max_restarts=0: first exit triggers None branch → entry removed.
     sup.spawn_plugin(quick_exit_config("terminated", RestartPolicy::Always, 0))
@@ -243,7 +243,7 @@ async fn is_running_returns_false_after_max_restarts_exceeded() {
 
 #[tokio::test]
 async fn watchdog_does_not_reset_pong_after_kill() {
-    let sup = Arc::new(PluginSupervisor::new("/tmp/veyron_watchdog_pong.sock"));
+    let sup = Arc::new(PluginSupervisor::new("/tmp/vynkor_watchdog_pong.sock"));
     sup.spawn_plugin(sleep_config("watchdog_victim"))
         .await
         .unwrap();
@@ -286,7 +286,7 @@ async fn watchdog_does_not_reset_pong_after_kill() {
 async fn spawned_process_inherits_socket_path_env() {
     // Verify VYN_SOCKET_PATH (and its legacy alias) are passed to child.
     // We use a shell command that checks the env var and exits 0 if set, 1 if not.
-    let sup = PluginSupervisor::new("/tmp/veyron_check.sock");
+    let sup = PluginSupervisor::new("/tmp/vynkor_check.sock");
 
     let config = PluginConfig {
         plugin_id: "env_check".to_string(),
@@ -345,7 +345,7 @@ fn ignores_sigterm_config(plugin_id: &str, grace_seconds: u32) -> PluginConfig {
 
 #[tokio::test]
 async fn graceful_shutdown_kills_each_plugin_on_its_own_deadline() {
-    let sup = Arc::new(PluginSupervisor::new("/tmp/veyron_grace_test.sock"));
+    let sup = Arc::new(PluginSupervisor::new("/tmp/vynkor_grace_test.sock"));
 
     let fast = sup
         .spawn_plugin(ignores_sigterm_config("grace_fast", 1))
@@ -494,7 +494,7 @@ async fn pids_cgroup_accounts_plugin_threads_per_plugin() {
         }
     };
 
-    let sup = Arc::new(PluginSupervisor::new("/tmp/veyron_r9_pids.sock"));
+    let sup = Arc::new(PluginSupervisor::new("/tmp/vynkor_r9_pids.sock"));
     let config = PluginConfig {
         plugin_id: "r9_threads".to_string(),
         binary_path: PathBuf::from(&python),
@@ -584,7 +584,7 @@ async fn sandboxed_plugin_still_joins_its_pids_cgroup() {
     // The sandbox path needs unprivileged user namespaces; hosts that restrict
     // them (kernel.unprivileged_userns_clone=0) fail the spawn in pre_exec —
     // probe once and skip there so the test is green where sandbox can't work.
-    let probe_sup = Arc::new(PluginSupervisor::new("/tmp/veyron_r9_sandbox_probe.sock"));
+    let probe_sup = Arc::new(PluginSupervisor::new("/tmp/vynkor_r9_sandbox_probe.sock"));
     let probe = PluginConfig {
         plugin_id: "r9_sandbox_probe".to_string(),
         binary_path: PathBuf::from("/bin/true"),
@@ -600,7 +600,7 @@ async fn sandboxed_plugin_still_joins_its_pids_cgroup() {
         return;
     }
 
-    let sup = Arc::new(PluginSupervisor::new("/tmp/veyron_r9_sandbox.sock"));
+    let sup = Arc::new(PluginSupervisor::new("/tmp/vynkor_r9_sandbox.sock"));
     let config = PluginConfig {
         plugin_id: "r9_sandbox".to_string(),
         binary_path: PathBuf::from(&python),
@@ -672,7 +672,7 @@ async fn thread_storm_in_one_plugin_does_not_consume_another_budget() {
         return;
     };
 
-    let sup = Arc::new(PluginSupervisor::new("/tmp/veyron_r9_iso.sock"));
+    let sup = Arc::new(PluginSupervisor::new("/tmp/vynkor_r9_iso.sock"));
 
     // A: storm 200 threads against its 64 budget and hold 10s so the
     // contention window overlaps B's spawn.
@@ -717,7 +717,7 @@ async fn thread_storm_in_one_plugin_does_not_consume_another_budget() {
     // B: create 30 threads (well within its own 64), report the created/failed
     // split to a result file, then hold. Under a shared RLIMIT_NPROC this
     // would EAGAIN immediately because the uid already has A's 64+ threads.
-    let result_path = "/tmp/veyron_r9_iso_b_result";
+    let result_path = "/tmp/vynkor_r9_iso_b_result";
     let _ = std::fs::remove_file(result_path);
     let b_script = format!(
         "import threading,time\nthreading.stack_size(256*1024)\ncreated=0\nfailed=0\nfor _ in range(30):\n    try:\n        threading.Thread(target=lambda: time.sleep(5)).start()\n        created+=1\n    except RuntimeError:\n        failed+=1\nopen('{result_path}','w').write(f'{{created}} {{failed}}')\ntime.sleep(5)\n",

@@ -6,8 +6,8 @@ use vynkor::events::bus::EventBus;
 use vynkor::ipc::protocol::MessageRouter;
 use vynkor::ipc::server::UdsServer;
 use vynkor::plugins::registry::PluginRegistry;
-use vynkor::proto::veyron::PluginManifest;
-use vynkor_sdk::VeyronClient;
+use vynkor::proto::vynkor::PluginManifest;
+use vynkor_sdk::VynkorClient;
 
 async fn start_kernel(socket_path: &'static str) {
     let registry = Arc::new(PluginRegistry::new());
@@ -25,15 +25,15 @@ async fn start_kernel(socket_path: &'static str) {
 
 #[tokio::test]
 async fn client_connects_to_kernel() {
-    start_kernel("/tmp/veyron_sdk_connect.sock").await;
-    let result = VeyronClient::connect("/tmp/veyron_sdk_connect.sock").await;
+    start_kernel("/tmp/vynkor_sdk_connect.sock").await;
+    let result = VynkorClient::connect("/tmp/vynkor_sdk_connect.sock").await;
     assert!(result.is_ok(), "client must connect: {:?}", result.err());
 }
 
 #[tokio::test]
 async fn client_registers_and_receives_accepted_ack() {
-    start_kernel("/tmp/veyron_sdk_register.sock").await;
-    let mut client = VeyronClient::connect("/tmp/veyron_sdk_register.sock")
+    start_kernel("/tmp/vynkor_sdk_register.sock").await;
+    let mut client = VynkorClient::connect("/tmp/vynkor_sdk_register.sock")
         .await
         .unwrap();
     let ack = timeout(
@@ -49,8 +49,8 @@ async fn client_registers_and_receives_accepted_ack() {
 
 #[tokio::test]
 async fn client_ping_returns_sub_second_duration() {
-    start_kernel("/tmp/veyron_sdk_ping.sock").await;
-    let mut client = VeyronClient::connect("/tmp/veyron_sdk_ping.sock")
+    start_kernel("/tmp/vynkor_sdk_ping.sock").await;
+    let mut client = VynkorClient::connect("/tmp/vynkor_sdk_ping.sock")
         .await
         .unwrap();
     client
@@ -72,8 +72,8 @@ async fn client_ping_returns_sub_second_duration() {
 
 #[tokio::test]
 async fn client_subscribe_completes_without_error() {
-    start_kernel("/tmp/veyron_sdk_sub.sock").await;
-    let mut client = VeyronClient::connect("/tmp/veyron_sdk_sub.sock")
+    start_kernel("/tmp/vynkor_sdk_sub.sock").await;
+    let mut client = VynkorClient::connect("/tmp/vynkor_sdk_sub.sock")
         .await
         .unwrap();
     client
@@ -89,13 +89,13 @@ async fn client_subscribe_completes_without_error() {
 
 #[tokio::test]
 async fn client_send_recv_roundtrip_via_broadcast() {
-    start_kernel("/tmp/veyron_sdk_roundtrip.sock").await;
+    start_kernel("/tmp/vynkor_sdk_roundtrip.sock").await;
 
     // two clients: sender and receiver
-    let mut sender = VeyronClient::connect("/tmp/veyron_sdk_roundtrip.sock")
+    let mut sender = VynkorClient::connect("/tmp/vynkor_sdk_roundtrip.sock")
         .await
         .unwrap();
-    let mut receiver = VeyronClient::connect("/tmp/veyron_sdk_roundtrip.sock")
+    let mut receiver = VynkorClient::connect("/tmp/vynkor_sdk_roundtrip.sock")
         .await
         .unwrap();
 
@@ -117,7 +117,7 @@ async fn client_send_recv_roundtrip_via_broadcast() {
         .unwrap();
 
     use prost::Message;
-    use vynkor::proto::veyron::{envelope, Envelope, Ping};
+    use vynkor::proto::vynkor::{envelope, Envelope, Ping};
     let payload = Envelope {
         payload: Some(envelope::Payload::Ping(Ping { timestamp: 42 })),
         ..Default::default()

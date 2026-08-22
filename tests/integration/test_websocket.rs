@@ -6,7 +6,7 @@ use std::time::Duration;
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::protocol::Message as WsMsg;
 use vynkor::auth::frame_mac::{compute_tag, derive_session_key, MAC_TAG_LEN};
-use vynkor::proto::veyron::{envelope, Envelope, Ping, PluginManifest, PluginRegister};
+use vynkor::proto::vynkor::{envelope, Envelope, Ping, PluginManifest, PluginRegister};
 
 /// Build a frame with HMAC-SHA256 MAC (FLAG_MAC_PRESENT = 0x0001 set, 32-byte tag appended).
 fn build_mac_frame(target: &str, payload: &[u8], key: &[u8; 32]) -> Vec<u8> {
@@ -44,7 +44,7 @@ async fn ws_connect_with_jwt(
             .header("Upgrade", "websocket")
             .header("Sec-WebSocket-Version", "13")
             .header("Sec-WebSocket-Key", generate_key())
-            .header("sec-websocket-protocol", format!("veyron, {token}"))
+            .header("sec-websocket-protocol", format!("vynkor, {token}"))
             .body(())
             .unwrap();
         match tokio_tungstenite::connect_async(req).await {
@@ -106,7 +106,7 @@ fn build_frame_with_flags(target: &str, payload: &[u8], flags: u16) -> Vec<u8> {
 
 #[tokio::test]
 async fn ws_client_registers_and_receives_ack() {
-    let (_shutdown_tx, _registry, _bus) = start_kernel("/tmp/veyron_integ_ws.sock", 19340).await;
+    let (_shutdown_tx, _registry, _bus) = start_kernel("/tmp/vynkor_integ_ws.sock", 19340).await;
 
     let mut ws = ws_connect_retry(19340).await;
 
@@ -160,7 +160,7 @@ async fn ws_client_registers_and_receives_ack() {
 #[tokio::test]
 async fn ws_rejects_compressed_and_fragmented_inbound_frames() {
     let (_shutdown_tx, _registry, _bus) =
-        start_kernel("/tmp/veyron_integ_ws_compressed.sock", 19322).await;
+        start_kernel("/tmp/vynkor_integ_ws_compressed.sock", 19322).await;
 
     let mut ws = ws_connect_retry(19322).await;
 
@@ -230,7 +230,7 @@ async fn ws_rejects_compressed_and_fragmented_inbound_frames() {
 async fn ws_mac_tagged_frames_accepted_on_secured_kernel() {
     let secret = "ws-mac-test-secret-32-bytes-minimum";
     let (_shutdown, _reg, _bus) =
-        start_kernel_secured("/tmp/veyron_ws_mac_ok.sock", 19346, secret).await;
+        start_kernel_secured("/tmp/vynkor_ws_mac_ok.sock", 19346, secret).await;
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     let token = create_test_token("ws-mac-plugin", vec![], secret.as_bytes(), 3600);
@@ -320,7 +320,7 @@ async fn ws_mac_tagged_frames_accepted_on_secured_kernel() {
 async fn ws_untagged_frames_rejected_on_secured_kernel() {
     let secret = "ws-mac-reject-secret-32-bytes-minimum";
     let (_shutdown, _reg, _bus) =
-        start_kernel_secured("/tmp/veyron_ws_mac_reject.sock", 19347, secret).await;
+        start_kernel_secured("/tmp/vynkor_ws_mac_reject.sock", 19347, secret).await;
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     let token = create_test_token("ws-plain-plugin", vec![], secret.as_bytes(), 3600);
@@ -379,7 +379,7 @@ async fn ws_untagged_frames_rejected_on_secured_kernel() {
 
 #[tokio::test]
 async fn ws_closed_after_max_parse_errors() {
-    let (_shutdown, _reg, _bus) = start_kernel("/tmp/veyron_ws_parse_err.sock", 19348).await;
+    let (_shutdown, _reg, _bus) = start_kernel("/tmp/vynkor_ws_parse_err.sock", 19348).await;
 
     let mut ws = ws_connect_retry(19348).await;
 
@@ -475,7 +475,7 @@ async fn ws_client_that_never_registers_is_dropped() {
         allow_no_auth: false,
         jwt_secret: Some(secret.to_string()),
         ws_register_timeout_secs: 1,
-        ..test_config("/tmp/veyron_ws_no_register.sock", 19357)
+        ..test_config("/tmp/vynkor_ws_no_register.sock", 19357)
     };
     let (_shutdown, _reg, _bus) = start_kernel_with_config(cfg).await;
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -511,7 +511,7 @@ async fn ws_client_that_registers_survives_the_deadline() {
         allow_no_auth: false,
         jwt_secret: Some(secret.to_string()),
         ws_register_timeout_secs: 1,
-        ..test_config("/tmp/veyron_ws_registered.sock", 19358)
+        ..test_config("/tmp/vynkor_ws_registered.sock", 19358)
     };
     let (_shutdown, _reg, _bus) = start_kernel_with_config(cfg).await;
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -556,7 +556,7 @@ async fn per_device_token_registers_device_plugin_end_to_end() {
     let cfg = Config {
         allow_no_auth: false,
         jwt_secret: Some(secret.to_string()),
-        ..test_config("/tmp/veyron_ws_device_token.sock", 19359)
+        ..test_config("/tmp/vynkor_ws_device_token.sock", 19359)
     };
     let (_shutdown, _reg, _bus) = start_kernel_with_config(cfg).await;
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -610,7 +610,7 @@ async fn ws_upgrade_rejected_once_connection_cap_reached() {
 
     let cfg = Config {
         max_ws_connections: 1,
-        ..test_config("/tmp/veyron_ws_cap_test.sock", 19323)
+        ..test_config("/tmp/vynkor_ws_cap_test.sock", 19323)
     };
     let (_shutdown, _reg, _bus) = start_kernel_with_config(cfg).await;
 

@@ -3,8 +3,8 @@ use crate::jwt_helper::create_test_token;
 use prost::Message;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use vynkor::proto::veyron::{envelope, ActionRequest, Envelope, PluginManifest};
-use vynkor_sdk::VeyronClient;
+use vynkor::proto::vynkor::{envelope, ActionRequest, Envelope, PluginManifest};
+use vynkor_sdk::VynkorClient;
 
 /// Raw HTTP GET helper — avoids adding reqwest to dev-deps.
 async fn http_get_body(port: u16, path: &str) -> (u16, String) {
@@ -46,7 +46,7 @@ async fn http_get_body_with_auth(port: u16, path: &str, token: Option<&str>) -> 
 
 #[tokio::test]
 async fn metrics_endpoint_reachable_and_returns_200() {
-    let (shutdown, _reg, _bus) = start_kernel("/tmp/veyron_metrics_reachable.sock", 19600).await;
+    let (shutdown, _reg, _bus) = start_kernel("/tmp/vynkor_metrics_reachable.sock", 19600).await;
 
     let (status, _body) = http_get_body(19600, "/metrics").await;
     assert_eq!(status, 200, "/metrics must return HTTP 200");
@@ -56,13 +56,13 @@ async fn metrics_endpoint_reachable_and_returns_200() {
 
 #[tokio::test]
 async fn messages_routed_counter_appears_after_routing() {
-    let (shutdown, _reg, _bus) = start_kernel("/tmp/veyron_metrics_routed.sock", 19601).await;
+    let (shutdown, _reg, _bus) = start_kernel("/tmp/vynkor_metrics_routed.sock", 19601).await;
 
     // Two plugins; plugin_a routes a message to plugin_b.
-    let mut plugin_a = VeyronClient::connect("/tmp/veyron_metrics_routed.sock")
+    let mut plugin_a = VynkorClient::connect("/tmp/vynkor_metrics_routed.sock")
         .await
         .unwrap();
-    let mut plugin_b = VeyronClient::connect("/tmp/veyron_metrics_routed.sock")
+    let mut plugin_b = VynkorClient::connect("/tmp/vynkor_metrics_routed.sock")
         .await
         .unwrap();
 
@@ -110,10 +110,10 @@ async fn messages_routed_counter_appears_after_routing() {
 
 #[tokio::test]
 async fn ipc_send_denied_counter_appears_after_permission_denial() {
-    let (shutdown, _reg, _bus) = start_kernel("/tmp/veyron_metrics_denied.sock", 19602).await;
+    let (shutdown, _reg, _bus) = start_kernel("/tmp/vynkor_metrics_denied.sock", 19602).await;
 
     // Register plugin WITHOUT PERMISSION_IPC_SEND; attempt to send to another plugin.
-    let mut plugin = VeyronClient::connect("/tmp/veyron_metrics_denied.sock")
+    let mut plugin = VynkorClient::connect("/tmp/vynkor_metrics_denied.sock")
         .await
         .unwrap();
     plugin
@@ -150,9 +150,9 @@ async fn ipc_send_denied_counter_appears_after_permission_denial() {
 
 #[tokio::test]
 async fn plugins_registered_counter_appears_after_registration() {
-    let (shutdown, _reg, _bus) = start_kernel("/tmp/veyron_metrics_registered.sock", 19603).await;
+    let (shutdown, _reg, _bus) = start_kernel("/tmp/vynkor_metrics_registered.sock", 19603).await;
 
-    let mut plugin = VeyronClient::connect("/tmp/veyron_metrics_registered.sock")
+    let mut plugin = VynkorClient::connect("/tmp/vynkor_metrics_registered.sock")
         .await
         .unwrap();
     plugin
@@ -175,14 +175,14 @@ async fn plugins_registered_counter_appears_after_registration() {
 async fn mac_error_counter_appears_after_untagged_frame_on_secured_kernel() {
     let secret = "metrics-mac-secret-32-bytes-minimum";
     let (shutdown, _reg, _bus) =
-        start_kernel_secured("/tmp/veyron_metrics_mac.sock", 19604, secret).await;
+        start_kernel_secured("/tmp/vynkor_metrics_mac.sock", 19604, secret).await;
 
-    // Connect without MAC support: the plain VeyronClient sends CRC-only frames.
+    // Connect without MAC support: the plain VynkorClient sends CRC-only frames.
     // On a secured kernel, the first frame after registration ack has FLAG_MAC_PRESENT
     // set on the outbound side, and the kernel expects it on the inbound side too.
     // An untagged inbound frame triggers the mac error counter.
     let token = create_test_token("mac-err-plugin", vec![], secret.as_bytes(), 3600);
-    let mut plain = VeyronClient::connect("/tmp/veyron_metrics_mac.sock")
+    let mut plain = VynkorClient::connect("/tmp/vynkor_metrics_mac.sock")
         .await
         .unwrap();
     // Register with a valid token but without a MAC key → kernel will drop connection
@@ -192,7 +192,7 @@ async fn mac_error_counter_appears_after_untagged_frame_on_secured_kernel() {
         .await;
     // Send a ping (untagged) — kernel should reject it and increment the mac error counter.
     let env = Envelope {
-        payload: Some(envelope::Payload::Ping(vynkor::proto::veyron::Ping {
+        payload: Some(envelope::Payload::Ping(vynkor::proto::vynkor::Ping {
             timestamp: 1,
         })),
         ..Default::default()

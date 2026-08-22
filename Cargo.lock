@@ -3091,9 +3091,9 @@ dependencies = [
 
 [[package]]
 name = "vynkor-sdk"
-version = "0.0.1"
+version = "0.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d44f5841c219fc3cfa611b019011feee3ac87f6d75b84d018666513c6a68f305"
+checksum = "dc02f9f9deff67c809fde0847364cd5726b8b7649d91c8bc8aff9f328a3206c4"
 dependencies = [
  "crc32fast",
  "futures-util",
@@ -3106,9 +3106,9 @@ dependencies = [
 
 [[package]]
 name = "vynkor-wire"
-version = "0.0.1"
+version = "0.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "63cfc0dc495515681fb197555ff2b681c71ded3a4cd7d560c5be87a6ffe22176"
+checksum = "2e9f4eb057c7b8710ef73eb259584f741ff6f99dfb8b8f4b2eb1b589c36fe025"
 dependencies = [
  "crc32fast",
  "hkdf",

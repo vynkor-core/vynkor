@@ -1,9 +1,9 @@
 use vynkor::events::store::EventStore;
-use vynkor::proto::veyron::Event;
+use vynkor::proto::vynkor::Event;
 
 fn tmp_store(tag: &str) -> EventStore {
     // S2: use a private 0o700 dir — the ownership check rejects world-writable /tmp
-    let dir = std::env::temp_dir().join(format!("veyron_store_test_{tag}_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("vynkor_store_test_{tag}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     // set 0o700 so the ownership check passes
@@ -145,7 +145,7 @@ fn new_rejects_world_writable_dir() {
     use std::os::unix::fs::PermissionsExt;
 
     let dir = std::env::temp_dir().join(format!(
-        "veyron_store_test_world_writable_{}",
+        "vynkor_store_test_world_writable_{}",
         std::process::id()
     ));
     let _ = std::fs::remove_dir_all(&dir);

@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 /// Resolve the cert/key the gateway serves with. `tls: false` → no TLS.
 /// Both configured → used as-is. Neither → a self-signed pair is generated
-/// into `<private dir>/veyron-tls/` on first start and reused after.
+/// into `<private dir>/vynkor-tls/` on first start and reused after.
 /// Only one configured → boot error (half-configured TLS is a silent
 /// downgrade risk, so it must not be guessed).
 pub fn resolve_tls_paths(config: &Config) -> anyhow::Result<(Option<PathBuf>, Option<PathBuf>)> {

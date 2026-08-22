@@ -11,7 +11,7 @@ use crate::ipc::framing::{target_as_str, Frame, FLAG_RAW_BINARY};
 use crate::ipc::messages::IncomingMessage;
 use crate::kernel::commands::{CommandHandler, CommandOutcome};
 use crate::plugins::registry::{ActionLookup, DeviceMeta, PendingAction, PluginRegistry};
-use crate::proto::veyron::{
+use crate::proto::vynkor::{
     envelope, ActionRequest, ActionRequestChunk, ActionResponse, ActionResponseChunk, ActionStatus,
     ActionStreamAbort, DeviceOs, Envelope, ErrorCode, ErrorMessage, Event, EventPublishAck,
     EventPublishStatus, KernelCommandAck, PermissionType, PluginRegisterAck, Pong, SessionClose,

@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use std::process::Command;
 use std::time::Duration;
 use tokio::io::AsyncBufReadExt;
-use vynkor::proto::veyron::{envelope, ActionStatus, PluginManifest};
-use vynkor_sdk::VeyronClient;
+use vynkor::proto::vynkor::{envelope, ActionStatus, PluginManifest};
+use vynkor_sdk::VynkorClient;
 
 use super::sdk_harness::SdkHarness;
 
@@ -37,7 +37,7 @@ fn sdk_python_dir() -> std::path::PathBuf {
 fn python_deps_available() -> bool {
     Command::new("python3")
         .arg("-c")
-        .arg("import google.protobuf, veyron")
+        .arg("import google.protobuf, vynkor")
         .current_dir(sdk_python_dir())
         .output()
         .map(|o| o.status.success())
@@ -64,11 +64,11 @@ async fn python_sdk_register_and_ping() {
 import sys
 import asyncio
 sys.path.insert(0, "{sdk_dir}")
-from veyron.client import VeyronClient
-from veyron.veyron_protocol_pb2 import PluginManifest
+from vynkor.client import VynkorClient
+from vynkor.vynkor_protocol_pb2 import PluginManifest
 
 async def main():
-    c = VeyronClient("{socket}")
+    c = VynkorClient("{socket}")
     await c.connect()
     try:
         await c.register("sdk-python-test", PluginManifest())
@@ -135,13 +135,13 @@ async fn python_sdk_large_frame_round_trip() {
 import sys
 import asyncio
 sys.path.insert(0, "{sdk_dir}")
-from veyron.client import VeyronClient
-from veyron.veyron_protocol_pb2 import PluginManifest
+from vynkor.client import VynkorClient
+from vynkor.vynkor_protocol_pb2 import PluginManifest
 
 PAYLOAD = bytes((i % 256 for i in range(100_000)))
 
 async def main():
-    c = VeyronClient("{socket}")
+    c = VynkorClient("{socket}")
     await c.connect()
     await c.register("sdk-python-large-recv", PluginManifest())
     await c.subscribe(["large.event"])
@@ -189,7 +189,7 @@ asyncio.run(main())
     harness
         .event_bus
         .publish(
-            vynkor::proto::veyron::Event {
+            vynkor::proto::vynkor::Event {
                 event_id: "large-1".to_string(),
                 event_type: "large.event".to_string(),
                 payload_json: payload,
@@ -236,7 +236,7 @@ async fn python_sdk_streaming_action_round_trip() {
         return;
     }
     if !python_deps_available() {
-        eprintln!("[SKIP] Python SDK deps (google.protobuf/veyron) not importable");
+        eprintln!("[SKIP] Python SDK deps (google.protobuf/vynkor) not importable");
         return;
     }
 
@@ -258,7 +258,7 @@ async fn python_sdk_streaming_action_round_trip() {
 
     tokio::time::sleep(Duration::from_millis(400)).await;
 
-    let mut client = VeyronClient::connect(&socket)
+    let mut client = VynkorClient::connect(&socket)
         .await
         .expect("SDK connect failed");
     client
@@ -339,7 +339,7 @@ async fn python_sdk_publish_event_from_plugin() {
         return;
     }
     if !python_deps_available() {
-        eprintln!("[SKIP] Python SDK deps (google.protobuf/veyron) not importable");
+        eprintln!("[SKIP] Python SDK deps (google.protobuf/vynkor) not importable");
         return;
     }
 
@@ -361,7 +361,7 @@ async fn python_sdk_publish_event_from_plugin() {
 
     tokio::time::sleep(Duration::from_millis(400)).await;
 
-    let mut subscriber = VeyronClient::connect(&socket)
+    let mut subscriber = VynkorClient::connect(&socket)
         .await
         .expect("subscriber connect failed");
     subscriber
@@ -373,7 +373,7 @@ async fn python_sdk_publish_event_from_plugin() {
         .await
         .expect("subscribe failed");
 
-    let mut sender = VeyronClient::connect(&socket)
+    let mut sender = VynkorClient::connect(&socket)
         .await
         .expect("sender connect failed");
     sender
@@ -387,9 +387,9 @@ async fn python_sdk_publish_event_from_plugin() {
     sender
         .send(
             "kernel",
-            vynkor::proto::veyron::Envelope {
+            vynkor::proto::vynkor::Envelope {
                 payload: Some(envelope::Payload::ActionRequest(
-                    vynkor::proto::veyron::ActionRequest {
+                    vynkor::proto::vynkor::ActionRequest {
                         action_id: "py-publish-act-1".to_string(),
                         action: "publish_test".to_string(),
                         params_json: params.clone(),
@@ -446,7 +446,7 @@ async fn python_sdk_session_close_dispatch() {
         return;
     }
     if !python_deps_available() {
-        eprintln!("[SKIP] Python SDK deps (google.protobuf/veyron) not importable");
+        eprintln!("[SKIP] Python SDK deps (google.protobuf/vynkor) not importable");
         return;
     }
 
@@ -471,7 +471,7 @@ async fn python_sdk_session_close_dispatch() {
 
     tokio::time::sleep(Duration::from_millis(400)).await;
 
-    let mut client = VeyronClient::connect(&socket)
+    let mut client = VynkorClient::connect(&socket)
         .await
         .expect("SDK connect failed");
     client
