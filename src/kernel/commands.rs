@@ -1,5 +1,5 @@
 use crate::plugins::registry::PluginRegistry;
-use crate::proto::veyron::CommandStatus;
+use crate::proto::vynkor::CommandStatus;
 use crate::utils::config::load_config;
 use crate::utils::logging::set_log_level;
 use std::time::Instant;
@@ -166,7 +166,7 @@ impl CommandHandler {
 mod tests {
     use super::*;
     use crate::plugins::registry::{DeviceMeta, DeviceOs};
-    use crate::proto::veyron::PluginManifest;
+    use crate::proto::vynkor::PluginManifest;
     use tokio::sync::mpsc;
 
     fn dummy_tx() -> mpsc::Sender<crate::ipc::connection::Outbound> {
@@ -237,7 +237,7 @@ mod tests {
             "reload_config",
             &registry,
             Instant::now(),
-            Some("/nonexistent/veyron_cfg_test.yaml"),
+            Some("/nonexistent/vynkor_cfg_test.yaml"),
             b"",
         );
         assert_eq!(out.status, CommandStatus::CommandError);
@@ -250,7 +250,7 @@ mod tests {
 
     #[test]
     fn reload_config_with_valid_path_returns_ok() {
-        let tmp = std::env::temp_dir().join(format!("veyron_cmd_test_{}.yaml", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("vynkor_cmd_test_{}.yaml", std::process::id()));
         std::fs::write(
             &tmp,
             b"port: 9001\nlog_level: info\npid_file: /tmp/v.pid\nlog_file: /tmp/v.log\ndata_dir: /tmp/v_data\n",
@@ -312,11 +312,11 @@ mod tests {
         let manifest = PluginManifest {
             actions: vec!["weather.get".to_string()],
             permissions: vec!["PERMISSION_NETWORK".to_string()],
-            action_specs: vec![crate::proto::veyron::ActionSpec {
+            action_specs: vec![crate::proto::vynkor::ActionSpec {
                 name: "weather.get".to_string(),
                 description: "current conditions".to_string(),
                 params_schema: r#"{"type":"object"}"#.to_string(),
-                risk: crate::proto::veyron::ActionRisk::Low as i32,
+                risk: crate::proto::vynkor::ActionRisk::Low as i32,
                 requires_confirmation: false,
             }],
             ..Default::default()
@@ -387,11 +387,11 @@ mod tests {
     fn get_manifest_maps_high_risk() {
         let registry = PluginRegistry::new();
         let manifest = PluginManifest {
-            action_specs: vec![crate::proto::veyron::ActionSpec {
+            action_specs: vec![crate::proto::vynkor::ActionSpec {
                 name: "file.delete".to_string(),
                 description: "delete a file".to_string(),
                 params_schema: String::new(),
-                risk: crate::proto::veyron::ActionRisk::High as i32,
+                risk: crate::proto::vynkor::ActionRisk::High as i32,
                 requires_confirmation: true,
             }],
             ..Default::default()

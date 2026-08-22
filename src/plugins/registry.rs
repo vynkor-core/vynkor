@@ -1,6 +1,6 @@
 use crate::ipc::connection::Outbound;
-use crate::proto::veyron::{PermissionType, PluginManifest};
-use crate::utils::errors::VeyronError;
+use crate::proto::vynkor::{PermissionType, PluginManifest};
+use crate::utils::errors::VynkorError;
 use dashmap::DashMap;
 use std::collections::HashMap;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -8,7 +8,7 @@ use tokio::sync::mpsc;
 
 // D-03: registry now stores the wire DeviceInfo/DeviceState/DeviceOs (proto
 // v1.6) directly — re-exported so callers keep the registry:: path.
-pub use crate::proto::veyron::{ActionRisk, DeviceInfo, DeviceOs, DeviceState};
+pub use crate::proto::vynkor::{ActionRisk, DeviceInfo, DeviceOs, DeviceState};
 
 /// Device identity + metadata parsed off `PluginRegister` (D-03). The
 /// registry falls back to the single-user defaults (`"local"`/`"default"`)
@@ -116,7 +116,7 @@ impl PluginRegistry {
         write_tx: mpsc::Sender<Outbound>,
         device_id: &str,
         user_id: &str,
-    ) -> Result<(), VeyronError> {
+    ) -> Result<(), VynkorError> {
         self.register_with_device(
             plugin_id,
             conn_id,
@@ -140,7 +140,7 @@ impl PluginRegistry {
         manifest: PluginManifest,
         write_tx: mpsc::Sender<Outbound>,
         meta: DeviceMeta,
-    ) -> Result<(), VeyronError> {
+    ) -> Result<(), VynkorError> {
         use dashmap::mapref::entry::Entry;
 
         validate_plugin_id(&plugin_id)?;
@@ -158,7 +158,7 @@ impl PluginRegistry {
         // maps to).
         let conn_slot = match self.by_conn_id.entry(conn_id) {
             Entry::Occupied(_) => {
-                return Err(VeyronError::PluginAlreadyRegistered(format!(
+                return Err(VynkorError::PluginAlreadyRegistered(format!(
                     "connection {conn_id} already has a registered plugin"
                 )))
             }
@@ -166,7 +166,7 @@ impl PluginRegistry {
         };
 
         let plugin_slot = match self.by_plugin_id.entry(plugin_id.clone()) {
-            Entry::Occupied(_) => return Err(VeyronError::PluginAlreadyRegistered(plugin_id)),
+            Entry::Occupied(_) => return Err(VynkorError::PluginAlreadyRegistered(plugin_id)),
             Entry::Vacant(v) => v,
         };
 
@@ -544,13 +544,13 @@ pub fn action_risk_str(risk: i32) -> &'static str {
 /// JSON injection (ids are embedded into event payloads), routing confusion
 /// (reserved "kernel"/"*" targets), and silent truncation (ids must fit the
 /// 32-byte frame target field).
-pub fn validate_plugin_id(id: &str) -> Result<(), VeyronError> {
+pub fn validate_plugin_id(id: &str) -> Result<(), VynkorError> {
     const MAX_LEN: usize = 32; // frame target field width
 
     // shared charset/shape gate (MA-17) — also rejects "."/".." as ids
     crate::utils::validate::validate_identifier(id, MAX_LEN)?;
     if id == "kernel" || id == "*" {
-        return Err(VeyronError::InvalidPluginId(format!("'{id}' is reserved")));
+        return Err(VynkorError::InvalidPluginId(format!("'{id}' is reserved")));
     }
     Ok(())
 }

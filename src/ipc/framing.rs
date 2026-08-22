@@ -1,4 +1,4 @@
-use crate::utils::errors::VeyronError;
+use crate::utils::errors::VynkorError;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 pub use vynkor_wire::framing::{
@@ -12,7 +12,7 @@ pub async fn write_frame<W>(
     target: &str,
     flags: u16,
     payload: &[u8],
-) -> Result<(), VeyronError>
+) -> Result<(), VynkorError>
 where
     W: AsyncWrite + Unpin,
 {
@@ -21,7 +21,7 @@ where
         .map_err(Into::into)
 }
 
-pub async fn write_frame_raw<W>(stream: &mut W, frame: &Frame) -> Result<(), VeyronError>
+pub async fn write_frame_raw<W>(stream: &mut W, frame: &Frame) -> Result<(), VynkorError>
 where
     W: AsyncWrite + Unpin,
 {
@@ -30,7 +30,7 @@ where
         .map_err(Into::into)
 }
 
-pub async fn read_frame<R>(stream: &mut R) -> Result<Frame, VeyronError>
+pub async fn read_frame<R>(stream: &mut R) -> Result<Frame, VynkorError>
 where
     R: AsyncRead + Unpin,
 {
@@ -42,7 +42,7 @@ where
 pub async fn read_frame_with_timeout<R>(
     stream: &mut R,
     timeout: std::time::Duration,
-) -> Result<Frame, VeyronError>
+) -> Result<Frame, VynkorError>
 where
     R: AsyncRead + Unpin,
 {

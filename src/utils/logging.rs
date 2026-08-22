@@ -93,6 +93,6 @@ fn setup_otel_tracer() -> Option<opentelemetry_sdk::trace::SdkTracer> {
 
     Some(opentelemetry::trace::TracerProvider::tracer(
         &tracer_provider,
-        "veyron",
+        "vynkor",
     ))
 }

@@ -82,7 +82,7 @@ async fn sandboxed_plugin_sees_only_its_own_pid_namespace() {
         return;
     };
     set_shim_bin();
-    let sup = Arc::new(PluginSupervisor::new("/tmp/veyron_shim_pidns.sock"));
+    let sup = Arc::new(PluginSupervisor::new("/tmp/vynkor_shim_pidns.sock"));
     if !sandbox_available(&sup).await {
         eprintln!("skipping: unprivileged user namespaces unavailable");
         return;
@@ -143,7 +143,7 @@ async fn shim_forwards_sigterm_to_sandboxed_plugin() {
         return;
     };
     set_shim_bin();
-    let sup = Arc::new(PluginSupervisor::new("/tmp/veyron_shim_sig.sock"));
+    let sup = Arc::new(PluginSupervisor::new("/tmp/vynkor_shim_sig.sock"));
     if !sandbox_available(&sup).await {
         eprintln!("skipping: unprivileged user namespaces unavailable");
         return;
@@ -212,7 +212,7 @@ async fn shim_reports_exit_status_for_supervision() {
         return;
     };
     set_shim_bin();
-    let sup = Arc::new(PluginSupervisor::new("/tmp/veyron_shim_exit.sock"));
+    let sup = Arc::new(PluginSupervisor::new("/tmp/vynkor_shim_exit.sock"));
     if !sandbox_available(&sup).await {
         eprintln!("skipping: unprivileged user namespaces unavailable");
         return;
@@ -253,7 +253,7 @@ async fn shim_reports_exit_status_for_supervision() {
 // ---- R9-03: Landlock filesystem isolation ----
 
 fn temp_subdir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("veyron-fsacc-{tag}-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("vynkor-fsacc-{tag}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }
@@ -304,7 +304,7 @@ async fn sandboxed_plugin_denied_undeclared_reads() {
         return;
     };
     set_shim_bin();
-    let sup = Arc::new(PluginSupervisor::new("/tmp/veyron_shim_fsacc_read.sock"));
+    let sup = Arc::new(PluginSupervisor::new("/tmp/vynkor_shim_fsacc_read.sock"));
     if !fs_restriction_available(&sup, &python).await {
         eprintln!("skipping: Landlock filesystem restriction unavailable");
         return;
@@ -368,7 +368,7 @@ async fn sandboxed_plugin_writes_only_declared_writable_paths() {
         return;
     };
     set_shim_bin();
-    let sup = Arc::new(PluginSupervisor::new("/tmp/veyron_shim_fsacc_write.sock"));
+    let sup = Arc::new(PluginSupervisor::new("/tmp/vynkor_shim_fsacc_write.sock"));
     if !fs_restriction_available(&sup, &python).await {
         eprintln!("skipping: Landlock filesystem restriction unavailable");
         return;
@@ -438,7 +438,7 @@ async fn sandboxed_plugin_reads_declared_readonly_paths() {
         return;
     };
     set_shim_bin();
-    let sup = Arc::new(PluginSupervisor::new("/tmp/veyron_shim_fsacc_ro.sock"));
+    let sup = Arc::new(PluginSupervisor::new("/tmp/vynkor_shim_fsacc_ro.sock"));
     if !fs_restriction_available(&sup, &python).await {
         eprintln!("skipping: Landlock filesystem restriction unavailable");
         return;
@@ -506,7 +506,7 @@ async fn sandboxed_plugin_full_mode_is_unrestricted() {
         return;
     };
     set_shim_bin();
-    let sup = Arc::new(PluginSupervisor::new("/tmp/veyron_shim_fsacc_full.sock"));
+    let sup = Arc::new(PluginSupervisor::new("/tmp/vynkor_shim_fsacc_full.sock"));
     if !sandbox_available(&sup).await {
         eprintln!("skipping: unprivileged user namespaces unavailable");
         return;
@@ -555,7 +555,7 @@ async fn sandboxed_plugin_reaches_kernel_socket() {
         return;
     };
     set_shim_bin();
-    let sock_path = "/tmp/veyron_shim_fsacc_sock.sock";
+    let sock_path = "/tmp/vynkor_shim_fsacc_sock.sock";
     let _ = std::fs::remove_file(sock_path);
     let _listener = std::os::unix::net::UnixListener::bind(sock_path)
         .expect("bind test listener for the kernel socket");
@@ -659,7 +659,7 @@ async fn sandboxed_plugin_denied_ptrace_dies_with_sigsys() {
         return;
     };
     set_shim_bin();
-    let sup = Arc::new(PluginSupervisor::new("/tmp/veyron_shim_seccomp.sock"));
+    let sup = Arc::new(PluginSupervisor::new("/tmp/vynkor_shim_seccomp.sock"));
     if !seccomp_available(&sup, &python).await {
         eprintln!("skipping: seccomp syscall filter unavailable");
         return;
@@ -726,7 +726,7 @@ async fn sandboxed_plugin_runs_normally_under_seccomp() {
         return;
     };
     set_shim_bin();
-    let sup = Arc::new(PluginSupervisor::new("/tmp/veyron_shim_seccomp_ok.sock"));
+    let sup = Arc::new(PluginSupervisor::new("/tmp/vynkor_shim_seccomp_ok.sock"));
     if !sandbox_available(&sup).await {
         eprintln!("skipping: unprivileged user namespaces unavailable");
         return;

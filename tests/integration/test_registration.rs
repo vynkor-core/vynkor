@@ -1,14 +1,14 @@
 use super::helpers::start_kernel;
 use std::time::Duration;
 use tokio::time::timeout;
-use vynkor::proto::veyron::PluginManifest;
-use vynkor_sdk::VeyronClient;
+use vynkor::proto::vynkor::PluginManifest;
+use vynkor_sdk::VynkorClient;
 
 #[tokio::test]
 async fn plugin_registration_accepted_and_appears_in_registry() {
-    let (shutdown_tx, registry, _bus) = start_kernel("/tmp/veyron_integ_reg.sock", 19200).await;
+    let (shutdown_tx, registry, _bus) = start_kernel("/tmp/vynkor_integ_reg.sock", 19200).await;
 
-    let mut client = VeyronClient::connect("/tmp/veyron_integ_reg.sock")
+    let mut client = VynkorClient::connect("/tmp/vynkor_integ_reg.sock")
         .await
         .unwrap();
     let ack = timeout(

@@ -21,7 +21,7 @@ use crate::plugins::loader::PluginLoader;
 use crate::plugins::manager::PluginManager;
 use crate::plugins::registry::PluginRegistry;
 use crate::plugins::supervisor::PluginSupervisor;
-use crate::proto::veyron::{envelope, Envelope, Event, PluginShutdown};
+use crate::proto::vynkor::{envelope, Envelope, Event, PluginShutdown};
 use crate::utils::config::{resolve_device_id, Config, Role};
 
 pub struct Kernel;
@@ -417,7 +417,7 @@ mod tests {
         let mut file = tempfile::NamedTempFile::new().expect("tempfile");
         writeln!(
             file,
-            "port: 9000\nlog_level: debug\ndata_dir: /tmp/veyron_test_data"
+            "port: 9000\nlog_level: debug\ndata_dir: /tmp/vynkor_test_data"
         )
         .expect("write");
         let path = file.path().to_str().unwrap().to_string();
@@ -445,7 +445,7 @@ mod tests {
         let mut file = tempfile::NamedTempFile::new().expect("tempfile");
         writeln!(
             file,
-            "port: 9000\nlog_level: debug\ndata_dir: /tmp/veyron_test_data"
+            "port: 9000\nlog_level: debug\ndata_dir: /tmp/vynkor_test_data"
         )
         .expect("write");
         let config_file = Some(file.path().to_str().unwrap().to_string());

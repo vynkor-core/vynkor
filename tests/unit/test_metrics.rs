@@ -10,7 +10,7 @@ use vynkor::plugins::supervisor::PluginSupervisor;
 
 fn make_app() -> axum::Router {
     init_metrics();
-    let sup = Arc::new(PluginSupervisor::new("/tmp/veyron_test_metrics.sock"));
+    let sup = Arc::new(PluginSupervisor::new("/tmp/vynkor_test_metrics.sock"));
     let reg = Arc::new(PluginRegistry::new());
     let mgr = Arc::new(PluginManager::new(sup, reg));
     create_router(mgr, None)

@@ -3,7 +3,7 @@ use crate::ipc::connection::out_frame;
 use crate::ipc::framing::Frame;
 use crate::ipc::protocol::kernel_message_id;
 use crate::plugins::registry::{device_os_str, PluginRegistry};
-use crate::proto::veyron::{envelope, Envelope, Event};
+use crate::proto::vynkor::{envelope, Envelope, Event};
 use dashmap::DashMap;
 use metrics::counter;
 use prost::Message;

@@ -21,7 +21,7 @@ name = "integration"
 path = "tests/integration/mod.rs"
 
 [dependencies]
-vynkor-wire = { version = "0.0.1", features = ["manifest"] }
+vynkor-wire = { version = "0.0.2", features = ["manifest"] }
 tokio = { version = "1", features = ["full"] }
 
 axum = { version = "0.8", features = ["ws"] }
@@ -97,7 +97,7 @@ otel = ["tracing-opentelemetry", "opentelemetry", "opentelemetry_sdk", "opentele
 tokio = { version = "1", features = ["test-util"] }
 clap_complete = "4"
 crc32fast = "1"
-vynkor-sdk = "0.0.1"
+vynkor-sdk = "0.0.3"
 tower = "0.5"
 mockito = "1"
 tempfile = "3"

@@ -18,8 +18,8 @@ async fn start_kernel_with_plugins(
     let cfg = Config {
         socket_path: socket.to_string(),
         port,
-        pid_file: "/tmp/veyron_integ_autoload.pid".into(),
-        log_file: "/tmp/veyron_integ_autoload.log".into(),
+        pid_file: "/tmp/vynkor_integ_autoload.pid".into(),
+        log_file: "/tmp/vynkor_integ_autoload.log".into(),
         allow_no_auth: true,
         plugins: defs,
         ..Config::default()
@@ -57,7 +57,7 @@ async fn kernel_auto_spawns_plugins_from_config() {
     };
 
     let (shutdown, _registry) =
-        start_kernel_with_plugins("/tmp/veyron_autoload_integ.sock", 19320, vec![def]).await;
+        start_kernel_with_plugins("/tmp/vynkor_autoload_integ.sock", 19320, vec![def]).await;
 
     // The plugin process is spawned by the supervisor, not via UDS registration,
     // so it won't appear in the registry.  Verify the kernel itself is up by
@@ -76,7 +76,7 @@ async fn kernel_auto_spawns_plugins_from_config() {
 #[tokio::test]
 async fn kernel_starts_cleanly_with_empty_plugins_list() {
     let (shutdown, _registry) =
-        start_kernel_with_plugins("/tmp/veyron_autoload_empty.sock", 19321, vec![]).await;
+        start_kernel_with_plugins("/tmp/vynkor_autoload_empty.sock", 19321, vec![]).await;
 
     let connected = tokio::net::TcpStream::connect("127.0.0.1:19321")
         .await

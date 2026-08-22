@@ -612,7 +612,7 @@ mod tests {
 
     fn write_minimal_config(dir: &tempfile::TempDir, extras: &str) -> String {
         let path = dir.path().join("config.yaml");
-        let yaml = format!("port: 8000\nlog_level: info\ndata_dir: /tmp/veyron-test\n{extras}");
+        let yaml = format!("port: 8000\nlog_level: info\ndata_dir: /tmp/vynkor-test\n{extras}");
         std::fs::write(&path, yaml).unwrap();
         path.display().to_string()
     }
@@ -780,7 +780,7 @@ mod tests {
              permissions: [storage]\n\
              max_fs_access: read-only\n\
              readonly_paths: [/usr/share/foo]\n\
-             writable_paths: [/var/lib/veyron/foo]\n",
+             writable_paths: [/var/lib/vyn/foo]\n",
         )
         .unwrap();
         let path = write_minimal_config(&dir, "");
@@ -799,7 +799,7 @@ mod tests {
         assert_eq!(p.permissions, ["storage"]);
         assert_eq!(p.max_fs_access.as_deref(), Some("read-only"));
         assert_eq!(p.readonly_paths, [PathBuf::from("/usr/share/foo")]);
-        assert_eq!(p.writable_paths, [PathBuf::from("/var/lib/veyron/foo")]);
+        assert_eq!(p.writable_paths, [PathBuf::from("/var/lib/vyn/foo")]);
     }
 
     #[test]
@@ -890,12 +890,12 @@ mod tests {
     fn effective_tls_cert_path_prefers_configured_over_generated() {
         let configured = Config {
             tls: true,
-            tls_cert_path: Some(PathBuf::from("/etc/veyron/cert.pem")),
+            tls_cert_path: Some(PathBuf::from("/etc/vyn/cert.pem")),
             ..Default::default()
         };
         assert_eq!(
             effective_tls_cert_path(&configured),
-            Some(PathBuf::from("/etc/veyron/cert.pem"))
+            Some(PathBuf::from("/etc/vyn/cert.pem"))
         );
 
         // tls off → no cert to trust

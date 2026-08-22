@@ -386,7 +386,7 @@ mod tests {
 
     #[test]
     fn has_pids_controller_reads_subtree_control() {
-        let dir = std::env::temp_dir().join(format!("veyron-cg-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("vynkor-cg-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("cgroup.subtree_control"), "cpu memory pids\n").unwrap();
         assert!(has_pids_controller(&dir));
@@ -399,7 +399,7 @@ mod tests {
 
     #[test]
     fn enable_pids_controller_writes_plus_pids_and_is_idempotent() {
-        let dir = std::env::temp_dir().join(format!("veyron-cg-enable-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("vynkor-cg-enable-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("cgroup.subtree_control"), "cpu memory\n").unwrap();
         enable_pids_controller(&dir).unwrap();

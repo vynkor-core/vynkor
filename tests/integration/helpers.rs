@@ -5,16 +5,16 @@ use tokio::sync::oneshot;
 use vynkor::events::bus::EventBus;
 use vynkor::kernel::Kernel;
 use vynkor::plugins::registry::PluginRegistry;
-use vynkor::proto::veyron::PluginManifest;
+use vynkor::proto::vynkor::PluginManifest;
 use vynkor::utils::config::Config;
-use vynkor_sdk::VeyronClient;
+use vynkor_sdk::VynkorClient;
 
 pub fn test_config(socket: &str, port: u16) -> Config {
     Config {
         socket_path: socket.to_string(),
         port,
-        pid_file: "/tmp/veyron_integ_test.pid".into(),
-        log_file: "/tmp/veyron_integ_test.log".into(),
+        pid_file: "/tmp/vynkor_integ_test.pid".into(),
+        log_file: "/tmp/vynkor_integ_test.log".into(),
         allow_no_auth: true, // tests exercise the no-auth path deliberately
         tls: false,          // tests hit the plain-HTTP/WS path
         ..Config::default()
@@ -92,7 +92,7 @@ pub async fn run_soak(socket: &str, port: u16, duration_secs: u64) -> SoakStats 
                 if tokio::time::Instant::now() >= deadline {
                     break;
                 }
-                let mut client = match VeyronClient::connect(&sock).await {
+                let mut client = match VynkorClient::connect(&sock).await {
                     Ok(c) => c,
                     Err(_) => {
                         tokio::time::sleep(Duration::from_millis(10)).await;

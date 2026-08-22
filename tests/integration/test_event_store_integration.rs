@@ -7,16 +7,16 @@ use vynkor::events::bus::EventBus;
 use vynkor::events::store::EventStore;
 use vynkor::kernel::Kernel;
 use vynkor::plugins::registry::PluginRegistry;
-use vynkor::proto::veyron::{envelope, Envelope, EventAck, PluginManifest};
+use vynkor::proto::vynkor::{envelope, Envelope, EventAck, PluginManifest};
 use vynkor::utils::config::Config;
-use vynkor_sdk::VeyronClient;
+use vynkor_sdk::VynkorClient;
 
 fn store_config(socket: &str, port: u16, data_dir: &Path) -> Config {
     Config {
         socket_path: socket.to_string(),
         port,
-        pid_file: "/tmp/veyron_integ_es.pid".into(),
-        log_file: "/tmp/veyron_integ_es.log".into(),
+        pid_file: "/tmp/vynkor_integ_es.pid".into(),
+        log_file: "/tmp/vynkor_integ_es.log".into(),
         allow_no_auth: true,
         data_dir: data_dir.to_path_buf(),
         ..Config::default()
@@ -42,7 +42,7 @@ async fn start_kernel_with_store(socket: &str, port: u16, data_dir: &Path) -> on
 }
 
 fn tmp_data_dir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("veyron_es_integ_{tag}_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("vynkor_es_integ_{tag}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     // S2: set 0o700 so the ownership check in EventStore::new passes
@@ -63,9 +63,9 @@ fn tmp_data_dir(tag: &str) -> PathBuf {
 async fn kernel_system_event_is_persisted_to_store_as_pending() {
     let data_dir = tmp_data_dir("persist_pending");
     let shutdown_tx =
-        start_kernel_with_store("/tmp/veyron_es_persist.sock", 19300, &data_dir).await;
+        start_kernel_with_store("/tmp/vynkor_es_persist.sock", 19300, &data_dir).await;
 
-    let mut joiner = VeyronClient::connect("/tmp/veyron_es_persist.sock")
+    let mut joiner = VynkorClient::connect("/tmp/vynkor_es_persist.sock")
         .await
         .unwrap();
     joiner
@@ -96,10 +96,10 @@ async fn kernel_system_event_is_persisted_to_store_as_pending() {
 #[tokio::test]
 async fn event_ack_from_plugin_marks_event_delivered() {
     let data_dir = tmp_data_dir("ack_delivered");
-    let shutdown_tx = start_kernel_with_store("/tmp/veyron_es_ack.sock", 19301, &data_dir).await;
+    let shutdown_tx = start_kernel_with_store("/tmp/vynkor_es_ack.sock", 19301, &data_dir).await;
 
     // observer subscribes to all events so it receives system.plugin_joined
-    let mut observer = VeyronClient::connect("/tmp/veyron_es_ack.sock")
+    let mut observer = VynkorClient::connect("/tmp/vynkor_es_ack.sock")
         .await
         .unwrap();
     observer
@@ -110,7 +110,7 @@ async fn event_ack_from_plugin_marks_event_delivered() {
     tokio::time::sleep(Duration::from_millis(30)).await;
 
     // acker registers → kernel publishes + persists system.plugin_joined for it
-    let mut acker = VeyronClient::connect("/tmp/veyron_es_ack.sock")
+    let mut acker = VynkorClient::connect("/tmp/vynkor_es_ack.sock")
         .await
         .unwrap();
     acker

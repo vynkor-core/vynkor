@@ -16,13 +16,13 @@ fn tls_off_returns_no_paths() {
 fn configured_cert_and_key_are_returned_as_is() {
     let cfg = Config {
         tls: true,
-        tls_cert_path: Some(PathBuf::from("/etc/veyron/cert.pem")),
-        tls_key_path: Some(PathBuf::from("/etc/veyron/key.pem")),
+        tls_cert_path: Some(PathBuf::from("/etc/vyn/cert.pem")),
+        tls_key_path: Some(PathBuf::from("/etc/vyn/key.pem")),
         ..Default::default()
     };
     let (cert, key) = resolve_tls_paths(&cfg).unwrap();
-    assert_eq!(cert, Some(PathBuf::from("/etc/veyron/cert.pem")));
-    assert_eq!(key, Some(PathBuf::from("/etc/veyron/key.pem")));
+    assert_eq!(cert, Some(PathBuf::from("/etc/vyn/cert.pem")));
+    assert_eq!(key, Some(PathBuf::from("/etc/vyn/key.pem")));
 }
 
 #[test]
@@ -30,7 +30,7 @@ fn half_configured_tls_is_a_boot_error() {
     // tls on with only a cert is a silent-downgrade hazard — fail loudly
     let cfg = Config {
         tls: true,
-        tls_cert_path: Some(PathBuf::from("/etc/veyron/cert.pem")),
+        tls_cert_path: Some(PathBuf::from("/etc/vyn/cert.pem")),
         ..Default::default()
     };
     let err = resolve_tls_paths(&cfg).unwrap_err().to_string();

@@ -10,7 +10,7 @@ use vynkor::ipc::framing::{target_as_str, Frame, FLAG_MAC_PRESENT};
 use vynkor::ipc::messages::IncomingMessage;
 use vynkor::ipc::protocol::MessageRouter;
 use vynkor::plugins::registry::PluginRegistry;
-use vynkor::proto::veyron::{
+use vynkor::proto::vynkor::{
     envelope, ActionRequest, Envelope, Ping, PluginManifest, PluginRegister, PluginRegisterAck,
 };
 
@@ -1505,7 +1505,7 @@ async fn router_rejects_protocol_major_mismatch() {
         Some(envelope::Payload::Error(err)) => {
             assert_eq!(
                 err.code,
-                vynkor::proto::veyron::ErrorCode::ErrProtocolMismatch as i32,
+                vynkor::proto::vynkor::ErrorCode::ErrProtocolMismatch as i32,
                 "major mismatch must use ERR_PROTOCOL_MISMATCH"
             );
             assert!(
@@ -1536,7 +1536,7 @@ async fn router_stores_device_metadata_from_wire() {
             version: "1.0.0".to_string(),
             manifest: Some(dummy_manifest()),
             device_id: "phone-7f3a".to_string(),
-            os: vynkor::proto::veyron::DeviceOs::Android as i32,
+            os: vynkor::proto::vynkor::DeviceOs::Android as i32,
             arch: "aarch64".to_string(),
             os_version: "14".to_string(),
             capabilities: vec!["geo".to_string()],
@@ -1562,7 +1562,7 @@ async fn router_stores_device_metadata_from_wire() {
     }
 
     let dev = reg.get_device("phone-7f3a").expect("device must exist");
-    assert_eq!(dev.os, vynkor::proto::veyron::DeviceOs::Android as i32);
+    assert_eq!(dev.os, vynkor::proto::vynkor::DeviceOs::Android as i32);
     assert_eq!(dev.arch, "aarch64");
     assert_eq!(dev.capabilities, vec!["geo".to_string()]);
     let entry = reg.get("geo").expect("plugin must exist");

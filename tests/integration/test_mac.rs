@@ -2,19 +2,19 @@ use super::helpers::start_kernel_secured;
 use crate::jwt_helper::create_test_token;
 use std::time::Duration;
 use tokio::time::timeout;
-use vynkor::proto::veyron::{envelope, Envelope, ErrorCode, Ping, PluginManifest};
-use vynkor_sdk::VeyronClient;
+use vynkor::proto::vynkor::{envelope, Envelope, ErrorCode, Ping, PluginManifest};
+use vynkor_sdk::VynkorClient;
 
 #[tokio::test]
 async fn secured_kernel_completes_mac_handshake_and_pings() {
     let secret = "integration-mac-secret-32-bytes-min";
     let (_shutdown, _reg, _bus) =
-        start_kernel_secured("/tmp/veyron_mac_handshake.sock", 19500, secret).await;
+        start_kernel_secured("/tmp/vynkor_mac_handshake.sock", 19500, secret).await;
 
     let token = create_test_token("mac-plugin", vec![], secret.as_bytes(), 3600);
 
     let mut client =
-        VeyronClient::connect_with_secret("/tmp/veyron_mac_handshake.sock", secret.as_bytes())
+        VynkorClient::connect_with_secret("/tmp/vynkor_mac_handshake.sock", secret.as_bytes())
             .await
             .expect("connect");
     let ack = client
@@ -53,13 +53,13 @@ async fn secured_kernel_completes_mac_handshake_and_pings() {
 async fn secured_kernel_rejects_unmaced_client() {
     let secret = "integration-mac-secret-2-32-bytes-min";
     let (_shutdown, _reg, _bus) =
-        start_kernel_secured("/tmp/veyron_mac_reject.sock", 19501, secret).await;
+        start_kernel_secured("/tmp/vynkor_mac_reject.sock", 19501, secret).await;
 
     let token = create_test_token("plain-plugin", vec![], secret.as_bytes(), 3600);
 
     // Connect WITHOUT the secret: the client never derives the MAC key, so its
     // post-registration frames are un-tagged. The kernel must drop the connection.
-    let mut client = VeyronClient::connect("/tmp/veyron_mac_reject.sock")
+    let mut client = VynkorClient::connect("/tmp/vynkor_mac_reject.sock")
         .await
         .expect("connect");
     let ack = client

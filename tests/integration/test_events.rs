@@ -1,15 +1,15 @@
 use super::helpers::start_kernel;
 use std::time::Duration;
 use tokio::time::timeout;
-use vynkor::proto::veyron::{envelope, ActionRisk, ActionSpec, Event, PluginManifest};
-use vynkor_sdk::VeyronClient;
+use vynkor::proto::vynkor::{envelope, ActionRisk, ActionSpec, Event, PluginManifest};
+use vynkor_sdk::VynkorClient;
 
 #[tokio::test]
 async fn subscribed_plugin_receives_event_via_event_bus() {
     let (shutdown_tx, registry, event_bus) =
-        start_kernel("/tmp/veyron_integ_events.sock", 19202).await;
+        start_kernel("/tmp/vynkor_integ_events.sock", 19202).await;
 
-    let mut client = VeyronClient::connect("/tmp/veyron_integ_events.sock")
+    let mut client = VynkorClient::connect("/tmp/vynkor_integ_events.sock")
         .await
         .unwrap();
     client
@@ -58,9 +58,9 @@ async fn subscribed_plugin_receives_event_via_event_bus() {
 
 #[tokio::test]
 async fn wildcard_subscriber_receives_system_plugin_joined() {
-    let (shutdown_tx, _registry, _bus) = start_kernel("/tmp/veyron_integ_joined.sock", 19203).await;
+    let (shutdown_tx, _registry, _bus) = start_kernel("/tmp/vynkor_integ_joined.sock", 19203).await;
 
-    let mut observer = VeyronClient::connect("/tmp/veyron_integ_joined.sock")
+    let mut observer = VynkorClient::connect("/tmp/vynkor_integ_joined.sock")
         .await
         .unwrap();
     observer
@@ -72,7 +72,7 @@ async fn wildcard_subscriber_receives_system_plugin_joined() {
     tokio::time::sleep(Duration::from_millis(20)).await;
 
     // newcomer registers — triggers system.plugin_joined
-    let mut newcomer = VeyronClient::connect("/tmp/veyron_integ_joined.sock")
+    let mut newcomer = VynkorClient::connect("/tmp/vynkor_integ_joined.sock")
         .await
         .unwrap();
     newcomer
@@ -101,9 +101,9 @@ async fn joined_event_carries_device_fields() {
     // device identity so discovery subscribers can key on device without a
     // follow-up /devices call.
     let (shutdown_tx, _registry, _bus) =
-        start_kernel("/tmp/veyron_integ_joined_dev.sock", 19204).await;
+        start_kernel("/tmp/vynkor_integ_joined_dev.sock", 19204).await;
 
-    let mut observer = VeyronClient::connect("/tmp/veyron_integ_joined_dev.sock")
+    let mut observer = VynkorClient::connect("/tmp/vynkor_integ_joined_dev.sock")
         .await
         .unwrap();
     observer
@@ -115,20 +115,20 @@ async fn joined_event_carries_device_fields() {
     tokio::time::sleep(Duration::from_millis(20)).await;
 
     // a device agent registers with its identity off the wire (v1.6 fields)
-    let mut newcomer = VeyronClient::connect("/tmp/veyron_integ_joined_dev.sock")
+    let mut newcomer = VynkorClient::connect("/tmp/vynkor_integ_joined_dev.sock")
         .await
         .unwrap();
-    let reg = vynkor::proto::veyron::PluginRegister {
+    let reg = vynkor::proto::vynkor::PluginRegister {
         plugin_id: "device-agent".to_string(),
         manifest: Some(PluginManifest::default()),
         device_id: "phone-1".to_string(),
-        os: vynkor::proto::veyron::DeviceOs::Android as i32,
+        os: vynkor::proto::vynkor::DeviceOs::Android as i32,
         arch: "aarch64".to_string(),
         os_version: "14".to_string(),
         capabilities: vec!["geo".to_string(), "battery".to_string()],
         ..Default::default()
     };
-    let env = vynkor::proto::veyron::Envelope {
+    let env = vynkor::proto::vynkor::Envelope {
         payload: Some(envelope::Payload::PluginRegister(reg)),
         ..Default::default()
     };
@@ -169,9 +169,9 @@ async fn joined_event_carries_action_specs() {
     // (action_specs) so an AI subscriber can enumerate callable actions from
     // the event alone, without a follow-up get_manifest round-trip.
     let (shutdown_tx, _registry, _bus) =
-        start_kernel("/tmp/veyron_integ_joined_specs.sock", 19205).await;
+        start_kernel("/tmp/vynkor_integ_joined_specs.sock", 19205).await;
 
-    let mut observer = VeyronClient::connect("/tmp/veyron_integ_joined_specs.sock")
+    let mut observer = VynkorClient::connect("/tmp/vynkor_integ_joined_specs.sock")
         .await
         .unwrap();
     observer
@@ -182,7 +182,7 @@ async fn joined_event_carries_action_specs() {
 
     tokio::time::sleep(Duration::from_millis(20)).await;
 
-    let mut newcomer = VeyronClient::connect("/tmp/veyron_integ_joined_specs.sock")
+    let mut newcomer = VynkorClient::connect("/tmp/vynkor_integ_joined_specs.sock")
         .await
         .unwrap();
     let manifest = PluginManifest {
@@ -239,9 +239,9 @@ async fn joined_event_carries_action_specs() {
 #[tokio::test]
 async fn publish_without_permission_is_denied() {
     let (shutdown_tx, _registry, _bus) =
-        start_kernel("/tmp/veyron_integ_evpub_denied.sock", 19700).await;
+        start_kernel("/tmp/vynkor_integ_evpub_denied.sock", 19700).await;
 
-    let mut client = VeyronClient::connect("/tmp/veyron_integ_evpub_denied.sock")
+    let mut client = VynkorClient::connect("/tmp/vynkor_integ_evpub_denied.sock")
         .await
         .unwrap();
     client
@@ -249,9 +249,9 @@ async fn publish_without_permission_is_denied() {
         .await
         .unwrap();
 
-    let env = vynkor::proto::veyron::Envelope {
+    let env = vynkor::proto::vynkor::Envelope {
         payload: Some(envelope::Payload::EventPublish(
-            vynkor::proto::veyron::EventPublish {
+            vynkor::proto::vynkor::EventPublish {
                 event_type: "request_completed".to_string(),
                 payload_json: b"{}".to_vec(),
             },
@@ -269,7 +269,7 @@ async fn publish_without_permission_is_denied() {
         Some(envelope::Payload::EventPublishAck(ack)) => {
             assert_eq!(
                 ack.status,
-                vynkor::proto::veyron::EventPublishStatus::EventPublishPermissionDeny as i32
+                vynkor::proto::vynkor::EventPublishStatus::EventPublishPermissionDeny as i32
             );
         }
         other => panic!("expected EventPublishAck, got: {:?}", other),
@@ -281,9 +281,9 @@ async fn publish_without_permission_is_denied() {
 #[tokio::test]
 async fn publish_with_permission_namespaces_and_delivers_to_subscriber() {
     let (shutdown_tx, _registry, _bus) =
-        start_kernel("/tmp/veyron_integ_evpub_ok.sock", 19701).await;
+        start_kernel("/tmp/vynkor_integ_evpub_ok.sock", 19701).await;
 
-    let mut publisher = VeyronClient::connect("/tmp/veyron_integ_evpub_ok.sock")
+    let mut publisher = VynkorClient::connect("/tmp/vynkor_integ_evpub_ok.sock")
         .await
         .unwrap();
     publisher
@@ -297,7 +297,7 @@ async fn publish_with_permission_namespaces_and_delivers_to_subscriber() {
         .await
         .unwrap();
 
-    let mut subscriber = VeyronClient::connect("/tmp/veyron_integ_evpub_ok.sock")
+    let mut subscriber = VynkorClient::connect("/tmp/vynkor_integ_evpub_ok.sock")
         .await
         .unwrap();
     subscriber
@@ -311,9 +311,9 @@ async fn publish_with_permission_namespaces_and_delivers_to_subscriber() {
 
     tokio::time::sleep(Duration::from_millis(30)).await;
 
-    let env = vynkor::proto::veyron::Envelope {
+    let env = vynkor::proto::vynkor::Envelope {
         payload: Some(envelope::Payload::EventPublish(
-            vynkor::proto::veyron::EventPublish {
+            vynkor::proto::vynkor::EventPublish {
                 event_type: "request_completed".to_string(),
                 payload_json: br#"{"status":200}"#.to_vec(),
             },
@@ -330,7 +330,7 @@ async fn publish_with_permission_namespaces_and_delivers_to_subscriber() {
         Some(envelope::Payload::EventPublishAck(ack)) => {
             assert_eq!(
                 ack.status,
-                vynkor::proto::veyron::EventPublishStatus::EventPublishOk as i32
+                vynkor::proto::vynkor::EventPublishStatus::EventPublishOk as i32
             );
             assert!(!ack.event_id.is_empty());
             ack.event_id
@@ -358,14 +358,14 @@ async fn publish_with_permission_namespaces_and_delivers_to_subscriber() {
 #[tokio::test]
 async fn two_plugins_publishing_same_event_type_land_on_distinct_namespaces() {
     let (shutdown_tx, _registry, _bus) =
-        start_kernel("/tmp/veyron_integ_evpub_ns.sock", 19702).await;
+        start_kernel("/tmp/vynkor_integ_evpub_ns.sock", 19702).await;
 
     let publish_manifest = PluginManifest {
         permissions: vec!["PERMISSION_EVENT_PUBLISH".to_string()],
         ..Default::default()
     };
 
-    let mut network = VeyronClient::connect("/tmp/veyron_integ_evpub_ns.sock")
+    let mut network = VynkorClient::connect("/tmp/vynkor_integ_evpub_ns.sock")
         .await
         .unwrap();
     network
@@ -373,12 +373,12 @@ async fn two_plugins_publishing_same_event_type_land_on_distinct_namespaces() {
         .await
         .unwrap();
 
-    let mut weather = VeyronClient::connect("/tmp/veyron_integ_evpub_ns.sock")
+    let mut weather = VynkorClient::connect("/tmp/vynkor_integ_evpub_ns.sock")
         .await
         .unwrap();
     weather.register("weather", publish_manifest).await.unwrap();
 
-    let mut subscriber = VeyronClient::connect("/tmp/veyron_integ_evpub_ns.sock")
+    let mut subscriber = VynkorClient::connect("/tmp/vynkor_integ_evpub_ns.sock")
         .await
         .unwrap();
     subscriber
@@ -394,9 +394,9 @@ async fn two_plugins_publishing_same_event_type_land_on_distinct_namespaces() {
     tokio::time::sleep(Duration::from_millis(30)).await;
 
     for client in [&mut network, &mut weather] {
-        let env = vynkor::proto::veyron::Envelope {
+        let env = vynkor::proto::vynkor::Envelope {
             payload: Some(envelope::Payload::EventPublish(
-                vynkor::proto::veyron::EventPublish {
+                vynkor::proto::vynkor::EventPublish {
                     event_type: "request_completed".to_string(),
                     payload_json: b"{}".to_vec(),
                 },
@@ -435,9 +435,9 @@ async fn two_plugins_publishing_same_event_type_land_on_distinct_namespaces() {
 #[tokio::test]
 async fn sdk_publish_event_returns_ack_and_delivers_to_subscriber() {
     let (shutdown_tx, _registry, _bus) =
-        start_kernel("/tmp/veyron_integ_evpub_sdk.sock", 19703).await;
+        start_kernel("/tmp/vynkor_integ_evpub_sdk.sock", 19703).await;
 
-    let mut publisher = VeyronClient::connect("/tmp/veyron_integ_evpub_sdk.sock")
+    let mut publisher = VynkorClient::connect("/tmp/vynkor_integ_evpub_sdk.sock")
         .await
         .unwrap();
     publisher
@@ -451,7 +451,7 @@ async fn sdk_publish_event_returns_ack_and_delivers_to_subscriber() {
         .await
         .unwrap();
 
-    let mut subscriber = VeyronClient::connect("/tmp/veyron_integ_evpub_sdk.sock")
+    let mut subscriber = VynkorClient::connect("/tmp/vynkor_integ_evpub_sdk.sock")
         .await
         .unwrap();
     subscriber
@@ -475,7 +475,7 @@ async fn sdk_publish_event_returns_ack_and_delivers_to_subscriber() {
 
     assert_eq!(
         ack.status,
-        vynkor::proto::veyron::EventPublishStatus::EventPublishOk as i32
+        vynkor::proto::vynkor::EventPublishStatus::EventPublishOk as i32
     );
     assert!(!ack.event_id.is_empty());
 

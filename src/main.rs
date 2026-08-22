@@ -124,9 +124,9 @@ async fn run_kernel(cli: Cli) -> Result<()> {
             utils::logging::try_init(&cfg.log_level);
             if is_running(&cfg.pid_file)? {
                 let pid = read_pid(&cfg.pid_file)?;
-                println!("veyron is running (PID: {})", pid);
+                println!("vynkor is running (PID: {})", pid);
             } else {
-                println!("veyron is not running");
+                println!("vynkor is not running");
             }
         }
         Commands::Logs { lines, config } => {
@@ -498,7 +498,7 @@ async fn run_foreground(cfg: Config) -> Result<()> {
             // drop closes the fd; the parent sees EOF only after the line
         }
     }
-    info!("veyron starting in foreground (port {})", cfg.port);
+    info!("vynkor starting in foreground (port {})", cfg.port);
     let pid_file = cfg.pid_file.clone();
     kernel::Kernel::run(cfg).await?;
     let _ = fs::remove_file(&pid_file);

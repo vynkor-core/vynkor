@@ -7,7 +7,7 @@ use vynkor::ipc::framing::{
     write_frame_raw, Frame, COMPRESS_THRESHOLD, FLAG_COMPRESSED, FLAG_MAC_PRESENT,
     MAX_PAYLOAD_SIZE,
 };
-use vynkor::utils::errors::VeyronError;
+use vynkor::utils::errors::VynkorError;
 
 async fn make_pair() -> (UnixStream, UnixStream) {
     UnixStream::pair().expect("UnixStream::pair failed")
@@ -30,7 +30,7 @@ async fn stalled_payload_times_out() {
 
     let res = read_frame_with_timeout(&mut reader, Duration::from_millis(150)).await;
     assert!(
-        matches!(res, Err(VeyronError::FrameReadTimeout)),
+        matches!(res, Err(VynkorError::FrameReadTimeout)),
         "stalled payload must time out, got {res:?}"
     );
     drop(writer);
@@ -56,7 +56,7 @@ async fn idle_connection_does_not_time_out() {
 #[tokio::test]
 async fn frame_round_trip_produces_identical_frame() {
     let (mut writer, mut reader) = make_pair().await;
-    let payload = b"hello veyron";
+    let payload = b"hello vynkor";
     let target = "weather";
     let flags: u16 = 0;
 
@@ -178,7 +178,7 @@ async fn magic_mismatch_returns_error() {
 
     let result = read_frame(&mut reader).await;
     assert!(
-        matches!(result, Err(VeyronError::FrameMagicMismatch)),
+        matches!(result, Err(VynkorError::FrameMagicMismatch)),
         "expected FrameMagicMismatch, got {:?}",
         result
     );
@@ -221,7 +221,7 @@ async fn crc32_mismatch_returns_error() {
 
     let result = read_frame(&mut r2).await;
     assert!(
-        matches!(result, Err(VeyronError::FrameCrcMismatch)),
+        matches!(result, Err(VynkorError::FrameCrcMismatch)),
         "expected FrameCrcMismatch, got {:?}",
         result
     );
@@ -244,7 +244,7 @@ async fn payload_too_large_returns_error() {
 
     let result = read_frame(&mut r).await;
     assert!(
-        matches!(result, Err(VeyronError::PayloadTooLarge(_))),
+        matches!(result, Err(VynkorError::PayloadTooLarge(_))),
         "expected PayloadTooLarge, got {:?}",
         result
     );
@@ -256,7 +256,7 @@ async fn write_frame_rejects_payload_too_large() {
     let huge = vec![0u8; MAX_PAYLOAD_SIZE + 1];
     let result = write_frame(&mut w, "x", 0, &huge).await;
     assert!(
-        matches!(result, Err(VeyronError::PayloadTooLarge(_))),
+        matches!(result, Err(VynkorError::PayloadTooLarge(_))),
         "expected PayloadTooLarge, got {:?}",
         result
     );
@@ -276,7 +276,7 @@ async fn write_frame_raw_rejects_payload_too_large() {
     };
     let result = write_frame_raw(&mut w, &frame).await;
     assert!(
-        matches!(result, Err(VeyronError::PayloadTooLarge(_))),
+        matches!(result, Err(VynkorError::PayloadTooLarge(_))),
         "expected PayloadTooLarge, got {:?}",
         result
     );

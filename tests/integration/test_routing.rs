@@ -2,18 +2,18 @@ use super::helpers::start_kernel;
 use prost::Message;
 use std::time::Duration;
 use tokio::time::timeout;
-use vynkor::proto::veyron::{envelope, ActionRequest, Envelope, PluginManifest};
-use vynkor_sdk::VeyronClient;
+use vynkor::proto::vynkor::{envelope, ActionRequest, Envelope, PluginManifest};
+use vynkor_sdk::VynkorClient;
 
 #[tokio::test]
 async fn plugin_a_sends_to_plugin_b_and_b_receives() {
     let (shutdown_tx, _registry, _bus) =
-        start_kernel("/tmp/veyron_integ_routing.sock", 19201).await;
+        start_kernel("/tmp/vynkor_integ_routing.sock", 19201).await;
 
-    let mut plugin_a = VeyronClient::connect("/tmp/veyron_integ_routing.sock")
+    let mut plugin_a = VynkorClient::connect("/tmp/vynkor_integ_routing.sock")
         .await
         .unwrap();
-    let mut plugin_b = VeyronClient::connect("/tmp/veyron_integ_routing.sock")
+    let mut plugin_b = VynkorClient::connect("/tmp/vynkor_integ_routing.sock")
         .await
         .unwrap();
 
@@ -71,12 +71,12 @@ async fn plugin_a_sends_to_plugin_b_and_b_receives() {
 #[tokio::test]
 async fn action_request_gets_caller_plugin_id_stamped_and_spoof_overwritten() {
     let (_shutdown_tx, _registry, _bus) =
-        start_kernel("/tmp/veyron_integ_caller_stamp.sock", 19345).await;
+        start_kernel("/tmp/vynkor_integ_caller_stamp.sock", 19345).await;
 
-    let mut requester = VeyronClient::connect("/tmp/veyron_integ_caller_stamp.sock")
+    let mut requester = VynkorClient::connect("/tmp/vynkor_integ_caller_stamp.sock")
         .await
         .unwrap();
-    let mut provider = VeyronClient::connect("/tmp/veyron_integ_caller_stamp.sock")
+    let mut provider = VynkorClient::connect("/tmp/vynkor_integ_caller_stamp.sock")
         .await
         .unwrap();
 

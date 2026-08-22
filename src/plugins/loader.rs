@@ -3,12 +3,12 @@ use crate::events::bus::EventBus;
 use crate::plugins::manager::PluginManager;
 use crate::plugins::supervisor::{PluginConfig, RestartPolicy};
 use crate::utils::config::PluginDef;
-use crate::utils::errors::VeyronError;
+use crate::utils::errors::VynkorError;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{info, warn};
-// manifest types come from veyron-wire — the single implementation shared
+// manifest types come from vynkor-wire — the single implementation shared
 // with vynm since V-01/V-02.
 use vynkor_wire::manifest::{validate_manifest, InstallManifest};
 
@@ -261,7 +261,7 @@ pub fn topo_sort<'a>(
 /// Validate plugin.json from the plugin's binary directory before spawning.
 /// Returns the parsed manifest if present, or None if no plugin.json exists.
 /// If plugin.json is present it must pass kernel compatibility and permission checks.
-pub fn validate_plugin_def(def: &PluginDef) -> Result<Option<InstallManifest>, VeyronError> {
+pub fn validate_plugin_def(def: &PluginDef) -> Result<Option<InstallManifest>, VynkorError> {
     let binary = PathBuf::from(&def.binary);
     let plugin_dir = match binary.parent() {
         Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
@@ -274,7 +274,7 @@ pub fn validate_plugin_def(def: &PluginDef) -> Result<Option<InstallManifest>, V
     }
 
     let kernel_ver = semver::Version::parse(env!("CARGO_PKG_VERSION"))
-        .map_err(|e| VeyronError::Internal(format!("kernel version parse: {e}")))?;
+        .map_err(|e| VynkorError::Internal(format!("kernel version parse: {e}")))?;
 
     let manifest = validate_manifest(
         &manifest_path,
@@ -293,7 +293,7 @@ pub fn validate_plugin_def(def: &PluginDef) -> Result<Option<InstallManifest>, V
                 .iter()
                 .any(|g| normalize_permission(g) == normalize_permission(perm))
             {
-                return Err(VeyronError::PermissionDenied(format!(
+                return Err(VynkorError::PermissionDenied(format!(
                     "Plugin '{}' requests permission '{}' which is not granted in config",
                     def.id, perm
                 )));

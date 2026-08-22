@@ -1,6 +1,6 @@
 use crate::plugins::registry::PluginRegistry;
-use crate::proto::veyron::PermissionType;
-use crate::utils::errors::VeyronError;
+use crate::proto::vynkor::PermissionType;
+use crate::utils::errors::VynkorError;
 
 /// Maps a kernel-routed action name to the permission both its provider and
 /// its requester must have declared (T-19: checking the provider alone lets
@@ -50,10 +50,10 @@ pub fn check_permission(
     registry: &PluginRegistry,
     plugin_id: &str,
     required: PermissionType,
-) -> Result<(), VeyronError> {
+) -> Result<(), VynkorError> {
     let entry = registry
         .get(plugin_id)
-        .ok_or_else(|| VeyronError::PluginNotFound(plugin_id.to_string()))?;
+        .ok_or_else(|| VynkorError::PluginNotFound(plugin_id.to_string()))?;
 
     let required_norm = normalize_permission(required.as_str_name());
     if entry
@@ -64,7 +64,7 @@ pub fn check_permission(
     {
         Ok(())
     } else {
-        Err(VeyronError::PermissionDenied(format!(
+        Err(VynkorError::PermissionDenied(format!(
             "{plugin_id} lacks {}",
             required.as_str_name()
         )))
@@ -73,7 +73,7 @@ pub fn check_permission(
 
 /// Gate peer-to-peer IPC: a plugin may only unicast to another plugin if it
 /// declared `PERMISSION_IPC_SEND`. Default-deny — undeclared senders are rejected.
-pub fn check_ipc_send(registry: &PluginRegistry, plugin_id: &str) -> Result<(), VeyronError> {
+pub fn check_ipc_send(registry: &PluginRegistry, plugin_id: &str) -> Result<(), VynkorError> {
     check_permission(registry, plugin_id, PermissionType::PermissionIpcSend)
 }
 
@@ -84,16 +84,16 @@ pub fn check_ipc_target(
     registry: &PluginRegistry,
     sender_id: &str,
     target_id: &str,
-) -> Result<(), VeyronError> {
+) -> Result<(), VynkorError> {
     let entry = registry
         .get(sender_id)
-        .ok_or_else(|| VeyronError::PluginNotFound(sender_id.to_string()))?;
+        .ok_or_else(|| VynkorError::PluginNotFound(sender_id.to_string()))?;
 
     // D-03: same-user only IPC (one comparison). Host plugins all share the
     // "default" user, so single-user deployments are unaffected.
     if let Some(target) = registry.get(target_id) {
         if target.user_id != entry.user_id {
-            return Err(VeyronError::PermissionDenied(format!(
+            return Err(VynkorError::PermissionDenied(format!(
                 "cross-user IPC denied: {sender_id} (user {}) -> {target_id} (user {})",
                 entry.user_id, target.user_id
             )));
@@ -103,7 +103,7 @@ pub fn check_ipc_target(
     if entry.manifest.ipc_targets.iter().any(|t| t == target_id) {
         Ok(())
     } else {
-        Err(VeyronError::PermissionDenied(format!(
+        Err(VynkorError::PermissionDenied(format!(
             "{sender_id} ipc_targets does not include {target_id}"
         )))
     }

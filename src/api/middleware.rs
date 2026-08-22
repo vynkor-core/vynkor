@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crate::api::routes::AppState;
 use crate::auth::jwt::PluginClaims;
-use crate::proto::veyron::PermissionType;
+use crate::proto::vynkor::PermissionType;
 
 /// Verified JWT subject, inserted into request extensions by `auth_middleware`
 /// after signature validation. Downstream layers (e.g. rate limiting) must key

@@ -14,7 +14,7 @@ async fn kernel_remains_stable_under_sustained_load() {
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(5);
 
-    let stats: SoakStats = run_soak("/tmp/veyron_soak.sock", 19299, secs).await;
+    let stats: SoakStats = run_soak("/tmp/vynkor_soak.sock", 19299, secs).await;
 
     assert!(stats.total_pings > 0, "soak produced no pings in {secs}s");
     assert_eq!(stats.panics, 0, "kernel task panicked during soak");

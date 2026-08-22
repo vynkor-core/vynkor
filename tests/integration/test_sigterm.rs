@@ -11,8 +11,8 @@ fn write_test_config(cfg_path: &str, socket: &str, port: u16, pid_file: &str) {
             "port: {port}\n\
              log_level: info\n\
              pid_file: {pid_file}\n\
-             log_file: /tmp/veyron_sigterm_test.log\n\
-             data_dir: /tmp/veyron_sigterm_test_data\n\
+             log_file: /tmp/vynkor_sigterm_test.log\n\
+             data_dir: /tmp/vynkor_sigterm_test_data\n\
              socket_path: {socket}\n\
              allow_no_auth: true\n"
         ),
@@ -25,9 +25,9 @@ fn kernel_exits_cleanly_on_sigterm() {
     use nix::sys::signal::{kill, Signal};
     use nix::unistd::Pid;
 
-    let cfg_path = "/tmp/veyron_sigterm_cfg.yaml";
-    let socket = "/tmp/veyron_sigterm_test.sock";
-    let pid_file = "/tmp/veyron_sigterm_test.pid";
+    let cfg_path = "/tmp/vynkor_sigterm_cfg.yaml";
+    let socket = "/tmp/vynkor_sigterm_test.sock";
+    let pid_file = "/tmp/vynkor_sigterm_test.pid";
     write_test_config(cfg_path, socket, 19342, pid_file);
 
     // Remove stale socket/pid from a previous failed run

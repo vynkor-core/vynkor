@@ -277,7 +277,10 @@ mod tests {
 
     #[test]
     fn join_and_split_path_env_roundtrip() {
-        let paths = vec![PathBuf::from("/tmp/a"), PathBuf::from("/home/user/.veyron")];
+        let paths = vec![
+            PathBuf::from("/tmp/a"),
+            PathBuf::from("/home/user/.local/state/vyn"),
+        ];
         assert_eq!(parse_paths_env_v(&join_paths_env(&paths)), paths);
         assert!(parse_paths_env_v("").is_empty());
     }
@@ -370,13 +373,13 @@ mod tests {
 
     #[test]
     fn rule_for_skips_missing_paths() {
-        let missing = PathBuf::from("/nonexistent/veyron-r9-03");
+        let missing = PathBuf::from("/nonexistent/vynkor-r9-03");
         let access_read = AccessFs::from_read(ABI::V9);
         assert!(rule_for(&missing, access_read, access_read)
             .unwrap()
             .is_none());
 
-        let dir = std::env::temp_dir().join(format!("veyron-fsacc-dir-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("vynkor-fsacc-dir-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         assert!(rule_for(&dir, access_read, access_read).unwrap().is_some());
         let file = dir.join("f");
@@ -403,7 +406,7 @@ mod tests {
 
     #[test]
     fn resolves_relative_dir_binary_via_canonicalize() {
-        let dir = std::env::temp_dir().join(format!("veyron-fsacc-resolve-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("vynkor-fsacc-resolve-{}", std::process::id()));
         let sub = dir.join("sub");
         std::fs::create_dir_all(&sub).unwrap();
         let exe = sub.join("bin");
@@ -424,8 +427,8 @@ mod tests {
             PathBuf::from("/usr/bin/python3")
         );
         assert_eq!(
-            resolve_binary_path(Path::new("/nonexistent/veyron-r9-03-bin")),
-            PathBuf::from("/nonexistent/veyron-r9-03-bin")
+            resolve_binary_path(Path::new("/nonexistent/vynkor-r9-03-bin")),
+            PathBuf::from("/nonexistent/vynkor-r9-03-bin")
         );
     }
 }

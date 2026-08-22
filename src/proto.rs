@@ -1,1 +1,1 @@
-pub use vynkor_wire::proto::veyron;
+pub use vynkor_wire::proto::vynkor;

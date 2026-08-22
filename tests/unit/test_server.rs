@@ -8,7 +8,7 @@ use vynkor::ipc::server::UdsServer;
 
 fn tmp_socket() -> std::path::PathBuf {
     std::path::PathBuf::from(format!(
-        "/tmp/veyron_test_{}.sock",
+        "/tmp/vynkor_test_{}.sock",
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()

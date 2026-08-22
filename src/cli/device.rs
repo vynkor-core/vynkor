@@ -59,7 +59,7 @@ pub enum DeviceCmd {
         /// Token lifetime in seconds. Default: 86400 (24h).
         #[arg(long, default_value_t = 86400)]
         ttl_seconds: u64,
-        /// Audience claim. Default: config `jwt_audience`, else "veyron".
+        /// Audience claim. Default: config `jwt_audience`, else "vynkor".
         #[arg(long)]
         aud: Option<String>,
         /// Also write the QR to this path (SVG, opens in a browser).
@@ -100,7 +100,7 @@ pub fn handle(cmd: DeviceCmd, config_path: &str) -> anyhow::Result<()> {
     let targets = ipc_targets.map(parse_csv).unwrap_or_default();
     let audience = aud
         .or(cfg.jwt_audience.clone())
-        .unwrap_or_else(|| "veyron".to_string());
+        .unwrap_or_else(|| "vynkor".to_string());
     let jwt_token = crate::auth::jwt::mint_device_token(
         secret.as_bytes(),
         &device_id,

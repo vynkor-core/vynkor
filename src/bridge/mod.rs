@@ -9,7 +9,7 @@ use crate::ipc::connection::{out_frame, Outbound, SessionKeyCell};
 use crate::ipc::framing::{serialize_header, Frame, FLAG_MAC_PRESENT};
 use crate::ipc::messages::IncomingMessage;
 use crate::plugins::registry::{DeviceMeta, PluginRegistry};
-use crate::proto::veyron::{envelope, Envelope, PluginManifest, PluginRegister};
+use crate::proto::vynkor::{envelope, Envelope, PluginManifest, PluginRegister};
 use crate::utils::config::BridgeConfig;
 use crate::utils::sync::recover_poison;
 use axum::http::HeaderValue;
@@ -200,9 +200,9 @@ impl Bridge {
         // never the URL (access-log hygiene)
         let token = self.config.token.clone().unwrap_or_default();
         let protocol = if token.is_empty() {
-            "veyron".to_string()
+            "vynkor".to_string()
         } else {
-            format!("veyron, {token}")
+            format!("vynkor, {token}")
         };
         let value =
             HeaderValue::from_str(&protocol).map_err(|e| BridgeError::Connect(e.to_string()))?;
@@ -520,7 +520,7 @@ fn build_frame(target: &str, flags: u16, payload: Vec<u8>) -> Frame {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proto::veyron::{Event, PluginRegisterAck};
+    use crate::proto::vynkor::{Event, PluginRegisterAck};
     use tokio::net::TcpListener;
 
     fn manifest_with(actions: &[&str]) -> PluginManifest {
@@ -577,7 +577,7 @@ mod tests {
     fn kernel_routed_classification() {
         let action = Envelope {
             payload: Some(envelope::Payload::ActionRequest(
-                crate::proto::veyron::ActionRequest::default(),
+                crate::proto::vynkor::ActionRequest::default(),
             )),
             ..Default::default()
         };
@@ -637,7 +637,7 @@ mod tests {
 
         // fake host: accept, read the register, ack with a nonce, then drive
         // the two directions. Must echo the subprotocol the client requested
-        // (the real axum host does `ws.protocols(["veyron"])`) or the client
+        // (the real axum host does `ws.protocols(["vynkor"])`) or the client
         // aborts the handshake.
         let host = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
@@ -647,7 +647,7 @@ mod tests {
                  mut resp: tokio_tungstenite::tungstenite::handshake::server::Response| {
                     resp.headers_mut().insert(
                         "sec-websocket-protocol",
-                        HeaderValue::from_static("veyron"),
+                        HeaderValue::from_static("vynkor"),
                     );
                     Ok(resp)
                 },
@@ -713,7 +713,7 @@ mod tests {
 
             // host kernel -> device: a watchdog Ping (kernel traffic)
             let ping = Envelope {
-                payload: Some(envelope::Payload::Ping(crate::proto::veyron::Ping {
+                payload: Some(envelope::Payload::Ping(crate::proto::vynkor::Ping {
                     timestamp: 1,
                 })),
                 ..Default::default()
@@ -780,7 +780,7 @@ mod tests {
         // (what the local ActionResponse arm does after resolving a pending)
         let reply = Envelope {
             payload: Some(envelope::Payload::EventPublishAck(
-                crate::proto::veyron::EventPublishAck {
+                crate::proto::vynkor::EventPublishAck {
                     event_id: "evt-x".to_string(),
                     status: 0,
                     error: String::new(),

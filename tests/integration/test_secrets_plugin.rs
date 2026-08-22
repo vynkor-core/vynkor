@@ -12,8 +12,8 @@
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use vynkor::proto::veyron::{envelope, ActionRequest, ActionStatus, Envelope, PluginManifest};
-use vynkor_sdk::VeyronClient;
+use vynkor::proto::vynkor::{envelope, ActionRequest, ActionStatus, Envelope, PluginManifest};
+use vynkor_sdk::VynkorClient;
 
 use super::sdk_harness::SdkHarness;
 
@@ -82,7 +82,7 @@ async fn secrets_plugin_round_trip_with_permission() {
 
     tokio::time::sleep(Duration::from_millis(150)).await;
 
-    let mut client = VeyronClient::connect(&socket)
+    let mut client = VynkorClient::connect(&socket)
         .await
         .expect("SDK connect failed");
     client
@@ -174,7 +174,7 @@ async fn secrets_plugin_round_trip_with_permission() {
 #[tokio::test]
 async fn secrets_plugin_denies_unprivileged_caller() {
     use std::collections::HashMap;
-    use vynkor::proto::veyron::PermissionType;
+    use vynkor::proto::vynkor::PermissionType;
 
     let Some(bin) = secrets_binary() else {
         eprintln!(
@@ -220,7 +220,7 @@ async fn secrets_plugin_denies_unprivileged_caller() {
         ]),
     );
 
-    let mut client = VeyronClient::connect(&socket)
+    let mut client = VynkorClient::connect(&socket)
         .await
         .expect("SDK connect failed");
     client
