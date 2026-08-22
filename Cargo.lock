@@ -3428,9 +3428,9 @@ dependencies = [
 
 [[package]]
 name = "veyron-wire"
-version = "0.2.4"
+version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd500e5594a870b2824507d58f25d86daef299e9d3738c29f929f515dde5dc02"
+checksum = "ba3942d492bf625d8f13c78f354cbc48cefb2e52178c251237b80782b953739c"
 dependencies = [
  "crc32fast",
  "hkdf",

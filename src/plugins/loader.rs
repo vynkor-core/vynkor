@@ -278,7 +278,7 @@ pub fn validate_plugin_def(def: &PluginDef) -> Result<Option<InstallManifest>, V
 
     let manifest = validate_manifest(
         &manifest_path,
-        &kernel_ver,
+        Some(&kernel_ver),
         crate::auth::permissions::resolve_permission,
     )?;
 
