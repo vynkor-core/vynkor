@@ -385,7 +385,14 @@ lives in the manager repo and any format change is deliberate.
   Acceptance: `--json` machine-readable everywhere it applies; completions
   generated for bash/zsh/fish.
 
-- [ ] **V-17 — stage 4/A: rename code + packages to vynkor 0.0.1 (hard cut).**
+- [~] **V-17 — stage 4/A: rename code + packages to vynkor 0.0.1 (hard cut).**
+  Wave 1 ✅ DONE & verified 2026-08-22 (wire/sdk/kernel/manager PRs merged,
+  artifacts published, gates independently re-run green).
+  Wave 2 (SDK completion + deprecation patch) pending — scope in
+  `docs/VYN_PRODUCT_LAYOUT.md` §8 "wave 2": `VeyronClient → VynkorClient`
+  (sole prefixed public type), ~170 residual doc mentions, republish
+  **0.0.2**, `veyron-sdk 0.1.7` deprecation patch, dir rename to
+  `vynkor-sdk`. C++/Python SDKs deferred until after Phase B.
   Full design: `docs/VYN_PRODUCT_LAYOUT.md` §8. Zero external users ⇒ NO
   back-compat shims: old paths/envs die in this wave.
   1. `vynkor-wire 0.0.1`: crate rename + `vyn.sock`, `share/vyn`,

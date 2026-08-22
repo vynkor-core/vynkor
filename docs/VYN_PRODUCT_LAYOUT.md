@@ -175,6 +175,32 @@ veyron-plugins#23 folds in), and `install.sh` is being born right now.
   `~/.config/vyn/` + `https://vynkor.dev/install.sh`; docs/tracker closure;
   AUR PKGBUILD (V-19) lands on the renamed world.
 
+### Stage 4/A wave 1 — verified complete (2026-08-22, independent check)
+
+crates.io artifacts live (`vynkor-wire 0.0.1`, `vynkor-sdk 0.0.1`,
+deprecation `veyron-wire 0.2.7`); GitHub repos renamed (`vynkor-wire`,
+`vynkor-sdk`); all four PRs merged; gates re-run independently green in all
+four repos (kernel 430 / manager 92 / wire 26 / sdk 35).
+
+**Loose ends & resolutions:**
+1. `veyron-sdk` never got its deprecation notice patch (§8 said "each") →
+   scheduled into **wave 2**: publish `0.1.7` from a short-lived branch with
+   a renamed-to-vynkor-sdk banner; do NOT merge that banner into `vynkor-sdk`
+   main (it is meaningless on the new crate). Same accepted pattern as the
+   wire `0.2.7` banner, whose unmerged branch is closed as-is.
+2. Public API polish moved to wave 2: exactly one prefixed public type
+   exists — `VeyronClient` → becomes `VynkorClient`; tree-wide doc/comment
+   sweep of ~170 residual "veyron" mentions (EXCLUDING the generated
+   `proto::veyron` module path — protobuf package rename requires a
+   coordinated change across kernel/wire/cpp/python copies and stays a
+   separate milestone).
+3. Republish: public types change vs the published `0.0.1` ⇒ wave 2 ships
+   **`vynkor-sdk 0.0.2`** so crates.io matches main.
+4. Local checkout dir `veyron-sdk-rust` → `vynkor-sdk` (matches GitHub).
+5. **C++/Python SDKs explicitly DEFERRED** to after Phase B's plugin
+   re-release wave: they vendor the proto and read socket/JWT env strings;
+   when touched, they flip to `VYN_SOCKET_PATH` / `VYN_JWT_*` in one pass.
+
 ### Prerequisites (owner-side)
 
 1. Buy `vynkor.dev` (~$10–15/yr; `.dev` is HSTS-preloaded — fine, served via
