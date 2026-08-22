@@ -1,9 +1,9 @@
 use prost::Message;
 use std::time::Duration;
-use veyron::proto::veyron::{
+use vynkor::proto::veyron::{
     envelope, ActionRequest, ActionResponse, ActionStatus, CommandStatus, Envelope, PluginManifest,
 };
-use veyron_sdk::VeyronClient;
+use vynkor_sdk::VeyronClient;
 
 use super::sdk_harness::SdkHarness;
 

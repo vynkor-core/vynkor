@@ -118,7 +118,7 @@ pub struct PluginSupervisor {
     socket_path: String,
     /// Base dir for per-plugin writable state: each spawn gets
     /// `data_dir/plugins/<plugin_id>`, exposed to the plugin as
-    /// `VEYRON_DATA_DIR`. `None` = no data dir granted.
+    /// `VYN_DATA_DIR`. `None` = no data dir granted.
     data_dir: Option<PathBuf>,
     entries: Arc<DashMap<String, PluginEntry>>,
     event_tx: mpsc::Sender<ExitEvent>,
@@ -156,7 +156,7 @@ impl PluginSupervisor {
     }
 
     /// Grant every spawned plugin a writable per-plugin dir under `dir`
-    /// (exposed as `VEYRON_DATA_DIR`) for its own persistent state.
+    /// (exposed as `VYN_DATA_DIR`) for its own persistent state.
     pub fn set_data_dir(&mut self, dir: PathBuf) {
         self.data_dir = Some(dir);
     }
@@ -234,7 +234,7 @@ impl PluginSupervisor {
         // sandboxed plugins run under a shim that places them in a private
         // PID namespace (R9-02, see plugins::shim) — the shim is our own
         // binary re-exec'd with the hidden __shim subcommand
-        // Grant the plugin a writable data dir (VEYRON_DATA_DIR) for its own
+        // Grant the plugin a writable data dir (VYN_DATA_DIR) for its own
         // persistent state. Created up front: a sandboxed plugin cannot mkdir
         // paths it can't see, and Landlock needs the dir in RW_PATHS.
         let mut writable_paths = config.writable_paths.clone();
@@ -259,19 +259,19 @@ impl PluginSupervisor {
             // handler-less plugin (PID 1 of its namespace) drops SIGTERM, so
             // the shim escalates on this deadline instead of blocking waitpid
             if config.grace_seconds > 0 {
-                c.env("VEYRON_SHIM_GRACE_SECS", config.grace_seconds.to_string());
+                c.env("VYN_SHIM_GRACE_SECS", config.grace_seconds.to_string());
             }
             // R9-03: pass the Landlock filesystem restriction down to the
             // shim, which applies it in the plugin's pre_exec (fail-closed).
             // `full` sends no vars — the shim then builds no ruleset.
             if config.max_fs_access != crate::plugins::fsaccess::FsAccessMode::Full {
                 use crate::plugins::fsaccess;
-                c.env("VEYRON_MAX_FS_ACCESS", config.max_fs_access.as_str())
+                c.env("VYN_MAX_FS_ACCESS", config.max_fs_access.as_str())
                     .env(
-                        "VEYRON_RO_PATHS",
+                        "VYN_RO_PATHS",
                         fsaccess::join_paths_env(&config.readonly_paths),
                     )
-                    .env("VEYRON_RW_PATHS", fsaccess::join_paths_env(&writable_paths));
+                    .env("VYN_RW_PATHS", fsaccess::join_paths_env(&writable_paths));
             }
             c
         } else {
@@ -284,11 +284,15 @@ impl PluginSupervisor {
             Command::new(&config.binary_path)
         };
         cmd.args(&config.args)
+            .env("VYN_SOCKET_PATH", &self.socket_path)
+            // legacy alias: pre-built C++/Python plugins still read the old
+            // name until they are re-released on vynkor-sdk 0.0.1
+            // TODO(vynkor-plugins-0.0.1): drop after plugin re-release wave (stage 4/B)
             .env("VEYRON_SOCKET_PATH", &self.socket_path)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         if let Some(dir) = &plugin_data_dir {
-            cmd.env("VEYRON_DATA_DIR", dir);
+            cmd.env("VYN_DATA_DIR", dir);
         }
         for kv in &config.env {
             if let Some((k, v)) = kv.split_once('=') {
@@ -851,10 +855,10 @@ impl PluginSupervisor {
 }
 
 /// Binary the supervisor re-execs as the sandbox shim: our own executable
-/// (the hidden `__shim` subcommand), overridable via VEYRON_SHIM_BIN — the
+/// (the hidden `__shim` subcommand), overridable via VYN_SHIM_BIN — the
 /// unit-test harness binary does not handle `__shim`.
 fn sandbox_shim_bin() -> PathBuf {
-    std::env::var_os("VEYRON_SHIM_BIN")
+    std::env::var_os("VYN_SHIM_BIN")
         .map(PathBuf::from)
         .unwrap_or_else(|| std::env::current_exe().unwrap_or_else(|_| PathBuf::from("vyn")))
 }

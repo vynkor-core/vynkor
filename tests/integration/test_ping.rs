@@ -1,8 +1,8 @@
 use super::helpers::start_kernel;
 use std::time::Duration;
 use tokio::time::timeout;
-use veyron::proto::veyron::{envelope, PluginManifest};
-use veyron_sdk::VeyronClient;
+use vynkor::proto::veyron::{envelope, PluginManifest};
+use vynkor_sdk::VeyronClient;
 
 #[tokio::test]
 async fn ping_pong_round_trip() {
@@ -42,7 +42,7 @@ async fn pong_carries_original_timestamp() {
         .unwrap();
 
     use prost::Message;
-    use veyron::proto::veyron::{Envelope, Ping};
+    use vynkor::proto::veyron::{Envelope, Ping};
     let ping_env = Envelope {
         payload: Some(envelope::Payload::Ping(Ping { timestamp: 12345 })),
         ..Default::default()

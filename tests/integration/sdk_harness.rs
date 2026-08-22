@@ -2,10 +2,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::oneshot;
-use veyron::events::bus::EventBus;
-use veyron::kernel::Kernel;
-use veyron::plugins::registry::PluginRegistry;
-use veyron::utils::config::Config;
+use vynkor::events::bus::EventBus;
+use vynkor::kernel::Kernel;
+use vynkor::plugins::registry::PluginRegistry;
+use vynkor::utils::config::Config;
 
 static NEXT_PORT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(29900);
 

@@ -19,8 +19,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
-use veyron::plugins::fsaccess::FsAccessMode;
-use veyron::plugins::supervisor::{PluginConfig, PluginSupervisor, RestartPolicy};
+use vynkor::plugins::fsaccess::FsAccessMode;
+use vynkor::plugins::supervisor::{PluginConfig, PluginSupervisor, RestartPolicy};
 
 const VYN: &str = env!("CARGO_BIN_EXE_vyn");
 
@@ -40,7 +40,7 @@ fn python3_bin() -> Option<String> {
 /// sandboxed plugins run through `vyn __shim`; point the supervisor at the
 /// real binary instead of the test harness (which has no `__shim`)
 fn set_shim_bin() {
-    std::env::set_var("VEYRON_SHIM_BIN", VYN);
+    std::env::set_var("VYN_SHIM_BIN", VYN);
 }
 
 async fn sandbox_available(sup: &PluginSupervisor) -> bool {
@@ -574,7 +574,7 @@ async fn sandboxed_plugin_reaches_kernel_socket() {
 s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 s.settimeout(2)
 try:
-    s.connect(os.environ['VEYRON_SOCKET_PATH'])
+    s.connect(os.environ['VYN_SOCKET_PATH'])
     result = 'CONNECT_OK'
 except PermissionError:
     result = 'CONNECT_EACCES'

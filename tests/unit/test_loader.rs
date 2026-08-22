@@ -2,11 +2,11 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
-use veyron::plugins::loader::{topo_sort, PluginLoader};
-use veyron::plugins::manager::PluginManager;
-use veyron::plugins::registry::PluginRegistry;
-use veyron::plugins::supervisor::PluginSupervisor;
-use veyron::utils::config::PluginDef;
+use vynkor::plugins::loader::{topo_sort, PluginLoader};
+use vynkor::plugins::manager::PluginManager;
+use vynkor::plugins::registry::PluginRegistry;
+use vynkor::plugins::supervisor::PluginSupervisor;
+use vynkor::utils::config::PluginDef;
 
 fn make_manager(socket: &str) -> Arc<PluginManager> {
     let sup = Arc::new(PluginSupervisor::new(socket));
@@ -148,7 +148,7 @@ plugins:
     args:
       - "30"
 "#;
-    let cfg: veyron::utils::config::Config = serde_yaml::from_str(yaml).expect("config must parse");
+    let cfg: vynkor::utils::config::Config = serde_yaml::from_str(yaml).expect("config must parse");
     assert_eq!(cfg.plugins.len(), 2);
 
     let echo = &cfg.plugins[0];
@@ -177,7 +177,7 @@ log_file: /tmp/t.log
 data_dir: /tmp/t
 allow_no_auth: true
 "#;
-    let cfg: veyron::utils::config::Config = serde_yaml::from_str(yaml).expect("config must parse");
+    let cfg: vynkor::utils::config::Config = serde_yaml::from_str(yaml).expect("config must parse");
     assert!(
         cfg.plugins.is_empty(),
         "missing plugins: key must default to empty list"

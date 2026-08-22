@@ -1,7 +1,7 @@
 use super::helpers::{start_kernel, start_kernel_with_config, test_config};
 use std::time::{Duration, Instant};
 use tokio::time::timeout;
-use veyron::proto::veyron::{ActionStatus, CommandStatus, PluginManifest};
+use vynkor::proto::veyron::{ActionStatus, CommandStatus, PluginManifest};
 
 fn admin_manifest() -> PluginManifest {
     PluginManifest {
@@ -9,7 +9,7 @@ fn admin_manifest() -> PluginManifest {
         ..Default::default()
     }
 }
-use veyron_sdk::VeyronClient;
+use vynkor_sdk::VeyronClient;
 
 #[tokio::test]
 async fn health_check_via_ipc_returns_ok_with_json_fields() {
@@ -276,7 +276,7 @@ async fn kernel_routes_action_to_declared_provider_and_correlates_response() {
         .expect("provider recv timed out")
         .expect("provider recv failed");
     let internal_action_id = match received.payload {
-        Some(veyron::proto::veyron::envelope::Payload::ActionRequest(req)) => {
+        Some(vynkor::proto::veyron::envelope::Payload::ActionRequest(req)) => {
             assert_eq!(req.action, "get_weather");
             assert_eq!(req.params_json, br#"{"city":"nyc"}"#);
             req.action_id
@@ -284,9 +284,9 @@ async fn kernel_routes_action_to_declared_provider_and_correlates_response() {
         other => panic!("expected ActionRequest, got {other:?}"),
     };
 
-    let resp_env = veyron::proto::veyron::Envelope {
-        payload: Some(veyron::proto::veyron::envelope::Payload::ActionResponse(
-            veyron::proto::veyron::ActionResponse {
+    let resp_env = vynkor::proto::veyron::Envelope {
+        payload: Some(vynkor::proto::veyron::envelope::Payload::ActionResponse(
+            vynkor::proto::veyron::ActionResponse {
                 action_id: internal_action_id,
                 status: ActionStatus::ActionOk as i32,
                 data_json: br#"{"temp_f":72}"#.to_vec(),
@@ -424,7 +424,7 @@ async fn kernel_enforces_provider_declared_per_action_permission() {
     // PERMISSION_STORAGE on BOTH provider and requester; a requester without it
     // is denied, a requester with it is routed through to the provider.
     use std::collections::HashMap;
-    use veyron::proto::veyron::PermissionType;
+    use vynkor::proto::veyron::PermissionType;
 
     let (shutdown_tx, registry, _bus) =
         start_kernel("/tmp/veyron_integ_action_v2_perm.sock", 19234).await;
@@ -503,16 +503,16 @@ async fn kernel_enforces_provider_declared_per_action_permission() {
         .expect("provider recv timed out")
         .expect("provider recv failed");
     let internal_action_id = match received.payload {
-        Some(veyron::proto::veyron::envelope::Payload::ActionRequest(req)) => {
+        Some(vynkor::proto::veyron::envelope::Payload::ActionRequest(req)) => {
             assert_eq!(req.action, "db_get");
             req.action_id
         }
         other => panic!("expected ActionRequest, got {other:?}"),
     };
 
-    let resp_env = veyron::proto::veyron::Envelope {
-        payload: Some(veyron::proto::veyron::envelope::Payload::ActionResponse(
-            veyron::proto::veyron::ActionResponse {
+    let resp_env = vynkor::proto::veyron::Envelope {
+        payload: Some(vynkor::proto::veyron::envelope::Payload::ActionResponse(
+            vynkor::proto::veyron::ActionResponse {
                 action_id: internal_action_id,
                 status: ActionStatus::ActionOk as i32,
                 data_json: br#"{"value":"v"}"#.to_vec(),
@@ -585,9 +585,9 @@ async fn action_concurrency_cap_denies_third_concurrent_call_to_same_provider() 
     // Fire 2 raw ActionRequests to provider-x without waiting for a response —
     // provider-x never replies to these, so both stay pending and fill the cap.
     for i in 0..2 {
-        let env = veyron::proto::veyron::Envelope {
-            payload: Some(veyron::proto::veyron::envelope::Payload::ActionRequest(
-                veyron::proto::veyron::ActionRequest {
+        let env = vynkor::proto::veyron::Envelope {
+            payload: Some(vynkor::proto::veyron::envelope::Payload::ActionRequest(
+                vynkor::proto::veyron::ActionRequest {
                     action_id: format!("fill-{i}"),
                     action: "slow_action".to_string(),
                     params_json: b"{}".to_vec(),
@@ -603,9 +603,9 @@ async fn action_concurrency_cap_denies_third_concurrent_call_to_same_provider() 
 
     // A 3rd ActionRequest to the SAME provider must be denied immediately —
     // the kernel never forwards it, so no provider recv() is needed here.
-    let deny_env = veyron::proto::veyron::Envelope {
-        payload: Some(veyron::proto::veyron::envelope::Payload::ActionRequest(
-            veyron::proto::veyron::ActionRequest {
+    let deny_env = vynkor::proto::veyron::Envelope {
+        payload: Some(vynkor::proto::veyron::envelope::Payload::ActionRequest(
+            vynkor::proto::veyron::ActionRequest {
                 action_id: "act-3".to_string(),
                 action: "slow_action".to_string(),
                 params_json: b"{}".to_vec(),
@@ -623,7 +623,7 @@ async fn action_concurrency_cap_denies_third_concurrent_call_to_same_provider() 
         .expect("must not hang — denial is synchronous")
         .expect("recv failed");
     match deny_resp.payload {
-        Some(veyron::proto::veyron::envelope::Payload::ActionResponse(resp)) => {
+        Some(vynkor::proto::veyron::envelope::Payload::ActionResponse(resp)) => {
             assert_eq!(resp.action_id, "act-3");
             assert_eq!(
                 resp.status,
@@ -636,9 +636,9 @@ async fn action_concurrency_cap_denies_third_concurrent_call_to_same_provider() 
 
     // A request to the DIFFERENT provider (provider-y) must still succeed —
     // proves the cap is per-(caller, provider), not global.
-    let other_env = veyron::proto::veyron::Envelope {
-        payload: Some(veyron::proto::veyron::envelope::Payload::ActionRequest(
-            veyron::proto::veyron::ActionRequest {
+    let other_env = vynkor::proto::veyron::Envelope {
+        payload: Some(vynkor::proto::veyron::envelope::Payload::ActionRequest(
+            vynkor::proto::veyron::ActionRequest {
                 action_id: "act-4".to_string(),
                 action: "other_action".to_string(),
                 params_json: b"{}".to_vec(),
@@ -656,15 +656,15 @@ async fn action_concurrency_cap_denies_third_concurrent_call_to_same_provider() 
         .expect("provider-y recv timed out")
         .expect("provider-y recv failed");
     let internal_action_id = match received.payload {
-        Some(veyron::proto::veyron::envelope::Payload::ActionRequest(req)) => {
+        Some(vynkor::proto::veyron::envelope::Payload::ActionRequest(req)) => {
             assert_eq!(req.action, "other_action");
             req.action_id
         }
         other => panic!("expected ActionRequest, got {other:?}"),
     };
-    let resp_env = veyron::proto::veyron::Envelope {
-        payload: Some(veyron::proto::veyron::envelope::Payload::ActionResponse(
-            veyron::proto::veyron::ActionResponse {
+    let resp_env = vynkor::proto::veyron::Envelope {
+        payload: Some(vynkor::proto::veyron::envelope::Payload::ActionResponse(
+            vynkor::proto::veyron::ActionResponse {
                 action_id: internal_action_id,
                 status: ActionStatus::ActionOk as i32,
                 data_json: b"{}".to_vec(),
@@ -680,7 +680,7 @@ async fn action_concurrency_cap_denies_third_concurrent_call_to_same_provider() 
         .expect("must not hang")
         .expect("recv failed");
     match resp_y.payload {
-        Some(veyron::proto::veyron::envelope::Payload::ActionResponse(resp)) => {
+        Some(vynkor::proto::veyron::envelope::Payload::ActionResponse(resp)) => {
             assert_eq!(resp.action_id, "act-4");
             assert_eq!(
                 resp.status,
@@ -735,9 +735,9 @@ async fn action_concurrency_cap_releases_after_response_allowing_retry() {
 
     // Fire a raw ActionRequest that fills the (caller, provider) cap of 1.
     // The provider does not reply yet, so it stays pending.
-    let fill_env = veyron::proto::veyron::Envelope {
-        payload: Some(veyron::proto::veyron::envelope::Payload::ActionRequest(
-            veyron::proto::veyron::ActionRequest {
+    let fill_env = vynkor::proto::veyron::Envelope {
+        payload: Some(vynkor::proto::veyron::envelope::Payload::ActionRequest(
+            vynkor::proto::veyron::ActionRequest {
                 action_id: "fill-1".to_string(),
                 action: "slow_action".to_string(),
                 params_json: b"{}".to_vec(),
@@ -752,9 +752,9 @@ async fn action_concurrency_cap_releases_after_response_allowing_retry() {
 
     // A 2nd request to the same provider must be denied immediately — the
     // cap is already full and the kernel never forwards it to the provider.
-    let denied_env = veyron::proto::veyron::Envelope {
-        payload: Some(veyron::proto::veyron::envelope::Payload::ActionRequest(
-            veyron::proto::veyron::ActionRequest {
+    let denied_env = vynkor::proto::veyron::Envelope {
+        payload: Some(vynkor::proto::veyron::envelope::Payload::ActionRequest(
+            vynkor::proto::veyron::ActionRequest {
                 action_id: "denied-1".to_string(),
                 action: "slow_action".to_string(),
                 params_json: b"{}".to_vec(),
@@ -772,7 +772,7 @@ async fn action_concurrency_cap_releases_after_response_allowing_retry() {
         .expect("must not hang — denial is synchronous")
         .expect("recv failed");
     match denied_resp.payload {
-        Some(veyron::proto::veyron::envelope::Payload::ActionResponse(resp)) => {
+        Some(vynkor::proto::veyron::envelope::Payload::ActionResponse(resp)) => {
             assert_eq!(resp.action_id, "denied-1");
             assert_eq!(
                 resp.status,
@@ -790,15 +790,15 @@ async fn action_concurrency_cap_releases_after_response_allowing_retry() {
         .expect("provider recv timed out")
         .expect("provider recv failed");
     let internal_action_id = match received.payload {
-        Some(veyron::proto::veyron::envelope::Payload::ActionRequest(req)) => {
+        Some(vynkor::proto::veyron::envelope::Payload::ActionRequest(req)) => {
             assert_eq!(req.action, "slow_action");
             req.action_id
         }
         other => panic!("expected ActionRequest, got {other:?}"),
     };
-    let fill_resp_env = veyron::proto::veyron::Envelope {
-        payload: Some(veyron::proto::veyron::envelope::Payload::ActionResponse(
-            veyron::proto::veyron::ActionResponse {
+    let fill_resp_env = vynkor::proto::veyron::Envelope {
+        payload: Some(vynkor::proto::veyron::envelope::Payload::ActionResponse(
+            vynkor::proto::veyron::ActionResponse {
                 action_id: internal_action_id,
                 status: ActionStatus::ActionOk as i32,
                 data_json: b"{}".to_vec(),
@@ -814,7 +814,7 @@ async fn action_concurrency_cap_releases_after_response_allowing_retry() {
         .expect("must not hang")
         .expect("recv failed");
     match fill_caller_resp.payload {
-        Some(veyron::proto::veyron::envelope::Payload::ActionResponse(resp)) => {
+        Some(vynkor::proto::veyron::envelope::Payload::ActionResponse(resp)) => {
             assert_eq!(resp.action_id, "fill-1");
             assert_eq!(resp.status, ActionStatus::ActionOk as i32);
         }
@@ -824,9 +824,9 @@ async fn action_concurrency_cap_releases_after_response_allowing_retry() {
     // The slot is now free (no explicit decrement — the cap re-scans
     // pending actions on every request). A 3rd request from the SAME
     // caller to the SAME provider must now route through successfully.
-    let retry_env = veyron::proto::veyron::Envelope {
-        payload: Some(veyron::proto::veyron::envelope::Payload::ActionRequest(
-            veyron::proto::veyron::ActionRequest {
+    let retry_env = vynkor::proto::veyron::Envelope {
+        payload: Some(vynkor::proto::veyron::envelope::Payload::ActionRequest(
+            vynkor::proto::veyron::ActionRequest {
                 action_id: "retry-1".to_string(),
                 action: "slow_action".to_string(),
                 params_json: b"{}".to_vec(),
@@ -844,15 +844,15 @@ async fn action_concurrency_cap_releases_after_response_allowing_retry() {
         .expect("provider recv timed out on retry")
         .expect("provider recv failed on retry");
     let retry_internal_action_id = match retry_received.payload {
-        Some(veyron::proto::veyron::envelope::Payload::ActionRequest(req)) => {
+        Some(vynkor::proto::veyron::envelope::Payload::ActionRequest(req)) => {
             assert_eq!(req.action, "slow_action");
             req.action_id
         }
         other => panic!("expected ActionRequest, got {other:?}"),
     };
-    let retry_resp_env = veyron::proto::veyron::Envelope {
-        payload: Some(veyron::proto::veyron::envelope::Payload::ActionResponse(
-            veyron::proto::veyron::ActionResponse {
+    let retry_resp_env = vynkor::proto::veyron::Envelope {
+        payload: Some(vynkor::proto::veyron::envelope::Payload::ActionResponse(
+            vynkor::proto::veyron::ActionResponse {
                 action_id: retry_internal_action_id,
                 status: ActionStatus::ActionOk as i32,
                 data_json: b"{}".to_vec(),
@@ -868,7 +868,7 @@ async fn action_concurrency_cap_releases_after_response_allowing_retry() {
         .expect("must not hang")
         .expect("recv failed");
     match retry_caller_resp.payload {
-        Some(veyron::proto::veyron::envelope::Payload::ActionResponse(resp)) => {
+        Some(vynkor::proto::veyron::envelope::Payload::ActionResponse(resp)) => {
             assert_eq!(resp.action_id, "retry-1");
             assert_eq!(
                 resp.status,
@@ -927,12 +927,12 @@ async fn action_rate_limit_denies_burst_above_configured_rps() {
         .expect("provider recv timed out")
         .expect("provider recv failed");
     let internal_action_id = match received.payload {
-        Some(veyron::proto::veyron::envelope::Payload::ActionRequest(req)) => req.action_id,
+        Some(vynkor::proto::veyron::envelope::Payload::ActionRequest(req)) => req.action_id,
         other => panic!("expected ActionRequest, got {other:?}"),
     };
-    let resp_env = veyron::proto::veyron::Envelope {
-        payload: Some(veyron::proto::veyron::envelope::Payload::ActionResponse(
-            veyron::proto::veyron::ActionResponse {
+    let resp_env = vynkor::proto::veyron::Envelope {
+        payload: Some(vynkor::proto::veyron::envelope::Payload::ActionResponse(
+            vynkor::proto::veyron::ActionResponse {
                 action_id: internal_action_id,
                 status: ActionStatus::ActionOk as i32,
                 data_json: b"{}".to_vec(),
@@ -1010,12 +1010,12 @@ async fn action_quota_unset_leaves_routing_unlimited() {
             .unwrap_or_else(|_| panic!("provider recv timed out on iteration {i}"))
             .expect("provider recv failed");
         let internal_action_id = match received.payload {
-            Some(veyron::proto::veyron::envelope::Payload::ActionRequest(req)) => req.action_id,
+            Some(vynkor::proto::veyron::envelope::Payload::ActionRequest(req)) => req.action_id,
             other => panic!("expected ActionRequest, got {other:?}"),
         };
-        let resp_env = veyron::proto::veyron::Envelope {
-            payload: Some(veyron::proto::veyron::envelope::Payload::ActionResponse(
-                veyron::proto::veyron::ActionResponse {
+        let resp_env = vynkor::proto::veyron::Envelope {
+            payload: Some(vynkor::proto::veyron::envelope::Payload::ActionResponse(
+                vynkor::proto::veyron::ActionResponse {
                     action_id: internal_action_id,
                     status: ActionStatus::ActionOk as i32,
                     data_json: b"{}".to_vec(),
@@ -1099,7 +1099,7 @@ async fn action_response_from_non_provider_plugin_is_rejected_not_proxied() {
         .expect("provider recv timed out")
         .expect("provider recv failed");
     let internal_action_id = match received.payload {
-        Some(veyron::proto::veyron::envelope::Payload::ActionRequest(req)) => {
+        Some(vynkor::proto::veyron::envelope::Payload::ActionRequest(req)) => {
             assert_eq!(req.action, "get_weather");
             req.action_id
         }
@@ -1107,9 +1107,9 @@ async fn action_response_from_non_provider_plugin_is_rejected_not_proxied() {
     };
 
     // Impostor races the real provider and sends a spoofed response first.
-    let spoofed_env = veyron::proto::veyron::Envelope {
-        payload: Some(veyron::proto::veyron::envelope::Payload::ActionResponse(
-            veyron::proto::veyron::ActionResponse {
+    let spoofed_env = vynkor::proto::veyron::Envelope {
+        payload: Some(vynkor::proto::veyron::envelope::Payload::ActionResponse(
+            vynkor::proto::veyron::ActionResponse {
                 action_id: internal_action_id.clone(),
                 status: ActionStatus::ActionOk as i32,
                 data_json: br#"{"temp_f":-999,"spoofed":true}"#.to_vec(),
@@ -1126,9 +1126,9 @@ async fn action_response_from_non_provider_plugin_is_rejected_not_proxied() {
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // Real provider now answers truthfully.
-    let real_env = veyron::proto::veyron::Envelope {
-        payload: Some(veyron::proto::veyron::envelope::Payload::ActionResponse(
-            veyron::proto::veyron::ActionResponse {
+    let real_env = vynkor::proto::veyron::Envelope {
+        payload: Some(vynkor::proto::veyron::envelope::Payload::ActionResponse(
+            vynkor::proto::veyron::ActionResponse {
                 action_id: internal_action_id,
                 status: ActionStatus::ActionOk as i32,
                 data_json: br#"{"temp_f":72}"#.to_vec(),
@@ -1255,13 +1255,13 @@ async fn provider_side_action_failure_proxies_through_unchanged() {
         .expect("provider recv timed out")
         .expect("provider recv failed");
     let internal_action_id = match received.payload {
-        Some(veyron::proto::veyron::envelope::Payload::ActionRequest(req)) => req.action_id,
+        Some(vynkor::proto::veyron::envelope::Payload::ActionRequest(req)) => req.action_id,
         other => panic!("expected ActionRequest, got {other:?}"),
     };
 
-    let err_env = veyron::proto::veyron::Envelope {
-        payload: Some(veyron::proto::veyron::envelope::Payload::ActionResponse(
-            veyron::proto::veyron::ActionResponse {
+    let err_env = vynkor::proto::veyron::Envelope {
+        payload: Some(vynkor::proto::veyron::envelope::Payload::ActionResponse(
+            vynkor::proto::veyron::ActionResponse {
                 action_id: internal_action_id,
                 status: ActionStatus::ActionError as i32,
                 data_json: vec![],
@@ -1330,7 +1330,7 @@ async fn kernel_forwards_request_chunks_to_provider_with_translated_action_id() 
         .expect("provider recv timed out")
         .expect("provider recv failed");
     let internal_action_id = match received.payload {
-        Some(veyron::proto::veyron::envelope::Payload::ActionRequest(req)) => {
+        Some(vynkor::proto::veyron::envelope::Payload::ActionRequest(req)) => {
             assert_eq!(req.action, "upload");
             assert!(req.streaming);
             req.action_id
@@ -1344,7 +1344,7 @@ async fn kernel_forwards_request_chunks_to_provider_with_translated_action_id() 
         .unwrap()
         .unwrap();
     match chunk0.payload {
-        Some(veyron::proto::veyron::envelope::Payload::ActionRequestChunk(c)) => {
+        Some(vynkor::proto::veyron::envelope::Payload::ActionRequestChunk(c)) => {
             assert_eq!(c.action_id, internal_action_id);
             assert_eq!(c.seq, 0);
             assert_eq!(c.chunk, b"hello ");
@@ -1358,7 +1358,7 @@ async fn kernel_forwards_request_chunks_to_provider_with_translated_action_id() 
         .unwrap()
         .unwrap();
     match chunk1.payload {
-        Some(veyron::proto::veyron::envelope::Payload::ActionRequestChunk(c)) => {
+        Some(vynkor::proto::veyron::envelope::Payload::ActionRequestChunk(c)) => {
             assert_eq!(c.action_id, internal_action_id);
             assert_eq!(c.seq, 1);
             assert_eq!(c.chunk, b"world");
@@ -1407,7 +1407,7 @@ async fn kernel_forwards_response_chunks_to_requester_with_original_action_id() 
         .unwrap()
         .unwrap();
     let internal_action_id = match received.payload {
-        Some(veyron::proto::veyron::envelope::Payload::ActionRequest(req)) => req.action_id,
+        Some(vynkor::proto::veyron::envelope::Payload::ActionRequest(req)) => req.action_id,
         other => panic!("expected ActionRequest, got {other:?}"),
     };
 
@@ -1421,7 +1421,7 @@ async fn kernel_forwards_response_chunks_to_requester_with_original_action_id() 
         .unwrap()
         .unwrap();
     match forwarded.payload {
-        Some(veyron::proto::veyron::envelope::Payload::ActionResponseChunk(c)) => {
+        Some(vynkor::proto::veyron::envelope::Payload::ActionResponseChunk(c)) => {
             assert_eq!(c.action_id, original_action_id);
             assert_eq!(c.seq, 0);
             assert_eq!(c.chunk, b"chunk-a");
@@ -1489,7 +1489,7 @@ async fn stream_backpressure_aborts_both_sides_and_terminates_with_backpressure_
     while Instant::now() < deadline {
         match timeout(Duration::from_millis(500), requester.recv()).await {
             Ok(Ok(env)) => {
-                if let Some(veyron::proto::veyron::envelope::Payload::ActionResponse(resp)) =
+                if let Some(vynkor::proto::veyron::envelope::Payload::ActionResponse(resp)) =
                     env.payload
                 {
                     assert_eq!(resp.action_id, action_id);
@@ -1572,7 +1572,7 @@ async fn stream_backpressure_on_requester_channel_does_not_stall_router() {
         .unwrap()
         .unwrap();
     let internal_action_id = match received.payload {
-        Some(veyron::proto::veyron::envelope::Payload::ActionRequest(req)) => req.action_id,
+        Some(vynkor::proto::veyron::envelope::Payload::ActionRequest(req)) => req.action_id,
         other => panic!("expected ActionRequest, got {other:?}"),
     };
 
@@ -1655,7 +1655,7 @@ async fn session_streaming_accept_exchange_and_graceful_close() {
         .unwrap()
         .unwrap();
     let internal_action_id = match received.payload {
-        Some(veyron::proto::veyron::envelope::Payload::ActionRequest(req)) => {
+        Some(vynkor::proto::veyron::envelope::Payload::ActionRequest(req)) => {
             assert!(req.streaming);
             req.action_id
         }
@@ -1665,9 +1665,9 @@ async fn session_streaming_accept_exchange_and_graceful_close() {
     provider
         .send(
             "kernel",
-            veyron::proto::veyron::Envelope {
-                payload: Some(veyron::proto::veyron::envelope::Payload::ActionResponse(
-                    veyron::proto::veyron::ActionResponse {
+            vynkor::proto::veyron::Envelope {
+                payload: Some(vynkor::proto::veyron::envelope::Payload::ActionResponse(
+                    vynkor::proto::veyron::ActionResponse {
                         action_id: internal_action_id.clone(),
                         status: ActionStatus::ActionOk as i32,
                         data_json: vec![],
@@ -1686,7 +1686,7 @@ async fn session_streaming_accept_exchange_and_graceful_close() {
         .unwrap()
         .unwrap();
     match accept.payload {
-        Some(veyron::proto::veyron::envelope::Payload::ActionResponse(resp)) => {
+        Some(vynkor::proto::veyron::envelope::Payload::ActionResponse(resp)) => {
             assert_eq!(resp.action_id, action_id);
             assert_eq!(resp.status, ActionStatus::ActionOk as i32);
         }
@@ -1703,7 +1703,7 @@ async fn session_streaming_accept_exchange_and_graceful_close() {
         .unwrap()
         .unwrap();
     match c.payload {
-        Some(veyron::proto::veyron::envelope::Payload::ActionRequestChunk(c)) => {
+        Some(vynkor::proto::veyron::envelope::Payload::ActionRequestChunk(c)) => {
             assert_eq!(c.action_id, internal_action_id);
             assert_eq!(c.chunk, b"ping-1");
         }
@@ -1719,7 +1719,7 @@ async fn session_streaming_accept_exchange_and_graceful_close() {
         .unwrap()
         .unwrap();
     match c.payload {
-        Some(veyron::proto::veyron::envelope::Payload::ActionResponseChunk(c)) => {
+        Some(vynkor::proto::veyron::envelope::Payload::ActionResponseChunk(c)) => {
             assert_eq!(c.action_id, action_id);
             assert_eq!(c.chunk, b"pong-1");
         }
@@ -1735,7 +1735,7 @@ async fn session_streaming_accept_exchange_and_graceful_close() {
         .unwrap()
         .unwrap();
     match c.payload {
-        Some(veyron::proto::veyron::envelope::Payload::ActionRequestChunk(c)) => {
+        Some(vynkor::proto::veyron::envelope::Payload::ActionRequestChunk(c)) => {
             assert_eq!(c.chunk, b"ping-2");
         }
         other => panic!("expected ActionRequestChunk, got {other:?}"),
@@ -1749,7 +1749,7 @@ async fn session_streaming_accept_exchange_and_graceful_close() {
         .unwrap()
         .unwrap();
     match closed.payload {
-        Some(veyron::proto::veyron::envelope::Payload::SessionClose(close)) => {
+        Some(vynkor::proto::veyron::envelope::Payload::SessionClose(close)) => {
             assert_eq!(close.action_id, internal_action_id);
             assert_eq!(close.reason, "done");
         }
@@ -1767,7 +1767,7 @@ async fn session_streaming_accept_exchange_and_graceful_close() {
         .unwrap()
         .unwrap();
     match err.payload {
-        Some(veyron::proto::veyron::envelope::Payload::Error(e)) => {
+        Some(vynkor::proto::veyron::envelope::Payload::Error(e)) => {
             assert!(!e.message.is_empty());
         }
         other => panic!("expected an Error for closing an already-evicted session, got {other:?}"),
@@ -1813,16 +1813,16 @@ async fn session_streaming_rejection_evicts_without_session_close() {
         .unwrap()
         .unwrap();
     let internal_action_id = match received.payload {
-        Some(veyron::proto::veyron::envelope::Payload::ActionRequest(req)) => req.action_id,
+        Some(vynkor::proto::veyron::envelope::Payload::ActionRequest(req)) => req.action_id,
         other => panic!("expected ActionRequest, got {other:?}"),
     };
 
     provider
         .send(
             "kernel",
-            veyron::proto::veyron::Envelope {
-                payload: Some(veyron::proto::veyron::envelope::Payload::ActionResponse(
-                    veyron::proto::veyron::ActionResponse {
+            vynkor::proto::veyron::Envelope {
+                payload: Some(vynkor::proto::veyron::envelope::Payload::ActionResponse(
+                    vynkor::proto::veyron::ActionResponse {
                         action_id: internal_action_id,
                         status: ActionStatus::ActionError as i32,
                         data_json: vec![],
@@ -1840,7 +1840,7 @@ async fn session_streaming_rejection_evicts_without_session_close() {
         .unwrap()
         .unwrap();
     match rejected.payload {
-        Some(veyron::proto::veyron::envelope::Payload::ActionResponse(resp)) => {
+        Some(vynkor::proto::veyron::envelope::Payload::ActionResponse(resp)) => {
             assert_eq!(resp.action_id, action_id);
             assert_eq!(resp.status, ActionStatus::ActionError as i32);
         }
@@ -1860,7 +1860,7 @@ async fn session_streaming_rejection_evicts_without_session_close() {
         .unwrap();
     assert!(matches!(
         err.payload,
-        Some(veyron::proto::veyron::envelope::Payload::Error(_))
+        Some(vynkor::proto::veyron::envelope::Payload::Error(_))
     ));
 
     let _ = shutdown_tx.send(());
@@ -1911,7 +1911,7 @@ async fn session_close_before_acceptance_is_rejected() {
         .unwrap()
         .unwrap();
     match err.payload {
-        Some(veyron::proto::veyron::envelope::Payload::Error(e)) => {
+        Some(vynkor::proto::veyron::envelope::Payload::Error(e)) => {
             assert!(!e.message.is_empty());
         }
         other => panic!("expected an Error for closing before acceptance, got {other:?}"),
@@ -1965,16 +1965,16 @@ async fn session_close_from_third_party_is_rejected() {
         .unwrap()
         .unwrap();
     let internal_action_id = match received.payload {
-        Some(veyron::proto::veyron::envelope::Payload::ActionRequest(req)) => req.action_id,
+        Some(vynkor::proto::veyron::envelope::Payload::ActionRequest(req)) => req.action_id,
         other => panic!("expected ActionRequest, got {other:?}"),
     };
 
     provider
         .send(
             "kernel",
-            veyron::proto::veyron::Envelope {
-                payload: Some(veyron::proto::veyron::envelope::Payload::ActionResponse(
-                    veyron::proto::veyron::ActionResponse {
+            vynkor::proto::veyron::Envelope {
+                payload: Some(vynkor::proto::veyron::envelope::Payload::ActionResponse(
+                    vynkor::proto::veyron::ActionResponse {
                         action_id: internal_action_id.clone(),
                         status: ActionStatus::ActionOk as i32,
                         data_json: vec![],
@@ -1999,7 +1999,7 @@ async fn session_close_from_third_party_is_rejected() {
         .unwrap();
     assert!(matches!(
         err.payload,
-        Some(veyron::proto::veyron::envelope::Payload::Error(_))
+        Some(vynkor::proto::veyron::envelope::Payload::Error(_))
     ));
 
     // Session must still be open for the real requester.
@@ -2013,7 +2013,7 @@ async fn session_close_from_third_party_is_rejected() {
         .unwrap();
     assert!(matches!(
         closed.payload,
-        Some(veyron::proto::veyron::envelope::Payload::SessionClose(_))
+        Some(vynkor::proto::veyron::envelope::Payload::SessionClose(_))
     ));
 
     let _ = shutdown_tx.send(());
@@ -2057,16 +2057,16 @@ async fn session_idle_timeout_aborts_both_sides() {
         .unwrap()
         .unwrap();
     let internal_action_id = match received.payload {
-        Some(veyron::proto::veyron::envelope::Payload::ActionRequest(req)) => req.action_id,
+        Some(vynkor::proto::veyron::envelope::Payload::ActionRequest(req)) => req.action_id,
         other => panic!("expected ActionRequest, got {other:?}"),
     };
 
     provider
         .send(
             "kernel",
-            veyron::proto::veyron::Envelope {
-                payload: Some(veyron::proto::veyron::envelope::Payload::ActionResponse(
-                    veyron::proto::veyron::ActionResponse {
+            vynkor::proto::veyron::Envelope {
+                payload: Some(vynkor::proto::veyron::envelope::Payload::ActionResponse(
+                    vynkor::proto::veyron::ActionResponse {
                         action_id: internal_action_id,
                         status: ActionStatus::ActionOk as i32,
                         data_json: vec![],
@@ -2088,7 +2088,7 @@ async fn session_idle_timeout_aborts_both_sides() {
         .expect("must receive an abort within one prune tick after idling")
         .unwrap();
     match abort.payload {
-        Some(veyron::proto::veyron::envelope::Payload::ActionStreamAbort(a)) => {
+        Some(vynkor::proto::veyron::envelope::Payload::ActionStreamAbort(a)) => {
             assert_eq!(a.action_id, action_id);
             assert_eq!(a.reason, "idle timeout");
         }
@@ -2101,7 +2101,7 @@ async fn session_idle_timeout_aborts_both_sides() {
         .unwrap();
     assert!(matches!(
         provider_abort.payload,
-        Some(veyron::proto::veyron::envelope::Payload::ActionStreamAbort(
+        Some(vynkor::proto::veyron::envelope::Payload::ActionStreamAbort(
             _
         ))
     ));
@@ -2146,16 +2146,16 @@ async fn session_idle_timeout_unset_leaves_accepted_session_open() {
         .unwrap()
         .unwrap();
     let internal_action_id = match received.payload {
-        Some(veyron::proto::veyron::envelope::Payload::ActionRequest(req)) => req.action_id,
+        Some(vynkor::proto::veyron::envelope::Payload::ActionRequest(req)) => req.action_id,
         other => panic!("expected ActionRequest, got {other:?}"),
     };
 
     provider
         .send(
             "kernel",
-            veyron::proto::veyron::Envelope {
-                payload: Some(veyron::proto::veyron::envelope::Payload::ActionResponse(
-                    veyron::proto::veyron::ActionResponse {
+            vynkor::proto::veyron::Envelope {
+                payload: Some(vynkor::proto::veyron::envelope::Payload::ActionResponse(
+                    vynkor::proto::veyron::ActionResponse {
                         action_id: internal_action_id,
                         status: ActionStatus::ActionOk as i32,
                         data_json: vec![],
@@ -2185,7 +2185,7 @@ async fn session_idle_timeout_unset_leaves_accepted_session_open() {
         .unwrap();
     assert!(matches!(
         closed.payload,
-        Some(veyron::proto::veyron::envelope::Payload::SessionClose(_))
+        Some(vynkor::proto::veyron::envelope::Payload::SessionClose(_))
     ));
 
     let _ = shutdown_tx.send(());

@@ -3,13 +3,13 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
-use veyron::events::bus::EventBus;
-use veyron::events::store::EventStore;
-use veyron::kernel::Kernel;
-use veyron::plugins::registry::PluginRegistry;
-use veyron::proto::veyron::{envelope, Envelope, EventAck, PluginManifest};
-use veyron::utils::config::Config;
-use veyron_sdk::VeyronClient;
+use vynkor::events::bus::EventBus;
+use vynkor::events::store::EventStore;
+use vynkor::kernel::Kernel;
+use vynkor::plugins::registry::PluginRegistry;
+use vynkor::proto::veyron::{envelope, Envelope, EventAck, PluginManifest};
+use vynkor::utils::config::Config;
+use vynkor_sdk::VeyronClient;
 
 fn store_config(socket: &str, port: u16, data_dir: &Path) -> Config {
     Config {

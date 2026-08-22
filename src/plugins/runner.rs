@@ -23,7 +23,7 @@ pub const DEFAULT_MAX_VMEM_MB: u64 = 512;
 
 /// Component name (under the delegated cgroup root) holding all per-plugin
 /// pids scopes.
-const VEYRON_CGROUP_DIR: &str = "veyron";
+const VYN_CGROUP_DIR: &str = "vyn";
 
 /// Run inside new user + network namespaces and apply resource limits.
 /// Passed as a `pre_exec` hook; executes in the child process before exec.
@@ -114,7 +114,7 @@ pub fn apply_resource_limits(
     Ok(())
 }
 
-/// Prepare a per-plugin cgroup v2 `pids` scope: `veyron/<plugin_id>` under
+/// Prepare a per-plugin cgroup v2 `pids` scope: `vyn/<plugin_id>` under
 /// the delegated subtree, with `pids.max = max_procs`. Returns the scope dir
 /// on success; None (with a warning) when cgroup v2 is unavailable or no
 /// writable subtree exposes the `pids` controller — the caller falls back to
@@ -127,7 +127,7 @@ pub fn apply_resource_limits(
 /// `user@1000.service` subtree, whose controller files are owned by the user.
 ///
 /// A child cgroup only gets a controller that its *parent* enabled in
-/// `cgroup.subtree_control`, so the intermediate `veyron` cgroup must enable
+/// `cgroup.subtree_control`, so the intermediate `vyn` cgroup must enable
 /// `pids` itself — otherwise the leaf scope's `pids.max` is a dead file and
 /// every write fails with EPERM.
 #[cfg(target_os = "linux")]
@@ -146,7 +146,7 @@ pub fn prepare_pids_cgroup(plugin_id: &str, max_procs: u64) -> Option<PathBuf> {
         if !has_pids_controller(&dir) {
             continue;
         }
-        let container = dir.join(VEYRON_CGROUP_DIR);
+        let container = dir.join(VYN_CGROUP_DIR);
         if let Err(e) = std::fs::create_dir_all(&container) {
             // root-owned subtree below the delegated root (or the mount root
             // itself for non-root) — probe the next ancestor
@@ -163,7 +163,7 @@ pub fn prepare_pids_cgroup(plugin_id: &str, max_procs: u64) -> Option<PathBuf> {
                 plugin_id = %plugin_id,
                 cgroup = %container.display(),
                 error = %e,
-                "cannot enable pids on veyron container, probing next ancestor"
+                "cannot enable pids on vyn container, probing next ancestor"
             );
             continue;
         }
@@ -379,8 +379,8 @@ mod tests {
     fn ancestor_paths_single_component() {
         assert_eq!(ancestor_paths("/"), vec![PathBuf::from("/")]);
         assert_eq!(
-            ancestor_paths("/veyron"),
-            vec![PathBuf::from("/"), PathBuf::from("/veyron")]
+            ancestor_paths("/vyn"),
+            vec![PathBuf::from("/"), PathBuf::from("/vyn")]
         );
     }
 

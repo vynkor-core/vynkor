@@ -28,7 +28,7 @@ pub enum Commands {
         #[arg(short, long, default_value = "config.yaml")]
         config: String,
 
-        /// JWT bearer token for a secured kernel. Falls back to VEYRON_JWT_TOKEN.
+        /// JWT bearer token for a secured kernel. Falls back to VYN_JWT_TOKEN.
         #[arg(long)]
         token: Option<String>,
     },
@@ -38,7 +38,7 @@ pub enum Commands {
         #[arg(short, long, default_value = "config.yaml")]
         config: String,
 
-        /// JWT bearer token for a secured kernel. Falls back to VEYRON_JWT_TOKEN.
+        /// JWT bearer token for a secured kernel. Falls back to VYN_JWT_TOKEN.
         #[arg(long)]
         token: Option<String>,
     },

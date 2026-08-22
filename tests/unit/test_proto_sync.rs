@@ -103,7 +103,7 @@ fn generated_python_binding_is_not_stale() {
     }
 }
 
-// D-01: the proto header comment (`// v 1.x`) and veyron_wire::PROTOCOL_VERSION
+// D-01: the proto header comment (`// v 1.x`) and vynkor_wire::PROTOCOL_VERSION
 // must agree — the wire README mandates bumping both in the same commit. Both
 // live in sibling ../veyron-wire; guard the pairing here so a one-sided bump
 // fails loudly.
@@ -128,7 +128,7 @@ fn proto_header_matches_wire_protocol_version() {
 
     assert_eq!(
         header, const_ver,
-        "wire proto header v{header} != veyron_wire::PROTOCOL_VERSION {const_ver}; \
+        "wire proto header v{header} != vynkor_wire::PROTOCOL_VERSION {const_ver}; \
          bump both in the same commit (D-01)"
     );
 }

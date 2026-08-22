@@ -5,13 +5,13 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc;
 use tower::ServiceExt;
-use veyron::api::server::{create_router, create_router_full};
-use veyron::auth::jwt::JwtValidator;
-use veyron::plugins::manager::PluginManager;
-use veyron::plugins::registry::PluginRegistry;
-use veyron::plugins::supervisor::PluginSupervisor;
-use veyron::proto::veyron::PluginManifest;
-use veyron::utils::config::PluginDef;
+use vynkor::api::server::{create_router, create_router_full};
+use vynkor::auth::jwt::JwtValidator;
+use vynkor::plugins::manager::PluginManager;
+use vynkor::plugins::registry::PluginRegistry;
+use vynkor::plugins::supervisor::PluginSupervisor;
+use vynkor::proto::veyron::PluginManifest;
+use vynkor::utils::config::PluginDef;
 
 fn make_registry() -> Arc<PluginRegistry> {
     Arc::new(PluginRegistry::new())
@@ -29,7 +29,7 @@ fn make_manager(
 }
 
 fn register(registry: &PluginRegistry, plugin_id: &str, conn_id: u64) {
-    let (tx, _rx) = mpsc::channel::<veyron::ipc::connection::Outbound>(1);
+    let (tx, _rx) = mpsc::channel::<vynkor::ipc::connection::Outbound>(1);
     registry
         .register(
             plugin_id.to_string(),
@@ -44,17 +44,17 @@ fn register(registry: &PluginRegistry, plugin_id: &str, conn_id: u64) {
 
 // D-04: register like a remote device agent would off the wire
 fn register_with_device(registry: &PluginRegistry, plugin_id: &str, conn_id: u64) {
-    let (tx, _rx) = mpsc::channel::<veyron::ipc::connection::Outbound>(1);
+    let (tx, _rx) = mpsc::channel::<vynkor::ipc::connection::Outbound>(1);
     registry
         .register_with_device(
             plugin_id.to_string(),
             conn_id,
             PluginManifest::default(),
             tx,
-            veyron::plugins::registry::DeviceMeta {
+            vynkor::plugins::registry::DeviceMeta {
                 device_id: "phone-1".to_string(),
                 user_id: "default".to_string(),
-                os: veyron::proto::veyron::DeviceOs::Android,
+                os: vynkor::proto::veyron::DeviceOs::Android,
                 arch: "aarch64".to_string(),
                 os_version: "14".to_string(),
                 capabilities: vec!["geo".to_string(), "battery".to_string()],
@@ -894,11 +894,11 @@ async fn start_already_running_plugin_returns_conflict() {
     let registry = make_registry();
     let manager = make_manager(registry, make_supervisor());
     manager
-        .start(veyron::plugins::supervisor::PluginConfig {
+        .start(vynkor::plugins::supervisor::PluginConfig {
             plugin_id: "already-up".to_string(),
             binary_path: "/bin/sleep".into(),
             args: vec!["60".to_string()],
-            restart_policy: veyron::plugins::supervisor::RestartPolicy::Never,
+            restart_policy: vynkor::plugins::supervisor::RestartPolicy::Never,
             ..Default::default()
         })
         .await

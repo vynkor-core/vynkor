@@ -2,9 +2,9 @@ use std::time::Duration;
 use tokio::net::UnixStream;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
-use veyron::ipc::framing::write_frame;
-use veyron::ipc::messages::IncomingMessage;
-use veyron::ipc::server::UdsServer;
+use vynkor::ipc::framing::write_frame;
+use vynkor::ipc::messages::IncomingMessage;
+use vynkor::ipc::server::UdsServer;
 
 fn tmp_socket() -> std::path::PathBuf {
     std::path::PathBuf::from(format!(
@@ -37,7 +37,7 @@ async fn server_accepts_connection_and_receives_frame() {
 
     assert_eq!(&*msg.frame.payload, b"hello");
     assert_eq!(
-        veyron::ipc::framing::target_as_str(&msg.frame),
+        vynkor::ipc::framing::target_as_str(&msg.frame),
         Some("kernel")
     );
 
@@ -160,7 +160,7 @@ async fn server_detects_client_disconnect() {
 
 #[tokio::test]
 async fn connection_handler_can_send_frame_back() {
-    use veyron::ipc::framing::{read_frame, Frame};
+    use vynkor::ipc::framing::{read_frame, Frame};
 
     let path = tmp_socket();
     let (tx, mut rx) = mpsc::channel::<IncomingMessage>(16);
@@ -180,7 +180,7 @@ async fn connection_handler_can_send_frame_back() {
     // use the write_tx from IncomingMessage to send back
     let response_payload = b"response";
     msg.write_tx
-        .send(veyron::ipc::connection::out_frame(Frame {
+        .send(vynkor::ipc::connection::out_frame(Frame {
             magic: 0x5652,
             flags: 0,
             length: response_payload.len() as u32,

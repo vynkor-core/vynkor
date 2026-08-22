@@ -2,11 +2,11 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use std::sync::Arc;
 use tower::ServiceExt;
-use veyron::api::server::create_router;
-use veyron::metrics::init_metrics;
-use veyron::plugins::manager::PluginManager;
-use veyron::plugins::registry::PluginRegistry;
-use veyron::plugins::supervisor::PluginSupervisor;
+use vynkor::api::server::create_router;
+use vynkor::metrics::init_metrics;
+use vynkor::plugins::manager::PluginManager;
+use vynkor::plugins::registry::PluginRegistry;
+use vynkor::plugins::supervisor::PluginSupervisor;
 
 fn make_app() -> axum::Router {
     init_metrics();

@@ -45,9 +45,9 @@ pub struct FsRestriction {
     pub writable_paths: Vec<PathBuf>,
 }
 
-const MAX_FS_ACCESS_ENV: &str = "VEYRON_MAX_FS_ACCESS";
-const RO_PATHS_ENV: &str = "VEYRON_RO_PATHS";
-const RW_PATHS_ENV: &str = "VEYRON_RW_PATHS";
+const MAX_FS_ACCESS_ENV: &str = "VYN_MAX_FS_ACCESS";
+const RO_PATHS_ENV: &str = "VYN_RO_PATHS";
+const RW_PATHS_ENV: &str = "VYN_RW_PATHS";
 /// Path list separator inside the env vars. Unit separator cannot appear in a
 /// path, unlike `:`.
 const PATH_SEP: char = '\u{1f}';

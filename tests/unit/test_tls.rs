@@ -1,6 +1,6 @@
 use std::path::PathBuf;
-use veyron::utils::config::Config;
-use veyron::utils::tls::resolve_tls_paths;
+use vynkor::utils::config::Config;
+use vynkor::utils::tls::resolve_tls_paths;
 
 #[test]
 fn tls_off_returns_no_paths() {

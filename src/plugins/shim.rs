@@ -19,7 +19,7 @@
 //! SIGTERM sent from the parent namespace. A handler-less plugin would
 //! therefore block the shim's `waitpid` (and the supervisor's `child.wait()`)
 //! forever. The shim starts an escalation timer when it forwards a terminal
-//! signal and SIGKILLs the plugin once `VEYRON_SHIM_GRACE_SECS` (default 5)
+//! signal and SIGKILLs the plugin once `VYN_SHIM_GRACE_SECS` (default 5)
 //! elapse, mirroring the supervisor's own SIGTERM→SIGKILL grace.
 
 use anyhow::{anyhow, bail, Context};
@@ -112,7 +112,12 @@ pub fn run(plugin_binary: &Path, args: &[String]) -> anyhow::Result<i32> {
     // `max_fs_access: full`). Read here, applied in the plugin's pre_exec so
     // only the plugin is restricted — the shim keeps unrestricted access.
     let fs_restriction = crate::plugins::fsaccess::from_env();
-    let socket_path = std::env::var("VEYRON_SOCKET_PATH").ok().map(PathBuf::from);
+    // legacy fallback pairs with the supervisor's transition alias (stage 4/A):
+    // shims spawned by a pre-cutover kernel still announce VEYRON_SOCKET_PATH
+    let socket_path = std::env::var("VYN_SOCKET_PATH")
+        .or_else(|_| std::env::var("VEYRON_SOCKET_PATH"))
+        .ok()
+        .map(PathBuf::from);
 
     // outer uid/gid must be captured before unshare — afterwards the process
     // is already root inside the new user namespace
@@ -232,7 +237,7 @@ pub fn run(plugin_binary: &Path, args: &[String]) -> anyhow::Result<i32> {
     // or this loop (and the supervisor's child.wait()) blocks forever. The
     // signal handler cannot start the timer itself (async-signal-safety), so
     // the loop polls with WNOHANG and arms it on first observation.
-    let grace_secs = std::env::var("VEYRON_SHIM_GRACE_SECS")
+    let grace_secs = std::env::var("VYN_SHIM_GRACE_SECS")
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(5);

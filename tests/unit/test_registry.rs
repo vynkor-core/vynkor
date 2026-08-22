@@ -1,12 +1,12 @@
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use veyron::plugins::registry::{DeviceMeta, DeviceOs, DeviceState, PluginRegistry, PluginState};
-use veyron::proto::veyron::PluginManifest;
-use veyron::utils::errors::VeyronError;
+use vynkor::plugins::registry::{DeviceMeta, DeviceOs, DeviceState, PluginRegistry, PluginState};
+use vynkor::proto::veyron::PluginManifest;
+use vynkor::utils::errors::VeyronError;
 
-fn dummy_write_tx() -> mpsc::Sender<veyron::ipc::connection::Outbound> {
-    mpsc::channel::<veyron::ipc::connection::Outbound>(1).0
+fn dummy_write_tx() -> mpsc::Sender<vynkor::ipc::connection::Outbound> {
+    mpsc::channel::<vynkor::ipc::connection::Outbound>(1).0
 }
 
 fn dummy_manifest() -> PluginManifest {
@@ -353,7 +353,7 @@ fn manifest_with_actions(actions: &[&str]) -> PluginManifest {
 
 #[test]
 fn find_action_provider_returns_not_found_when_no_provider() {
-    use veyron::plugins::registry::ActionLookup;
+    use vynkor::plugins::registry::ActionLookup;
 
     let reg = PluginRegistry::new();
     reg.register(
@@ -374,7 +374,7 @@ fn find_action_provider_returns_not_found_when_no_provider() {
 
 #[test]
 fn find_action_provider_returns_found_for_single_provider() {
-    use veyron::plugins::registry::ActionLookup;
+    use vynkor::plugins::registry::ActionLookup;
 
     let reg = PluginRegistry::new();
     reg.register(
@@ -395,7 +395,7 @@ fn find_action_provider_returns_found_for_single_provider() {
 
 #[test]
 fn find_action_provider_returns_ambiguous_for_multiple_providers() {
-    use veyron::plugins::registry::ActionLookup;
+    use vynkor::plugins::registry::ActionLookup;
 
     let reg = PluginRegistry::new();
     reg.register(
@@ -427,7 +427,7 @@ fn find_action_provider_returns_ambiguous_for_multiple_providers() {
 }
 
 use std::time::Instant;
-use veyron::plugins::registry::PendingAction;
+use vynkor::plugins::registry::PendingAction;
 
 fn dummy_pending(original_action_id: &str, deadline: Instant) -> PendingAction {
     dummy_pending_with_provider(original_action_id, deadline, "provider")

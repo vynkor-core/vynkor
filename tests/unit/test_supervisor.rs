@@ -2,8 +2,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
-use veyron::plugins::registry::PluginRegistry;
-use veyron::plugins::supervisor::{PluginConfig, PluginSupervisor, RestartPolicy};
+use vynkor::plugins::registry::PluginRegistry;
+use vynkor::plugins::supervisor::{PluginConfig, PluginSupervisor, RestartPolicy};
 
 fn quick_exit_config(plugin_id: &str, policy: RestartPolicy, max_restarts: u32) -> PluginConfig {
     PluginConfig {
@@ -284,7 +284,7 @@ async fn watchdog_does_not_reset_pong_after_kill() {
 
 #[tokio::test]
 async fn spawned_process_inherits_socket_path_env() {
-    // Verify VEYRON_SOCKET_PATH is passed to child.
+    // Verify VYN_SOCKET_PATH (and its legacy alias) are passed to child.
     // We use a shell command that checks the env var and exits 0 if set, 1 if not.
     let sup = PluginSupervisor::new("/tmp/veyron_check.sock");
 
@@ -293,7 +293,7 @@ async fn spawned_process_inherits_socket_path_env() {
         binary_path: PathBuf::from("/bin/sh"),
         args: vec![
             "-c".to_string(),
-            r#"test -n "$VEYRON_SOCKET_PATH""#.to_string(),
+            r#"test -n "$VYN_SOCKET_PATH" -a -n "$VEYRON_SOCKET_PATH""#.to_string(),
         ],
         env: vec![],
         restart_policy: RestartPolicy::Never,
@@ -307,7 +307,7 @@ async fn spawned_process_inherits_socket_path_env() {
     // wait for child to exit
     sleep(Duration::from_millis(200)).await;
 
-    // if VEYRON_SOCKET_PATH was set, sh exits 0 → watcher sends success
+    // if both socket-path vars were set, sh exits 0 → watcher sends success
     // We verify by checking the exit code recorded
     assert!(proc.pid > 0, "must have a valid pid");
 }
@@ -417,7 +417,7 @@ fn plugin_cgroup_dir(pid: u32) -> Option<(PathBuf, String)> {
 /// fallback applies otherwise. Creates and immediately removes a probe scope.
 #[cfg(target_os = "linux")]
 fn pids_cgroup_available() -> bool {
-    use veyron::plugins::runner::{cleanup_pids_cgroup, prepare_pids_cgroup};
+    use vynkor::plugins::runner::{cleanup_pids_cgroup, prepare_pids_cgroup};
     match prepare_pids_cgroup("r9-availability-probe", 64) {
         Some(cg) => {
             cleanup_pids_cgroup(&cg);
@@ -469,7 +469,7 @@ fn storm_script(hold_secs: u64) -> String {
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn pids_cgroup_accounts_plugin_threads_per_plugin() {
-    use veyron::plugins::runner::{cleanup_pids_cgroup, prepare_pids_cgroup};
+    use vynkor::plugins::runner::{cleanup_pids_cgroup, prepare_pids_cgroup};
 
     // Probe availability first: if the host cannot hand us a pids scope, the
     // RLIMIT fallback path is in effect and there is nothing cgroup-specific
@@ -579,7 +579,7 @@ async fn sandboxed_plugin_still_joins_its_pids_cgroup() {
     // sandboxed plugins are spawned through `vyn __shim` — the test harness
     // binary does not implement that subcommand, so point the supervisor at
     // the real vyn binary instead of current_exe()
-    std::env::set_var("VEYRON_SHIM_BIN", env!("CARGO_BIN_EXE_vyn"));
+    std::env::set_var("VYN_SHIM_BIN", env!("CARGO_BIN_EXE_vyn"));
 
     // The sandbox path needs unprivileged user namespaces; hosts that restrict
     // them (kernel.unprivileged_userns_clone=0) fail the spawn in pre_exec —

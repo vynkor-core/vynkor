@@ -3039,7 +3039,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
-name = "veyron"
+name = "vynkor"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -3084,28 +3084,31 @@ dependencies = [
  "tracing-subscriber",
  "tracing-test",
  "url",
- "veyron-sdk",
- "veyron-wire",
+ "vynkor-sdk",
+ "vynkor-wire",
  "zstd",
 ]
 
 [[package]]
-name = "veyron-sdk"
-version = "0.1.3"
+name = "vynkor-sdk"
+version = "0.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5fdac6b8ecf31261154c94a4a4d2c8b5ff8552684cc50c5660a1c04f06580fd4"
+checksum = "d44f5841c219fc3cfa611b019011feee3ac87f6d75b84d018666513c6a68f305"
 dependencies = [
  "crc32fast",
+ "futures-util",
  "prost 0.13.5",
+ "serde_json",
  "tokio",
- "veyron-wire",
+ "tokio-tungstenite 0.24.0",
+ "vynkor-wire",
 ]
 
 [[package]]
-name = "veyron-wire"
-version = "0.2.6"
+name = "vynkor-wire"
+version = "0.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba3942d492bf625d8f13c78f354cbc48cefb2e52178c251237b80782b953739c"
+checksum = "63cfc0dc495515681fb197555ff2b681c71ded3a4cd7d560c5be87a6ffe22176"
 dependencies = [
  "crc32fast",
  "hkdf",

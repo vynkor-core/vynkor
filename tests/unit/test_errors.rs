@@ -1,5 +1,5 @@
 use std::io;
-use veyron::utils::errors::VeyronError;
+use vynkor::utils::errors::VeyronError;
 
 #[test]
 fn error_display_shows_message() {

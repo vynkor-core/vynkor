@@ -12,13 +12,13 @@ use std::collections::HashMap;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 use tokio::io::AsyncBufReadExt;
-use veyron::proto::veyron::{envelope, ActionRequest, ActionStatus, Envelope, PluginManifest};
-use veyron_sdk::VeyronClient;
+use vynkor::proto::veyron::{envelope, ActionRequest, ActionStatus, Envelope, PluginManifest};
+use vynkor_sdk::VeyronClient;
 
 use super::sdk_harness::SdkHarness;
 
 fn echo_plugin_binary() -> Option<std::path::PathBuf> {
-    if let Ok(path) = std::env::var("VEYRON_CPP_ECHO_PLUGIN") {
+    if let Ok(path) = std::env::var("VYN_CPP_ECHO_PLUGIN") {
         let path = std::path::PathBuf::from(path);
         return path.exists().then_some(path);
     }
@@ -39,7 +39,7 @@ async fn cpp_sdk_echo_plugin_round_trip() {
         eprintln!(
             "[SKIP] C++ echo_plugin binary not found — build via `cmake -B ../veyron-sdk-cpp/build -S ../veyron-sdk-cpp \
              && cmake --build ../veyron-sdk-cpp/build --target echo_plugin` (see ../veyron-sdk-cpp/README.md), \
-             or set VEYRON_CPP_ECHO_PLUGIN to an existing binary path"
+             or set VYN_CPP_ECHO_PLUGIN to an existing binary path"
         );
         return;
     };
@@ -48,6 +48,8 @@ async fn cpp_sdk_echo_plugin_round_trip() {
     let socket = harness.socket_path.to_str().unwrap().to_string();
 
     let mut child = Command::new(&bin)
+        .env("VYN_SOCKET_PATH", &socket)
+        // legacy alias for pre-built plugins (stage 4/B drops it)
         .env("VEYRON_SOCKET_PATH", &socket)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -121,7 +123,7 @@ async fn cpp_sdk_streaming_action_round_trip() {
         eprintln!(
             "[SKIP] C++ echo_plugin binary not found — build via `cmake -B ../veyron-sdk-cpp/build -S ../veyron-sdk-cpp \
              && cmake --build ../veyron-sdk-cpp/build --target echo_plugin` (see ../veyron-sdk-cpp/README.md), \
-             or set VEYRON_CPP_ECHO_PLUGIN to an existing binary path"
+             or set VYN_CPP_ECHO_PLUGIN to an existing binary path"
         );
         return;
     };
@@ -130,6 +132,8 @@ async fn cpp_sdk_streaming_action_round_trip() {
     let socket = harness.socket_path.to_str().unwrap().to_string();
 
     let mut child = Command::new(&bin)
+        .env("VYN_SOCKET_PATH", &socket)
+        // legacy alias for pre-built plugins (stage 4/B drops it)
         .env("VEYRON_SOCKET_PATH", &socket)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -221,7 +225,7 @@ async fn cpp_sdk_publish_event_from_plugin() {
         eprintln!(
             "[SKIP] C++ echo_plugin binary not found — build via `cmake -B ../veyron-sdk-cpp/build -S ../veyron-sdk-cpp \
              && cmake --build ../veyron-sdk-cpp/build --target echo_plugin` (see ../veyron-sdk-cpp/README.md), \
-             or set VEYRON_CPP_ECHO_PLUGIN to an existing binary path"
+             or set VYN_CPP_ECHO_PLUGIN to an existing binary path"
         );
         return;
     };
@@ -230,6 +234,8 @@ async fn cpp_sdk_publish_event_from_plugin() {
     let socket = harness.socket_path.to_str().unwrap().to_string();
 
     let mut child = Command::new(&bin)
+        .env("VYN_SOCKET_PATH", &socket)
+        // legacy alias for pre-built plugins (stage 4/B drops it)
         .env("VEYRON_SOCKET_PATH", &socket)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -320,7 +326,7 @@ async fn cpp_sdk_session_close_dispatch() {
         eprintln!(
             "[SKIP] C++ echo_plugin binary not found — build via `cmake -B ../veyron-sdk-cpp/build -S ../veyron-sdk-cpp \
              && cmake --build ../veyron-sdk-cpp/build --target echo_plugin` (see ../veyron-sdk-cpp/README.md), \
-             or set VEYRON_CPP_ECHO_PLUGIN to an existing binary path"
+             or set VYN_CPP_ECHO_PLUGIN to an existing binary path"
         );
         return;
     };
@@ -329,6 +335,8 @@ async fn cpp_sdk_session_close_dispatch() {
     let socket = harness.socket_path.to_str().unwrap().to_string();
 
     let mut child = tokio::process::Command::new(&bin)
+        .env("VYN_SOCKET_PATH", &socket)
+        // legacy alias for pre-built plugins (stage 4/B drops it)
         .env("VEYRON_SOCKET_PATH", &socket)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

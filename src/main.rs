@@ -4,11 +4,11 @@ use std::collections::HashSet;
 use std::fs;
 use std::process::Command;
 use tracing::{info, warn};
-use veyron::cli::{complete, device, devices, plugin, token};
-use veyron::cli::{Cli, Commands};
-use veyron::kernel;
-use veyron::utils;
-use veyron::utils::config::{load_config, BridgeConfig, Config, Role};
+use vynkor::cli::{complete, device, devices, plugin, token};
+use vynkor::cli::{Cli, Commands};
+use vynkor::kernel;
+use vynkor::utils;
+use vynkor::utils::config::{load_config, BridgeConfig, Config, Role};
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -23,7 +23,7 @@ fn main() -> Result<()> {
         args,
     } = &cli.command
     {
-        let code = match veyron::plugins::shim::run(plugin_binary, args) {
+        let code = match vynkor::plugins::shim::run(plugin_binary, args) {
             Ok(code) => code,
             Err(e) => {
                 eprintln!("shim: {e:#}");
@@ -136,8 +136,8 @@ async fn run_kernel(cli: Cli) -> Result<()> {
         }
         Commands::Plugin { cmd, config, token } => {
             let cfg = load_config(&config).unwrap_or_default();
-            let token = token.or_else(|| std::env::var("VEYRON_JWT_TOKEN").ok());
-            let cert_path = veyron::utils::config::effective_tls_cert_path(&cfg);
+            let token = token.or_else(|| std::env::var("VYN_JWT_TOKEN").ok());
+            let cert_path = vynkor::utils::config::effective_tls_cert_path(&cfg);
             plugin::handle(
                 cmd,
                 cfg.port,
@@ -150,8 +150,8 @@ async fn run_kernel(cli: Cli) -> Result<()> {
         }
         Commands::Devices { config, token } => {
             let cfg = load_config(&config).unwrap_or_default();
-            let token = token.or_else(|| std::env::var("VEYRON_JWT_TOKEN").ok());
-            let cert_path = veyron::utils::config::effective_tls_cert_path(&cfg);
+            let token = token.or_else(|| std::env::var("VYN_JWT_TOKEN").ok());
+            let cert_path = vynkor::utils::config::effective_tls_cert_path(&cfg);
             devices::handle(cfg.port, cfg.tls, cert_path.as_deref(), token.as_deref()).await?;
         }
         Commands::Token { cmd, config } => {
@@ -358,7 +358,7 @@ fn daemonize_and_run(cfg: &Config, config_path: &str, debug: bool) -> Result<()>
         .arg(config_path)
         .arg("--port")
         .arg(cfg.port.to_string())
-        .env("VEYRON_READY_FD", ready_fd.to_string());
+        .env("VYN_READY_FD", ready_fd.to_string());
     if cfg.role == Role::Client {
         // the daemon child re-execs with flags only — re-apply the role and
         // bridge settings so client mode survives the background fork
@@ -489,7 +489,7 @@ async fn run_foreground(cfg: Config) -> Result<()> {
     // N4: the daemon parent waits on this line before publishing the pid file,
     // so it must come only after the flock + pid write above are done. Unset in
     // plain foreground runs (vyn start --foreground in a shell) — no-op there.
-    if let Ok(fd) = std::env::var("VEYRON_READY_FD") {
+    if let Ok(fd) = std::env::var("VYN_READY_FD") {
         if let Ok(fd) = fd.parse::<std::os::unix::io::RawFd>() {
             use std::io::Write;
             use std::os::unix::io::FromRawFd;

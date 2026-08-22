@@ -1,5 +1,5 @@
-use veyron::events::store::EventStore;
-use veyron::proto::veyron::Event;
+use vynkor::events::store::EventStore;
+use vynkor::proto::veyron::Event;
 
 fn tmp_store(tag: &str) -> EventStore {
     // S2: use a private 0o700 dir — the ownership check rejects world-writable /tmp

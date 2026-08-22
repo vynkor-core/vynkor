@@ -2,8 +2,8 @@ use super::helpers::start_kernel;
 use prost::Message;
 use std::time::Duration;
 use tokio::time::timeout;
-use veyron::proto::veyron::{envelope, ActionRequest, Envelope, PluginManifest};
-use veyron_sdk::VeyronClient;
+use vynkor::proto::veyron::{envelope, ActionRequest, Envelope, PluginManifest};
+use vynkor_sdk::VeyronClient;
 
 #[tokio::test]
 async fn plugin_a_sends_to_plugin_b_and_b_receives() {

@@ -2,10 +2,10 @@ use prost::Message;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use veyron::events::bus::EventBus;
-use veyron::ipc::framing::Frame;
-use veyron::plugins::registry::PluginRegistry;
-use veyron::proto::veyron::{envelope, Envelope, Event, PluginManifest};
+use vynkor::events::bus::EventBus;
+use vynkor::ipc::framing::Frame;
+use vynkor::plugins::registry::PluginRegistry;
+use vynkor::proto::veyron::{envelope, Envelope, Event, PluginManifest};
 
 fn empty_frame() -> Frame {
     Frame {
@@ -27,7 +27,7 @@ fn register_plugin(
     registry: &PluginRegistry,
     plugin_id: &str,
     conn_id: u64,
-) -> mpsc::Receiver<veyron::ipc::connection::Outbound> {
+) -> mpsc::Receiver<vynkor::ipc::connection::Outbound> {
     let (tx, rx) = mpsc::channel(16);
     registry
         .register(
@@ -51,9 +51,9 @@ fn make_event(event_type: &str) -> Event {
     }
 }
 
-fn decode_event_from_frame(item: veyron::ipc::connection::Outbound) -> Event {
+fn decode_event_from_frame(item: vynkor::ipc::connection::Outbound) -> Event {
     let frame = match item {
-        veyron::ipc::connection::Outbound::Frame(f) => *f,
+        vynkor::ipc::connection::Outbound::Frame(f) => *f,
         _ => panic!("expected Outbound::Frame"),
     };
     let env = Envelope::decode(frame.payload.as_ref()).expect("decode envelope");
@@ -72,9 +72,9 @@ async fn slow_subscriber_does_not_block_publish_to_others() {
 
     // slow subscriber: capacity-1 channel, pre-filled and never drained (keep the
     // receiver alive so the channel stays open and full).
-    let (slow_tx, _slow_rx) = mpsc::channel::<veyron::ipc::connection::Outbound>(1);
+    let (slow_tx, _slow_rx) = mpsc::channel::<vynkor::ipc::connection::Outbound>(1);
     slow_tx
-        .send(veyron::ipc::connection::out_frame(empty_frame()))
+        .send(vynkor::ipc::connection::out_frame(empty_frame()))
         .await
         .unwrap();
     registry
@@ -205,9 +205,9 @@ async fn publish_to_many_stuck_subscribers_does_not_multiply_delay() {
     let registry = make_registry();
 
     for i in 0..5u64 {
-        let (stuck_tx, _stuck_rx) = mpsc::channel::<veyron::ipc::connection::Outbound>(1);
+        let (stuck_tx, _stuck_rx) = mpsc::channel::<vynkor::ipc::connection::Outbound>(1);
         stuck_tx
-            .send(veyron::ipc::connection::out_frame(empty_frame()))
+            .send(vynkor::ipc::connection::out_frame(empty_frame()))
             .await
             .unwrap();
         registry
@@ -243,7 +243,7 @@ async fn delivered_event_carries_trace_header() {
 
     let item = rx.recv().await.expect("frame must arrive");
     let frame = match item {
-        veyron::ipc::connection::Outbound::Frame(f) => *f,
+        vynkor::ipc::connection::Outbound::Frame(f) => *f,
         _ => panic!("expected Outbound::Frame"),
     };
     let env = Envelope::decode(frame.payload.as_ref()).expect("decode envelope");

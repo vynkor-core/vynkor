@@ -1,7 +1,7 @@
 use prost::Message;
 use std::fs;
 use std::path::Path;
-use veyron::proto::veyron::{envelope, Envelope, PluginRegister};
+use vynkor::proto::veyron::{envelope, Envelope, PluginRegister};
 
 #[test]
 fn envelope_round_trip_serializes_and_deserializes() {
