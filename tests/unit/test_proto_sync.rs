@@ -2,7 +2,7 @@ use std::fs;
 
 // R8-05: the vendored proto copies must stay byte-identical to the wire source
 // of truth. `../vynkor-wire/proto/vynkor_protocol.proto` (sibling repo
-// veyron-core/vynkor-wire) is the canonical message schema for plugin<->kernel
+// vynkor-core/vynkor-wire) is the canonical message schema for plugin<->kernel
 // IPC; ../vynkor-sdk-python/, ../vynkor-sdk-cpp/ each vendor a copy so their
 // build.rs can generate bindings offline. Drift here means the SDKs speak a
 // different protocol than the kernel — wire it into the test suite so a one-off

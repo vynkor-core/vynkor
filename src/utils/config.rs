@@ -189,7 +189,7 @@ pub struct Config {
     /// frame-MAC" gap). Registering arms the session MAC key.
     #[serde(default = "default_ws_register_timeout_secs")]
     pub ws_register_timeout_secs: u64,
-    /// Override the plugin registry URL. Default: official veyron-core/vynkor-plugins registry.
+    /// Override the plugin registry URL. Default: official vynkor-core/vynkor-plugins registry.
     /// Set to a private registry URL for air-gapped or enterprise deployments.
     #[serde(default)]
     pub registry_url: Option<String>,

@@ -2,7 +2,7 @@
 ///
 /// These tests spawn the real `echo_plugin` binary built from
 /// `../vynkor-sdk-cpp/examples/echo_plugin.cpp` (sibling repo
-/// veyron-core/vynkor-sdk-cpp, not a submodule) against `../vynkor-sdk-cpp/src/*`
+/// vynkor-core/vynkor-sdk-cpp, not a submodule) against `../vynkor-sdk-cpp/src/*`
 /// (framing, MAC, client) via CMake, and verify the kernel routes
 /// messages to it over the actual C++ wire implementation. CI checks out the
 /// sibling repo before running `cargo test` (see `.github/workflows/ci.yml`).

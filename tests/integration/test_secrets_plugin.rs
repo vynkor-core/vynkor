@@ -2,7 +2,7 @@
 /// kernel.
 ///
 /// Spawns the actual plugin built from
-/// `../vynkor-plugins/plugins/secrets/` (sibling repo veyron-core/vynkor-plugins)
+/// `../vynkor-plugins/plugins/secrets/` (sibling repo vynkor-core/vynkor-plugins)
 /// over the real UDS wire and verifies the kernel routes `secret_set`/
 /// `secret_get`/`secret_list` to it, that the per-action `permission: "secrets"`
 /// gate (Manifest v2) denies a caller without `PERMISSION_SECRETS`, and that
