@@ -363,7 +363,10 @@ lives in the manager repo and any format change is deliberate.
   `src/commands/verify.rs` (new). Acceptance: tampered tree reported with
   expected/actual hashes; clean tree passes; exit code contract honored.
 
-- [ ] **V-14 — key tooling: `vynm keygen` + `vynm sign`.** SCOPE AMENDED
+- [x] **V-14 — key tooling: `vynm keygen` + `vynm sign`.** ✅ DONE & verified
+    2026-08-22 (107→111 tests; E2E roundtrip + tamper-exit-3 confirmed;
+    follow-up fix merged: `--verify` runs keyless, warn when a secret is
+    passed). SCOPE AMENDED
     2026-08-22: crypto primitives move INTO vynm so the canonical S1 form
     has a single implementation (package.sh shrinks to a thin wrapper that
     calls `vynm sign`, then dies).
@@ -457,7 +460,9 @@ lives in the manager repo and any format change is deliberate.
   - Acceptance: fresh machine + package install → `vyn start` → `vynm
     install database` works touching only XDG dirs under `~/.config/vyn`.
 
-- [ ] **V-20 — `vynm new <name>`: plugin scaffolding.**
+- [x] **V-20 — `vynm new <name>`: plugin scaffolding.** ✅ DONE & verified
+    2026-08-22 (`include_str!` templates, identifier gate, acceptance build
+    vs published sdk green).
   Decision 2026-08-22: templates are EMBEDDED in the binary (`include_str!`,
   zero new deps) — offline-first like the rest of vynm, no trust question
   for twenty-line hello-worlds. Remote signed templates revisit later via
