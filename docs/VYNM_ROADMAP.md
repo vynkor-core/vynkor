@@ -339,7 +339,9 @@ lives in the manager repo and any format change is deliberate.
   `src/cli.rs`. Acceptance: preview shown pre-write; `-y` skips; refusal
   aborts cleanly with nothing written.
 
-- [ ] **V-11 — version pinning.**
+- [x] **V-11 — version pinning.** ✅ DONE & verified 2026-08-22
+    (`[source/]slug[@ver]` grammar; miss lists per-source availability;
+    composes with V-09 ordering and the V-10 gate).
   `vynm install database@0.1.0` — exact-version install; mirrors the
   registry's own `slug@ver` revocation syntax. Files: `src/cli.rs`,
   `src/registry.rs` (entry lookup by exact version). Acceptance: pinned
@@ -361,10 +363,15 @@ lives in the manager repo and any format change is deliberate.
   - Acceptance: outdated table correct; batch update honors origin sources;
     equal-version-different-hash requires `--force`.
 
-- [ ] **V-13 — `vynm verify [slug]`.**
+- [x] **V-13 — `vynm verify [slug]`.** ✅ DONE & verified 2026-08-22.
+    DESIGN NOTE (roadmap text was loose): archive-sha alone cannot verify a
+    TREE offline — implemented as a canonical tree digest recorded at
+    install time (`tree_sha256`, LEDGER_SCHEMA_VERSION 2→3 with back-compat
+    read; pre-v3 entries report UNKNOWN BASELINE). Digest covers content +
+    exec-mode + layout; chmod alone ⇒ TAMPERED exit 3. Unreadable tree =
+    fail-closed TAMPERED.
   Re-hash installed trees against ledger sha256; detects manual edits /
-  substitution offline. Data already exists in the ledger. Files:
-  `src/commands/verify.rs` (new). Acceptance: tampered tree reported with
+  substitution offline. Acceptance: tampered tree reported with
   expected/actual hashes; clean tree passes; exit code contract honored.
 
 - [x] **V-14 — key tooling: `vynm keygen` + `vynm sign`.** ✅ DONE & verified
