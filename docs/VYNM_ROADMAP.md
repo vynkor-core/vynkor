@@ -397,7 +397,10 @@ lives in the manager repo and any format change is deliberate.
   - Acceptance: generated key verifies a signed document end-to-end against
     a local source; secret file permissions asserted in tests.
 
-- [ ] **V-15 — install bypassing registries.**
+- [x] **V-15 — install bypassing registries.**
+  ✅ DONE & verified 2026-08-22 (0.2.4): shared `commit_staged` tail reused
+  by both pipelines; ledger `source: "local"`; D8 names `--allow-unsigned`;
+  full dev-loop E2E green (new→build→install ./x.zip→drop-in).
   `vynm install ./plugin-0.1.0.zip` or a direct archive URL — same pipeline
   minus resolution/download-from-registry; manifest validation + zip-slip +
   drop-in write unchanged; prints that no registry signature/sha256-channel
