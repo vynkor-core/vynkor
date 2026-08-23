@@ -302,7 +302,11 @@ Full-detail backlog (committed in plan §7.5/§7.6). Each task ships in its
 own release; the drop-in format mini-spec (field → type → since-version)
 lives in the manager repo and any format change is deliberate.
 
-- [ ] **V-09 — multi-source registries: config parsing + resolution engine.**
+- [x] **V-09 — multi-source registries: config parsing + resolution engine.**
+  ✅ DONE & verified 2026-08-22 (0.2.1; 136 tests incl. precedence matrix +
+  live-binary multisource e2e; deviations documented: env mutates
+  sources[0] in-place, explicit pin ignores `enabled:`, flag-tier for
+  url/key reserved).
   - Config schema — AMENDED 2026-08-22 per `docs/VYN_PRODUCT_LAYOUT.md` §2:
     sections live in the SHARED product config `~/.config/vyn/config.yaml`
     (kernel reads its sections and ignores these; both parsers are
