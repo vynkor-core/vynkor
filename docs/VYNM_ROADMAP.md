@@ -363,12 +363,21 @@ lives in the manager repo and any format change is deliberate.
   `src/commands/verify.rs` (new). Acceptance: tampered tree reported with
   expected/actual hashes; clean tree passes; exit code contract honored.
 
-- [ ] **V-14 — key tooling: `vynm keygen` + `vynm sign`.**
-  - `keygen`: ed25519 pair; public key printed for the config, secret written
-    `0600`.
-  - `sign <registry.json>`: signs the document so `public_key:`-configured
-    sources verify it. Without these the key feature is unusable for
-    self-hosters.
+- [ ] **V-14 — key tooling: `vynm keygen` + `vynm sign`.** SCOPE AMENDED
+    2026-08-22: crypto primitives move INTO vynm so the canonical S1 form
+    has a single implementation (package.sh shrinks to a thin wrapper that
+    calls `vynm sign`, then dies).
+  - `keygen`: ed25519 pair via OS RNG (no heavy deps); public key printed
+    hex for `marketplace_public_key:`; secret written as hex-seed file
+    `0600` (`VEYRON_SIGNING_KEY_HEX`-compatible format), refuses overwrite
+    without `--force`.
+  - `sign`: ENTRY-level S1 signing —
+    `vynm sign --key <file> --slug --version --sha256 --status
+    --archive-url --min --max` prints the 128-hex signature (byte-equivalent
+    replacement for package.sh's inline python). Document-level signing
+    DEFERRED — the verify model is per-entry.
+  - Follow-up backlog: `vynm package <dir>` orchestration (zip + checksum +
+    sign + registry upsert) replacing package.sh entirely.
   - Files: `src/commands/keygen.rs`, `src/commands/sign.rs` (new),
     `ed25519-dalek` dep (already a transitive concept from the port).
   - Acceptance: generated key verifies a signed document end-to-end against
@@ -386,7 +395,10 @@ lives in the manager repo and any format change is deliberate.
   `--source` column in search/list tables; `vynm info <slug>`; `--dry-run`;
   `--json` output; `vynm cache clean`; shell completions; documented exit
   codes finalized (0 ok / 2 network / 3 verification failure / …) as the
-  scripting contract. Files: `src/cli.rs`, output formatting modules.
+  scripting contract. NOTE 2026-08-22: `__complete-slugs`
+  must read the local registry CACHE first (instant, offline); network only
+  on miss/stale refresh. Registry sharding explicitly parked until plugin
+  count demands it. Files: `src/cli.rs`, output formatting modules.
   Acceptance: `--json` machine-readable everywhere it applies; completions
   generated for bash/zsh/fish.
 
@@ -444,6 +456,21 @@ lives in the manager repo and any format change is deliberate.
      updates (NO self-update by policy); completions ride V-16 later.
   - Acceptance: fresh machine + package install → `vyn start` → `vynm
     install database` works touching only XDG dirs under `~/.config/vyn`.
+
+- [ ] **V-20 — `vynm new <name>`: plugin scaffolding.**
+  Decision 2026-08-22: templates are EMBEDDED in the binary (`include_str!`,
+  zero new deps) — offline-first like the rest of vynm, no trust question
+  for twenty-line hello-worlds. Remote signed templates revisit later via
+  R2 (`templates/` prefix in the bucket, same signing model) once Phase B
+  lands.
+  - `vynm new <name>` scaffold: `plugin.json` (id/name, version 0.0.1,
+    compat range), `Cargo.toml` (dep `vynkor-sdk`, bin `<name>`),
+    `src/main.rs` minimal `Plugin` impl (hello action), `.gitignore`,
+    README stub; prints next-step hints (build → sign → submit).
+  - Name validated via `validate_identifier`; refuses an existing dir
+    without `--force`.
+  - Acceptance: the scaffolded plugin builds against the published
+    `vynkor-sdk` out of the box.
 
 **Parked (not promised):** `rollback <slug>` (the install pipeline's `.bak`
 mechanism is half of it), air-gapped `bundle export/import`.
