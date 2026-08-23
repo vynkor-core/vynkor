@@ -347,7 +347,11 @@ lives in the manager repo and any format change is deliberate.
   `src/registry.rs` (entry lookup by exact version). Acceptance: pinned
   install resolves the exact version or fails listing available ones.
 
-- [ ] **V-12 — `vynm outdated` + `vynm update [slug]`.**
+- [x] **V-12 — `vynm outdated` + `vynm update [slug]`.**
+  ✅ DONE & verified 2026-08-23 (0.3.0): survey engine (origin-only
+  resolution, one fetch per distinct source), ONE batch confirmation,
+  rebuild detection w/ --force, restart hint; E2E verified incl.
+  origin-enforcement against shadowing and digest refresh on repair.
   - `outdated`: report-only comparison of `installed.json` versions vs
     registry versions (the R10-03 cache already snapshots both).
   - `update`: bare form checks every installed plugin against its *origin*
