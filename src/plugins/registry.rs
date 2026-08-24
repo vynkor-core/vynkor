@@ -540,6 +540,15 @@ pub fn action_risk_str(risk: i32) -> &'static str {
     }
 }
 
+// UX-2: single source for the public PluginState string — REST /plugins and
+// the kernel list_plugins command must agree, and a Rust Debug name
+// ("Registered") is not an API contract. Lowercase like device_state_str.
+pub fn plugin_state_str(state: &PluginState) -> &'static str {
+    match state {
+        PluginState::Registered => "registered",
+    }
+}
+
 /// Validate an incoming plugin id. Rejecting bad ids at registration prevents:
 /// JSON injection (ids are embedded into event payloads), routing confusion
 /// (reserved "kernel"/"*" targets), and silent truncation (ids must fit the

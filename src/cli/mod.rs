@@ -12,8 +12,7 @@ use std::path::PathBuf;
 use token::TokenCmd;
 
 #[derive(Parser)]
-#[command(name = "vyn")]
-#[command(about = "Veyron kernel control", version = "0.1.0")]
+#[command(name = "vyn", about = "vynkor kernel control", version = env!("CARGO_PKG_VERSION"))]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
@@ -21,6 +20,7 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
+    /// Manage plugins (list/start/stop/logs; marketplace via vynm).
     Plugin {
         #[command(subcommand)]
         cmd: PluginCmd,
@@ -61,6 +61,7 @@ pub enum Commands {
         #[arg(short, long, default_value = "config.yaml")]
         config: String,
     },
+    /// Start the kernel daemon (background by default, --foreground to stay attached).
     Start {
         #[arg(short, long)]
         foreground: bool,
@@ -95,10 +96,12 @@ pub enum Commands {
         bridge_mirror: Vec<String>,
     },
 
+    /// Stop the running kernel daemon.
     Stop {
         #[arg(short, long, default_value = "config.yaml")]
         config: String,
     },
+    /// Stop and start the kernel daemon.
     Restart {
         #[arg(short, long, default_value = "config.yaml")]
         config: String,
@@ -106,10 +109,12 @@ pub enum Commands {
         #[arg(short, long)]
         debug: bool,
     },
+    /// Show kernel status — pid, uptime, supervised plugin count.
     Status {
         #[arg(short, long, default_value = "config.yaml")]
         config: String,
     },
+    /// Print the last N lines of the kernel log file.
     Logs {
         #[arg(short, long, default_value = "20")]
         lines: usize,
@@ -117,9 +122,8 @@ pub enum Commands {
         #[arg(short, long, default_value = "config.yaml")]
         config: String,
     },
-    Completions {
-        shell: Shell,
-    },
+    /// Generate shell completion scripts for the given shell.
+    Completions { shell: Shell },
     #[command(name = "__complete-slugs", hide = true)]
     CompleteSlugs,
     /// Internal sandbox shim entrypoint (R9-02): re-exec'd by the supervisor

@@ -150,6 +150,8 @@ async fn plugins_returns_registered_plugins() {
     let body = body_string(response.into_body()).await;
     assert!(body.contains("weather"), "body: {body}");
     assert!(body.contains("timer"), "body: {body}");
+    // UX-2: stable lowercase string, never a Rust Debug enum name
+    assert!(body.contains("\"state\":\"registered\""), "body: {body}");
 }
 
 #[tokio::test]
@@ -170,6 +172,8 @@ async fn get_plugin_by_id_returns_plugin() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = body_string(response.into_body()).await;
     assert!(body.contains("echo"), "body: {body}");
+    // UX-2: stable lowercase string, never a Rust Debug enum name
+    assert!(body.contains("\"state\":\"registered\""), "body: {body}");
 }
 
 // ── devices (D-04) ─────────────────────────────────────────────────────────

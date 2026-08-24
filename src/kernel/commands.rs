@@ -136,7 +136,7 @@ impl CommandHandler {
                     .map(|e| {
                         serde_json::json!({
                             "plugin_id": e.plugin_id,
-                            "state": format!("{:?}", e.state),
+                            "state": crate::plugins::registry::plugin_state_str(&e.state),
                             "actions": e.manifest.actions,
                         })
                     })
@@ -262,8 +262,13 @@ mod tests {
         assert_eq!(out.status, CommandStatus::CommandOk);
         let json = String::from_utf8(out.data_json).unwrap();
         assert!(json.contains("\"plugin_id\":\"notify\""), "json={json}");
-        assert!(json.contains("\"actions\":[\"notify_send\"]"), "json={json}");
+        assert!(
+            json.contains("\"actions\":[\"notify_send\"]"),
+            "json={json}"
+        );
         assert!(json.contains("\"state\""), "json={json}");
+        // UX-2: stable lowercase string, never a Rust Debug enum name
+        assert!(json.contains("\"state\":\"registered\""), "json={json}");
     }
 
     #[test]

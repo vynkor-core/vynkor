@@ -236,7 +236,11 @@ async fn manifest_discovery_commands_exempt_from_admin_permission() {
         CommandStatus::CommandPermissionDenied,
         "get_manifest must be exempt from KERNEL_ADMIN"
     );
-    assert!(ack.error.contains("plugin not registered"), "error was: {}", ack.error);
+    assert!(
+        ack.error.contains("plugin not registered"),
+        "error was: {}",
+        ack.error
+    );
 
     let denied = timeout(
         Duration::from_secs(2),
