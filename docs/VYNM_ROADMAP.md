@@ -330,7 +330,12 @@ lives in the manager repo and any format change is deliberate.
     warning; explicit form bypasses search; unsigned consent applies per
     source.
 
-- [ ] **V-10 — permission preview on install.**
+- [x] **V-10 — permission preview on install.**
+  ✅ DONE & verified 2026-08-22 (`feat/v10-permission-preview` merged before
+  V-12; gate sits in the manager's `commit_staged` AFTER staged-manifest
+  validation, BEFORE any rename — so the preview comes from the real parsed
+  manifest and a bad manifest never touches dest; refusal removes staging,
+  nothing recorded).
   Before writing anything, print what the manifest declares
   (`permissions: [storage, network]` + v2 per-action requirements) and
   require confirmation. In a default-deny ecosystem the operator must see
@@ -412,7 +417,17 @@ lives in the manager repo and any format change is deliberate.
   `src/installer.rs`, `src/cli.rs`. Acceptance: local zip installs; D8
   https-only still enforced for direct http URLs without explicit consent.
 
-- [ ] **V-16 — CLI polish package.**
+- [x] **V-16 — CLI polish package.**
+  ✅ DONE & verified 2026-08-24 (vynkor-manager **0.4.0**, PR vynkor-manager#20;
+  notes in manager `docs/V-16_EXPERIENCE.md`): `vynm info <target>` full entry
+  details; `--json` for search/list/info/outdated (no-match = null+empty
+  results, never a special case); `--source` column in search tables;
+  `--dry-run` for install/update (moves no bytes, ledger/dirs untouched —
+  e2e verified); `vynm cache clean`; completions generated from the clap
+  surface (`clap_complete`); hidden `__complete-slugs` reads LOCAL caches
+  first per the NOTE below. Exit codes finalized TYPE-based: security
+  refusals raise `VynmError::Verification` → exit 3 by variant, the
+  message-sniffing heuristic is gone.
   `--source` column in search/list tables; `vynm info <slug>`; `--dry-run`;
   `--json` output; `vynm cache clean`; shell completions; documented exit
   codes finalized (0 ok / 2 network / 3 verification failure / …) as the
