@@ -95,11 +95,10 @@ impl Kernel {
             }
         };
 
-        let event_bus = if let Some(store) = &event_store {
-            Arc::new(EventBus::with_store(Arc::clone(store)))
-        } else {
-            event_bus
-        };
+        // attach, don't replace: callers hold this Arc (tests publish through it)
+        if let Some(store) = &event_store {
+            event_bus.set_store(Arc::clone(store));
+        }
 
         let (router_tx, router_rx) = mpsc::channel(config.router_channel_capacity);
         let ws_router_tx = router_tx.clone();

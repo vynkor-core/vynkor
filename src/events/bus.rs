@@ -8,7 +8,7 @@ use dashmap::DashMap;
 use metrics::counter;
 use prost::Message;
 use std::collections::HashSet;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
@@ -18,7 +18,9 @@ pub struct EventBus {
     subscriptions: DashMap<String, HashSet<String>>,
     // plugin_id → set of event_types (for fast unsubscribe_all)
     by_plugin: DashMap<String, HashSet<String>>,
-    store: Option<Arc<EventStore>>,
+    // decided once (orchestrator attaches after EventStore::new succeeds);
+    // the caller's Arc stays authoritative — swapping it broke test harnesses
+    store: OnceLock<Option<Arc<EventStore>>>,
 }
 
 impl EventBus {
@@ -26,7 +28,7 @@ impl EventBus {
         EventBus {
             subscriptions: DashMap::new(),
             by_plugin: DashMap::new(),
-            store: None,
+            store: OnceLock::new(),
         }
     }
 
@@ -34,8 +36,17 @@ impl EventBus {
         EventBus {
             subscriptions: DashMap::new(),
             by_plugin: DashMap::new(),
-            store: Some(store),
+            store: OnceLock::from(Some(store)),
         }
+    }
+
+    /// first attach wins; later calls are no-ops
+    pub fn set_store(&self, store: Arc<EventStore>) {
+        let _ = self.store.set(Some(store));
+    }
+
+    fn event_store(&self) -> Option<Arc<EventStore>> {
+        self.store.get().and_then(|s| s.clone())
     }
 
     pub fn subscribe(&self, plugin_id: &str, event_types: Vec<String>) {
@@ -82,7 +93,7 @@ impl EventBus {
     }
 
     pub async fn publish(&self, event: Event, registry: &PluginRegistry) {
-        if let Some(store) = &self.store {
+        if let Some(store) = self.event_store() {
             store.persist(&event);
         }
         self.deliver(event, registry).await;
@@ -229,7 +240,7 @@ pub fn plugin_lifecycle_payload(registry: &PluginRegistry, plugin_id: &str) -> V
         Some(dev) => (device_os_str(dev.os).to_string(), dev.capabilities),
         None => ("unspecified".to_string(), vec![]),
     };
-    // D-08: surface the tool schema (action_specs) so the AI can enumerate
+    // D-08: surface the action schema (action_specs) so clients can enumerate
     // callable actions from the joined event alone. Registry data only — the
     // kernel never interprets params_schema.
     let action_specs: Vec<serde_json::Value> = registry
