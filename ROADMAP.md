@@ -377,12 +377,16 @@ backlog (polish).
   - Acceptance: stable, documented error codes/messages on the wire.
   - **Status (2026-08-14): OPEN.**
 
-- [ ] UX-2 — **Debug repr leaks into public API shapes (Low-Med):**
+- [x] UX-2 — **Debug repr leaks into public API shapes (Low-Med):**
       `PluginInfo.state = format!("{:?}", e.state)` (`routes.rs:59`) — a Rust
       Debug enum name is the public field.
   - Files: `src/api/routes.rs`.
   - Acceptance: stable documented string/enum values in the response.
-  - **Status (2026-08-14): OPEN.**
+  - **Status (2026-08-24): FIXED** — shared
+    `registry::plugin_state_str()` (`"registered"`, lowercase like
+    `device_state_str`) is now the single source; used by both REST sites
+    and the kernel `list_plugins` command (same leak class). Locked by
+    assertions in test_api/test_registry/kernel commands tests.
 
 - [ ] PERF-3 — **Per-message full `PluginEntry` clones + O(n) registry scans
       (Low-Med):** `registry.get` clones the whole entry incl. the manifest
@@ -417,12 +421,15 @@ backlog (polish).
     `config.yaml`.
   - **Status (2026-08-14): OPEN.**
 
-- [ ] UX-4 — **CLI polish (Low):** sparse subcommand `about` text and a
+- [x] UX-4 — **CLI polish (Low):** sparse subcommand `about` text and a
       hardcoded version string (`cli/mod.rs`); mixed output style
       (✓/⚠/plain) and `vyn plugin logs` printing the raw JSON array
       (`cli/plugin.rs:135`).
   - Files: `src/cli/mod.rs`, `src/cli/plugin.rs`.
-  - **Status (2026-08-14): OPEN.**
+  - **Status (2026-08-24): FIXED** — version now `env!("CARGO_PKG_VERSION")`;
+    every subcommand has a one-line clap `about`; `vyn plugin logs` parses
+    the JSON array and prints one line per entry, falling back to verbatim
+    output on unparsable bodies (`render_log_lines`, unit-tested).
 
 - [x] S4 — **Dependency advisories (Low, warnings):** RUSTSEC-2026-0190
       `anyhow` `Error::downcast_mut` unsoundness; RUSTSEC-2025-0119
