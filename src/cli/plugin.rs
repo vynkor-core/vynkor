@@ -88,7 +88,7 @@ pub async fn handle(
                 token,
             )
             .await?;
-            print!("{body}");
+            print_log_lines(&body);
         }
         // ── D4 delegation shims ─────────────────────────────────────────
         // --config is forwarded so vynm resolves the same plugins.d the
@@ -123,6 +123,19 @@ pub async fn handle(
         }
     }
     Ok(())
+}
+
+/// The logs endpoint returns a JSON array of strings; print one per line.
+/// Unparsable bodies print verbatim — never swallowed as empty output.
+fn print_log_lines(body: &str) {
+    print!("{}", render_log_lines(body));
+}
+
+fn render_log_lines(body: &str) -> String {
+    match serde_json::from_str::<Vec<String>>(body) {
+        Ok(lines) => lines.iter().map(|l| format!("{l}\n")).collect(),
+        Err(_) => body.to_string(),
+    }
 }
 
 /// D4 shim: announce the move, then hand off. A missing binary degrades to an
@@ -226,6 +239,24 @@ mod tests {
     #[test]
     fn base_url_defaults_to_http() {
         assert_eq!(base_url(8080, false), "http://127.0.0.1:8080");
+    }
+
+    #[test]
+    fn render_log_lines_prints_json_array_one_per_line() {
+        assert_eq!(
+            render_log_lines(r#"["line one","line two"]"#),
+            "line one\nline two\n"
+        );
+    }
+
+    #[test]
+    fn render_log_lines_empty_array_is_empty_output() {
+        assert_eq!(render_log_lines("[]"), "");
+    }
+
+    #[test]
+    fn render_log_lines_falls_back_on_unparsable_body() {
+        assert_eq!(render_log_lines("not json"), "not json");
     }
 
     #[test]
