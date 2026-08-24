@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc;
 use tower::ServiceExt;
-use vynkor::api::server::{create_router, create_router_full};
+use vynkor::api::server::{create_router, create_router_full, RouterConfig};
 use vynkor::auth::jwt::JwtValidator;
 use vynkor::plugins::manager::PluginManager;
 use vynkor::plugins::registry::PluginRegistry;
@@ -612,19 +612,20 @@ async fn rate_limit_applies_only_to_verified_sub_not_forged_tokens() {
     // quota.
     const SECRET: &[u8] = b"test-secret";
     let validator = Arc::new(JwtValidator::new(SECRET));
-    let app = create_router_full(
-        make_manager(make_registry(), make_supervisor()),
-        Some(validator),
-        None,
-        None,
-        Instant::now(),
-        Some(1), // 1 rps
-        Some(1), // burst of 1
-        vec![],
-        5,
-        1024,
-        10,
-    );
+    let app = create_router_full(RouterConfig {
+        manager: make_manager(make_registry(), make_supervisor()),
+        jwt_validator: Some(validator),
+        ws_router_tx: None,
+        ws_disconnect_tx: None,
+        started_at: Instant::now(),
+        rate_limit_rps: Some(1),   // 1 rps
+        rate_limit_burst: Some(1), // burst of 1
+        plugin_defs: vec![],
+        ws_handshake_timeout_secs: 5,
+        max_ws_connections: 1024,
+        ws_register_timeout_secs: 10,
+    })
+    .app;
 
     // Forged tokens signed with the wrong secret, rotating `sub` every request,
     // must never bypass auth to reach the rate limiter — always 401.
@@ -653,19 +654,20 @@ async fn rate_limit_applies_only_to_verified_sub_not_forged_tokens() {
 async fn rate_limit_enforced_per_verified_sub() {
     const SECRET: &[u8] = b"test-secret";
     let validator = Arc::new(JwtValidator::new(SECRET));
-    let app = create_router_full(
-        make_manager(make_registry(), make_supervisor()),
-        Some(validator),
-        None,
-        None,
-        Instant::now(),
-        Some(1), // 1 rps
-        Some(1), // burst of 1
-        vec![],
-        5,
-        1024,
-        10,
-    );
+    let app = create_router_full(RouterConfig {
+        manager: make_manager(make_registry(), make_supervisor()),
+        jwt_validator: Some(validator),
+        ws_router_tx: None,
+        ws_disconnect_tx: None,
+        started_at: Instant::now(),
+        rate_limit_rps: Some(1),   // 1 rps
+        rate_limit_burst: Some(1), // burst of 1
+        plugin_defs: vec![],
+        ws_handshake_timeout_secs: 5,
+        max_ws_connections: 1024,
+        ws_register_timeout_secs: 10,
+    })
+    .app;
 
     let token = create_test_token("admin", vec![], SECRET, 3600);
     let request = || {
@@ -782,19 +784,20 @@ fn sleep_def(id: &str) -> PluginDef {
 async fn start_plugin_spawns_process_declared_in_config() {
     let registry = make_registry();
     let manager = make_manager(registry, make_supervisor());
-    let app = create_router_full(
-        Arc::clone(&manager),
-        None,
-        None,
-        None,
-        Instant::now(),
-        None,
-        None,
-        vec![sleep_def("startable")],
-        5,
-        1024,
-        10,
-    );
+    let app = create_router_full(RouterConfig {
+        manager: Arc::clone(&manager),
+        jwt_validator: None,
+        ws_router_tx: None,
+        ws_disconnect_tx: None,
+        started_at: Instant::now(),
+        rate_limit_rps: None,
+        rate_limit_burst: None,
+        plugin_defs: vec![sleep_def("startable")],
+        ws_handshake_timeout_secs: 5,
+        max_ws_connections: 1024,
+        ws_register_timeout_secs: 10,
+    })
+    .app;
 
     let response = app
         .oneshot(
@@ -816,19 +819,20 @@ async fn start_plugin_spawns_process_declared_in_config() {
 
 #[tokio::test]
 async fn start_unknown_plugin_returns_404() {
-    let app = create_router_full(
-        make_manager(make_registry(), make_supervisor()),
-        None,
-        None,
-        None,
-        Instant::now(),
-        None,
-        None,
-        vec![sleep_def("declared-elsewhere")],
-        5,
-        1024,
-        10,
-    );
+    let app = create_router_full(RouterConfig {
+        manager: make_manager(make_registry(), make_supervisor()),
+        jwt_validator: None,
+        ws_router_tx: None,
+        ws_disconnect_tx: None,
+        started_at: Instant::now(),
+        rate_limit_rps: None,
+        rate_limit_burst: None,
+        plugin_defs: vec![sleep_def("declared-elsewhere")],
+        ws_handshake_timeout_secs: 5,
+        max_ws_connections: 1024,
+        ws_register_timeout_secs: 10,
+    })
+    .app;
 
     let response = app
         .oneshot(
@@ -866,19 +870,20 @@ async fn start_plugin_rejects_manifest_requesting_ungranted_permission() {
         ..def
     };
 
-    let app = create_router_full(
-        make_manager(make_registry(), make_supervisor()),
-        None,
-        None,
-        None,
-        Instant::now(),
-        None,
-        None,
-        vec![def],
-        5,
-        1024,
-        10,
-    );
+    let app = create_router_full(RouterConfig {
+        manager: make_manager(make_registry(), make_supervisor()),
+        jwt_validator: None,
+        ws_router_tx: None,
+        ws_disconnect_tx: None,
+        started_at: Instant::now(),
+        rate_limit_rps: None,
+        rate_limit_burst: None,
+        plugin_defs: vec![def],
+        ws_handshake_timeout_secs: 5,
+        max_ws_connections: 1024,
+        ws_register_timeout_secs: 10,
+    })
+    .app;
 
     let response = app
         .oneshot(
@@ -908,19 +913,20 @@ async fn start_already_running_plugin_returns_conflict() {
         .await
         .unwrap();
 
-    let app = create_router_full(
-        Arc::clone(&manager),
-        None,
-        None,
-        None,
-        Instant::now(),
-        None,
-        None,
-        vec![sleep_def("already-up")],
-        5,
-        1024,
-        10,
-    );
+    let app = create_router_full(RouterConfig {
+        manager: Arc::clone(&manager),
+        jwt_validator: None,
+        ws_router_tx: None,
+        ws_disconnect_tx: None,
+        started_at: Instant::now(),
+        rate_limit_rps: None,
+        rate_limit_burst: None,
+        plugin_defs: vec![sleep_def("already-up")],
+        ws_handshake_timeout_secs: 5,
+        max_ws_connections: 1024,
+        ws_register_timeout_secs: 10,
+    })
+    .app;
 
     let response = app
         .oneshot(
