@@ -4,6 +4,8 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::utils::errors::VynkorError;
+
 /// T-12/MA-18: minimum `jwt_secret` length (bytes) accepted anywhere a JWT
 /// secret is used — kernel boot (orchestrator) and every mint site. HS256
 /// secrets shorter than this are brute-forceable.
@@ -61,17 +63,19 @@ impl JwtValidator {
         }
     }
 
-    pub fn validate(&self, token: &str) -> Result<PluginClaims, String> {
+    pub fn validate(&self, token: &str) -> Result<PluginClaims, VynkorError> {
         if token.is_empty() {
-            return Err("missing JWT token".into());
+            return Err(VynkorError::Auth("missing JWT token".into()));
         }
         let claims = decode::<PluginClaims>(token, &self.decoding_key, &self.validation)
             .map(|d| d.claims)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| VynkorError::Auth(e.to_string()))?;
         // D-07: audience-scoped tokens are per-device mints and must carry a
         // jti nonce. Pre-D-07 tokens carry neither claim and stay accepted.
         if claims.aud.is_some() && claims.jti.as_deref().unwrap_or("").is_empty() {
-            return Err("token carries aud but no jti nonce".into());
+            return Err(VynkorError::Auth(
+                "token carries aud but no jti nonce".into(),
+            ));
         }
         Ok(claims)
     }
@@ -86,22 +90,22 @@ pub fn mint_device_token(
     ipc_targets: Vec<String>,
     ttl_secs: u64,
     audience: &str,
-) -> Result<String, String> {
+) -> Result<String, VynkorError> {
     // MA-18: same threshold as boot-time validation — `vyn token mint` reads
     // the secret straight from config with no orchestrator gate in between
     if secret.len() < MIN_JWT_SECRET_BYTES {
-        return Err(format!(
+        return Err(VynkorError::Auth(format!(
             "jwt_secret is {} bytes, must be at least {MIN_JWT_SECRET_BYTES} bytes \
              (HS256 secrets shorter than this are brute-forceable)",
             secret.len()
-        ));
+        )));
     }
     let device_id = device_id.trim();
     if device_id.is_empty() {
-        return Err("device_id must not be empty".into());
+        return Err(VynkorError::Auth("device_id must not be empty".into()));
     }
     if ttl_secs == 0 {
-        return Err("ttl_secs must be > 0".into());
+        return Err(VynkorError::Auth("ttl_secs must be > 0".into()));
     }
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -123,5 +127,5 @@ pub fn mint_device_token(
         &claims,
         &EncodingKey::from_secret(secret),
     )
-    .map_err(|e| e.to_string())
+    .map_err(|e| VynkorError::Auth(e.to_string()))
 }

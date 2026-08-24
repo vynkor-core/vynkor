@@ -54,7 +54,8 @@ async fn run_kernel(cli: Cli) -> Result<()> {
             // so it honours the resolved log level.
             let (mut cfg, load_err) = match load_config(&config) {
                 Ok(c) => (c, None),
-                Err(e) => (Config::default(), Some(e.to_string())),
+                // `{e:#}` keeps the anyhow cause chain instead of flattening it
+                Err(e) => (Config::default(), Some(format!("{e:#}"))),
             };
 
             if let Some(p) = port {

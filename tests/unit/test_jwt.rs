@@ -163,7 +163,7 @@ fn audience_scoped_token_without_nonce_rejected() {
     .unwrap();
     let validator = JwtValidator::new(SECRET);
     let err = validator.validate(&token).unwrap_err();
-    assert!(err.contains("jti"), "got: {err}");
+    assert!(err.to_string().contains("jti"), "got: {err}");
 }
 
 #[test]

@@ -14,6 +14,7 @@ pub enum VynkorError {
     PluginAlreadyRegistered(String),
     InvalidPluginId(String),
     PermissionDenied(String),
+    Auth(String),
     Timeout,
     Internal(String),
     Incompatible(String),
@@ -39,6 +40,7 @@ impl fmt::Display for VynkorError {
                 write!(f, "invalid plugin id: {}", reason)
             }
             VynkorError::PermissionDenied(perm) => write!(f, "permission denied: {}", perm),
+            VynkorError::Auth(msg) => write!(f, "auth error: {}", msg),
             VynkorError::Timeout => write!(f, "operation timed out"),
             VynkorError::Internal(msg) => write!(f, "internal error: {}", msg),
             VynkorError::Incompatible(msg) => write!(f, "incompatible: {}", msg),
