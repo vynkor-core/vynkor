@@ -315,7 +315,6 @@ impl MessageRouter {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     /// Commands any registered plugin may call without
     /// PERMISSION_KERNEL_ADMIN: read-only discovery only. Manifest data is
     /// public distribution metadata (it ships in registry.json), and none of
@@ -324,6 +323,9 @@ impl MessageRouter {
     /// manifests for tool discovery without holding admin.
     const READONLY_COMMANDS: [&str; 3] = ["health_check", "list_plugins", "get_manifest"];
 
+    // 12 params mirror the kernel's wired components; collapsing them into a
+    // config struct is MA-06's scope, not this lint
+    #[allow(clippy::too_many_arguments)]
     async fn handle_kernel_message(
         msg: IncomingMessage,
         registry: &PluginRegistry,
