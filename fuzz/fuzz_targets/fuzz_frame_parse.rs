@@ -1,7 +1,7 @@
 #![no_main]
 use libfuzzer_sys::fuzz_target;
 use tokio::io::BufReader;
-use veyron::ipc::framing::read_frame;
+use vynkor::ipc::framing::read_frame;
 
 /// Feed arbitrary bytes into the frame parser.
 ///

@@ -3,13 +3,13 @@ use libfuzzer_sys::fuzz_target;
 use prost::Message;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
-use veyron::events::bus::EventBus;
-use veyron::ipc::connection::Outbound;
-use veyron::ipc::framing::Frame;
-use veyron::ipc::messages::IncomingMessage;
-use veyron::ipc::protocol::MessageRouter;
-use veyron::plugins::registry::PluginRegistry;
-use veyron::proto::veyron::{envelope, Envelope, PluginManifest, PluginRegister};
+use vynkor::events::bus::EventBus;
+use vynkor::ipc::connection::Outbound;
+use vynkor::ipc::framing::Frame;
+use vynkor::ipc::messages::IncomingMessage;
+use vynkor::ipc::protocol::MessageRouter;
+use vynkor::plugins::registry::PluginRegistry;
+use vynkor::proto::vynkor::{envelope, Envelope, PluginManifest, PluginRegister};
 
 /// Feed arbitrary bytes as an IPC frame payload through the full router pipeline.
 ///

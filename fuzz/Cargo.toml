@@ -1,5 +1,5 @@
 [package]
-name = "veyron-fuzz"
+name = "vynkor-fuzz"
 version = "0.0.1"
 publish = false
 edition = "2021"
@@ -13,7 +13,7 @@ prost = "0.13"
 tokio = { version = "1", features = ["full"] }
 crc32fast = "1"
 
-[dependencies.veyron]
+[dependencies.vynkor]
 path = ".."
 
 # Prevent this from interfering with the workspace

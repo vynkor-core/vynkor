@@ -1,7 +1,7 @@
 #![no_main]
 use libfuzzer_sys::fuzz_target;
 use prost::Message;
-use veyron::proto::veyron::Envelope;
+use vynkor::proto::vynkor::Envelope;
 
 /// Feed arbitrary bytes into protobuf `Envelope::decode`.
 ///
