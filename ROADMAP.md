@@ -478,7 +478,7 @@ the audit's §E: **P0** before next release (monoliths + error-system unificatio
   - Acceptance: frame helpers live in `ipc/helpers.rs` or `veyron_wire`; URL
     helpers in `utils/url.rs`; zero duplicated copies remain.
 
-- [ ] MA-03 — **Unify the error system on `VeyronError`:** three error types
+- [x] MA-03 — **Unify the error system on `VeyronError`:** three error types
       coexist — `VeyronError`, `anyhow::Error`, and `Result<_, String>`
       (`auth/jwt.rs:58,83`). `jwt::validate()` returns `String`, breaking
       uniformity; `main.rs` formats `e.to_string()` and loses the error chain.
@@ -486,6 +486,10 @@ the audit's §E: **P0** before next release (monoliths + error-system unificatio
   - Acceptance: `jwt::validate() -> Result<_, VeyronError>`; no `Result<_, String>`
     in error paths; `main.rs` preserves the error chain (e.g. `{:?}` or
     `Error::source()`).
+  - **Status (2026-08-24): FIXED** — new `VynkorError::Auth(String)` variant;
+    `jwt::validate()`/`mint_device_token()` return it with every message text
+    preserved; `main.rs` start path formats config-load failures via `{e:#}`
+    so the anyhow cause chain survives. PR #64.
 
 - [x] MA-04 — **Replace deprecated `rand::thread_rng()`:** `auth/jwt.rs:96`
       uses the deprecated `rand::thread_rng()`; replace with `rand::rng()` /
@@ -514,7 +518,7 @@ the audit's §E: **P0** before next release (monoliths + error-system unificatio
     convention (lowercase, no trailing period per `CLAUDE.md`); trivial
     restatements removed.
 
-- [ ] MA-06 — **Replace `create_router_full(10 args)` with a config struct:**
+- [x] MA-06 — **Replace `create_router_full(10 args)` with a config struct:**
       `api/server.rs`'s constructor is clippy-suppressed (`too_many_arguments`);
       `tokio::spawn(prune limiter)` inside the constructor spawns a background
       task with no `JoinHandle`, leaking in tests.
@@ -522,8 +526,12 @@ the audit's §E: **P0** before next release (monoliths + error-system unificatio
   - Acceptance: `create_router_full` takes a `RouterConfig` struct; the prune
     task is spawned by `Kernel::run` (or returns a handle), not inside the
     constructor.
+  - **Status (2026-08-24): FIXED** — `create_router_full(RouterConfig)` returns
+    `BuiltRouter { app, rate_limiter }`; eviction spawned by `ApiServer::run`
+    via exported `spawn_rate_limiter_prune`, join handle held for the server's
+    lifetime; no handle-less task leaks in tests. PR #64.
 
-- [ ] MA-07 — **Fix `Config::Default` duplication + clamp all zero-invalid
+- [x] MA-07 — **Fix `Config::Default` duplication + clamp all zero-invalid
       numerics:** `Default` hand-duplicates every `default_*()` fn — easy to
       desync; `clamp_invalid_numerics` (N3) clamps only 4 fields
       (`router_channel_capacity`, `max_connections`, `watchdog_*`), but
@@ -533,6 +541,14 @@ the audit's §E: **P0** before next release (monoliths + error-system unificatio
     consistently (or `Default` delegates to the `default_*` fns); every
     zero-invalid numeric is clamped or errors loudly; tests cover all clamped
     fields.
+  - **Status (2026-08-24): FIXED** — `Default` delegates to the `default_*`
+    fns (`port`/`log_level` extracted, serde attrs wired); closes a live
+    desync where serde used S2's `default_data_dir()` while `Default`
+    hardcoded `/var/lib/vyn`. Clamps added for `max_ws_connections`/
+    `max_archive_bytes`; tests cover all six clamped numerics. Surfaced a
+    latent orchestrator bug: the caller's `EventBus` Arc was swapped for a
+    store-backed clone whenever EventStore opened — replaced by set-once
+    `EventBus::set_store` attach (Arc identity preserved). PR #64.
 
 - [x] MA-08 — **Add `reset_for_test()` for global atomic sequences:**
       `MSG_SEQ`, `ACTION_CORRELATION_SEQ`, `EVENT_PUBLISH_SEQ`
@@ -1331,11 +1347,11 @@ surfaces cover every planned plugin).
 | S4 | dependency advisories (anyhow / number_prefix) — **FIXED** (2026-08-21): anyhow 1.0.104, h2 0.4.18, number_prefix dropped via indicatif 0.18 — cargo audit clean | none |
 | MA-01 | split `ipc/protocol.rs` + `marketplace/registry.rs` monoliths — **OPEN** (P0, 2026-08-20 audit) | MA-02 |
 | MA-02 | extract duplicated `target_bytes`/`build_frame` + `resolve_*_url` helpers — **OPEN** (P0) | none |
-| MA-03 | unify error system on `VeyronError`; `jwt::validate() -> VeyronError` — **OPEN** (P0) | none |
+| MA-03 | unify error system on `VeyronError`; `jwt::validate() -> VeyronError` — **FIXED** (2026-08-24): `VynkorError::Auth`, jwt paths unified, main.rs chain preserved (PR #64) | none |
 | MA-04 | replace deprecated `rand::thread_rng()` — **FIXED** (2026-08-21): jti nonce from OsRng | none |
 | MA-05 | `docs/COMMENT_TAGS.md` + reduce comment duplication + consistent style — **OPEN** (P1) | none |
-| MA-06 | `create_router_full` → `RouterConfig` struct; move prune spawn out — **OPEN** (P1) | none |
-| MA-07 | `Config::Default` dedup + clamp all zero-invalid numerics — **OPEN** (P1) | none |
+| MA-06 | `create_router_full` → `RouterConfig` struct; move prune spawn out — **FIXED** (2026-08-24): `RouterConfig`/`BuiltRouter`, prune owned by `ApiServer::run` (PR #64) | none |
+| MA-07 | `Config::Default` dedup + clamp all zero-invalid numerics — **FIXED** (2026-08-24): Default delegates to `default_*` fns, all clamps covered (+ EventBus set-once store attach fix) (PR #64) | none |
 | MA-08 | `reset_for_test()` for global atomics (`MSG_SEQ` etc.) — **FIXED** (2026-08-21): `#[cfg(test)]` reset + regression test | none |
 | MA-09 | split `plugins/supervisor.rs` (933 L) — **OPEN** (P1) | none |
 | MA-10 | split `kernel/orchestrator.rs` (470 L) — **OPEN** (P1) | none |
@@ -1351,7 +1367,7 @@ surfaces cover every planned plugin).
 | F1 | marketplace out of the kernel → standalone `vynm` binary (DC-1) — **SHIPPED** 2026-08-22 (`vynkor-manager` + veyron PR #43) (P0, 2026-08-16 dumb-core audit) | none |
 | F2 | device surfaces as dumb pass-through; interpretation moves to a `discovery` plugin (DC-2) — **OPEN** (P0) | none |
 | F3 | bridge stays as transport; strip `device.<cap>` capability interpretation (DC-2) — **OPEN** (P1) | F2 |
-| F4 | neutralize AI tool-calling surface → generic manifest feature (DC-3) — **OPEN** (P1) | none |
+| F4 | neutralize AI tool-calling surface → generic manifest feature (DC-3) — kernel-side comments landed (PR #64, 2026-08-24); proto wording open (vynkor-wire) | none |
 | F5 | drop hardcoded action→permission fallback (DC-4) — **OPEN** (P1) | network plugin v2 manifest (veyron-plugins) |
 | F6 | manifesto wording + event-store hardening (DC-5) — **OPEN** (P1) | PERF-2 (S2 already shipped, PR #35) |
 
