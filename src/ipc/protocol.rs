@@ -316,6 +316,14 @@ impl MessageRouter {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// Commands any registered plugin may call without
+    /// PERMISSION_KERNEL_ADMIN: read-only discovery only. Manifest data is
+    /// public distribution metadata (it ships in registry.json), and none of
+    /// these mutate state — everything else (reload_config, list_devices)
+    /// stays admin-gated. This is what lets the `agent` plugin read plugin
+    /// manifests for tool discovery without holding admin.
+    const READONLY_COMMANDS: [&str; 3] = ["health_check", "list_plugins", "get_manifest"];
+
     async fn handle_kernel_message(
         msg: IncomingMessage,
         registry: &PluginRegistry,
@@ -994,7 +1002,7 @@ impl MessageRouter {
                     .map(|e| e.plugin_id.clone())
                     .unwrap_or_default();
 
-                let outcome = if cmd.command != "health_check"
+                let outcome = if !Self::READONLY_COMMANDS.contains(&cmd.command.as_str())
                     && check_permission(registry, &sender_id, PermissionType::PermissionKernelAdmin)
                         .is_err()
                 {
