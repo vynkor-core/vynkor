@@ -125,6 +125,24 @@ impl CommandHandler {
                     ),
                 }
             }
+            // Plugin-manifest discovery surface for the agent: enumerate
+            // registered plugins so a caller can target `get_manifest` per
+            // slug. Read-only registry data; pairs with the READONLY_COMMANDS
+            // exemption in ipc/protocol.rs.
+            "list_plugins" => {
+                let plugins: Vec<serde_json::Value> = registry
+                    .list()
+                    .iter()
+                    .map(|e| {
+                        serde_json::json!({
+                            "plugin_id": e.plugin_id,
+                            "state": format!("{:?}", e.state),
+                            "actions": e.manifest.actions,
+                        })
+                    })
+                    .collect();
+                CommandOutcome::ok(serde_json::Value::Array(plugins).to_string())
+            }
             "reload_config" => match config_path {
                 Some(path) => match load_config(path) {
                     Ok(cfg) => {
@@ -220,6 +238,32 @@ mod tests {
         assert_eq!(out.status, CommandStatus::CommandOk);
         let json = String::from_utf8(out.data_json).unwrap();
         assert!(json.contains("\"plugin_count\":1"), "json={json}");
+    }
+
+    #[test]
+    fn list_plugins_returns_empty_array_when_none_registered() {
+        let registry = PluginRegistry::new();
+        let out = CommandHandler::dispatch("list_plugins", &registry, Instant::now(), None, b"");
+        assert_eq!(out.status, CommandStatus::CommandOk);
+        assert_eq!(String::from_utf8(out.data_json).unwrap(), "[]");
+    }
+
+    #[test]
+    fn list_plugins_reports_ids_states_and_actions() {
+        let registry = PluginRegistry::new();
+        let manifest = PluginManifest {
+            actions: vec!["notify_send".to_string()],
+            ..Default::default()
+        };
+        registry
+            .register("notify".to_string(), 1, manifest, dummy_tx(), "", "")
+            .unwrap();
+        let out = CommandHandler::dispatch("list_plugins", &registry, Instant::now(), None, b"");
+        assert_eq!(out.status, CommandStatus::CommandOk);
+        let json = String::from_utf8(out.data_json).unwrap();
+        assert!(json.contains("\"plugin_id\":\"notify\""), "json={json}");
+        assert!(json.contains("\"actions\":[\"notify_send\"]"), "json={json}");
+        assert!(json.contains("\"state\""), "json={json}");
     }
 
     #[test]

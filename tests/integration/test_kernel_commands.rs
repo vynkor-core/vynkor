@@ -192,6 +192,65 @@ async fn health_check_exempt_from_admin_permission() {
 }
 
 #[tokio::test]
+async fn manifest_discovery_commands_exempt_from_admin_permission() {
+    // The agent's tool-discovery surface: list_plugins + get_manifest must
+    // work for a plain plugin (no KERNEL_ADMIN), while reload_config stays
+    // denied for the same sender.
+    let (shutdown_tx, _registry, _bus) =
+        start_kernel("/tmp/vynkor_integ_cmd_discovery.sock", 19217).await;
+
+    let mut client = VynkorClient::connect("/tmp/vynkor_integ_cmd_discovery.sock")
+        .await
+        .unwrap();
+    client
+        .register("cmd-discovery-client", PluginManifest::default())
+        .await
+        .unwrap();
+
+    let ack = timeout(
+        Duration::from_secs(2),
+        client.send_command("d1", "list_plugins", b"{}"),
+    )
+    .await
+    .expect("timed out")
+    .expect("send_command failed");
+    assert_eq!(
+        ack.status(),
+        CommandStatus::CommandOk,
+        "list_plugins should be exempt, got error: {}",
+        ack.error
+    );
+
+    // get_manifest for an unknown slug reaches the handler (CommandError
+    // naming the plugin) instead of being permission-denied — that's the
+    // exemption working; a gated command would never see params.
+    let ack = timeout(
+        Duration::from_secs(2),
+        client.send_command("d2", "get_manifest", br#"{"plugin_id":"whatever"}"#),
+    )
+    .await
+    .expect("timed out")
+    .expect("send_command failed");
+    assert_ne!(
+        ack.status(),
+        CommandStatus::CommandPermissionDenied,
+        "get_manifest must be exempt from KERNEL_ADMIN"
+    );
+    assert!(ack.error.contains("plugin not registered"), "error was: {}", ack.error);
+
+    let denied = timeout(
+        Duration::from_secs(2),
+        client.send_command("d3", "reload_config", b""),
+    )
+    .await
+    .expect("timed out")
+    .expect("send_command failed");
+    assert_eq!(denied.status(), CommandStatus::CommandPermissionDenied);
+
+    let _ = shutdown_tx.send(());
+}
+
+#[tokio::test]
 async fn kernel_targeted_action_request_returns_not_found_not_fake_ok() {
     // R5-07 interim honesty fix: the kernel's ActionRequest handler is a
     // permission-check-only stub — it never routes to a provider or executes
