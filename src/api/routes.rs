@@ -67,7 +67,7 @@ pub async fn list_plugins(State(state): State<Arc<AppState>>) -> Json<Vec<Plugin
                 .unwrap_or(0);
             PluginInfo {
                 plugin_id: e.plugin_id,
-                state: format!("{:?}", e.state),
+                state: crate::plugins::registry::plugin_state_str(&e.state).to_string(),
                 registered_at: e.registered_at,
                 permissions: e.manifest.permissions,
                 device_id: e.device_id,
@@ -94,7 +94,7 @@ pub async fn get_plugin(
                 .unwrap_or(0);
             Json(PluginInfo {
                 plugin_id: e.plugin_id,
-                state: format!("{:?}", e.state),
+                state: crate::plugins::registry::plugin_state_str(&e.state).to_string(),
                 registered_at: e.registered_at,
                 permissions: e.manifest.permissions,
                 device_id: e.device_id,

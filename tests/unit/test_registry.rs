@@ -1,7 +1,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use vynkor::plugins::registry::{DeviceMeta, DeviceOs, DeviceState, PluginRegistry, PluginState};
+use vynkor::plugins::registry::{
+    plugin_state_str, DeviceMeta, DeviceOs, DeviceState, PluginRegistry, PluginState,
+};
 use vynkor::proto::vynkor::PluginManifest;
 use vynkor::utils::errors::VynkorError;
 
@@ -40,6 +42,12 @@ fn register_then_get_returns_entry() {
     // D-02: a plugin that declares no device identity is a host plugin
     assert_eq!(entry.device_id, "local");
     assert_eq!(entry.user_id, "default");
+}
+
+#[test]
+fn plugin_state_str_is_stable_lowercase() {
+    // UX-2: the public string must not be a Rust Debug enum name
+    assert_eq!(plugin_state_str(&PluginState::Registered), "registered");
 }
 
 #[test]
