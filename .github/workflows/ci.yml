@@ -30,8 +30,8 @@ jobs:
 
       - name: Proto drift check (T-17)
         run: |
-          diff -u ../vynkor-wire/proto/veyron_protocol.proto ../vynkor-sdk-cpp/proto/veyron_protocol.proto
-          diff -u ../vynkor-wire/proto/veyron_protocol.proto ../vynkor-sdk-python/proto/veyron_protocol.proto
+          diff -u ../vynkor-wire/proto/vynkor_protocol.proto ../vynkor-sdk-cpp/proto/vynkor_protocol.proto
+          diff -u ../vynkor-wire/proto/vynkor_protocol.proto ../vynkor-sdk-python/proto/vynkor_protocol.proto
 
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@stable
