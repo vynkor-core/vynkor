@@ -92,7 +92,9 @@ pub struct BridgeConfig {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
+    #[serde(default = "default_port")]
     pub port: u16,
+    #[serde(default = "default_log_level")]
     pub log_level: String,
     #[serde(default = "default_pid_path")]
     pub pid_file: PathBuf,
@@ -270,6 +272,13 @@ pub struct Config {
 /// `VYN_SOCKET_PATH` is not set.
 pub use vynkor_wire::socket::default_socket_path;
 
+fn default_port() -> u16 {
+    8000
+}
+fn default_log_level() -> String {
+    "info".to_string()
+}
+
 /// pid/log files got the same symlink-attack surface as the socket
 /// (AUDIT M-09) — default them out of the shared `/tmp` the same way.
 fn default_pid_path() -> PathBuf {
@@ -371,11 +380,11 @@ fn default_max_archive_entries() -> usize {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            port: 8000,
-            log_level: "info".to_string(),
+            port: default_port(),
+            log_level: default_log_level(),
             pid_file: default_pid_path(),
             log_file: default_log_path(),
-            data_dir: PathBuf::from("/var/lib/vyn"),
+            data_dir: default_data_dir(),
             socket_path: default_socket_path(),
             jwt_secret: None,
             allow_no_auth: false,
@@ -507,6 +516,16 @@ fn clamp_invalid_numerics(config: &mut Config) {
         warn!("watchdog_timeout_secs: 0 is invalid, clamping to default ({d})");
         config.watchdog_timeout_secs = d;
     }
+    if config.max_ws_connections == 0 {
+        let d = default_max_ws_connections();
+        warn!("max_ws_connections: 0 is invalid, clamping to default ({d})");
+        config.max_ws_connections = d;
+    }
+    if config.max_archive_bytes == 0 {
+        let d = default_max_archive_bytes();
+        warn!("max_archive_bytes: 0 is invalid, clamping to default ({d})");
+        config.max_archive_bytes = d;
+    }
 }
 
 /// Stable device identifier for the client role: explicit `device_id` config
@@ -627,7 +646,9 @@ mod tests {
             "router_channel_capacity: 0\n\
              max_connections: 0\n\
              watchdog_interval_secs: 0\n\
-             watchdog_timeout_secs: 0\n",
+             watchdog_timeout_secs: 0\n\
+             max_ws_connections: 0\n\
+             max_archive_bytes: 0\n",
         );
         let config = load_config(&path).unwrap();
         assert_eq!(
@@ -637,6 +658,8 @@ mod tests {
         assert_eq!(config.max_connections, default_max_connections());
         assert_eq!(config.watchdog_interval_secs, default_watchdog_interval());
         assert_eq!(config.watchdog_timeout_secs, default_watchdog_timeout());
+        assert_eq!(config.max_ws_connections, default_max_ws_connections());
+        assert_eq!(config.max_archive_bytes, default_max_archive_bytes());
     }
 
     // Sane non-zero values must pass through untouched.
