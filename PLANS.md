@@ -68,11 +68,14 @@ vyn plugin list|search|install <slug>
 
 - Каждая запись реестра: `{slug, version, archive_url, sha256, signature, status, ...}`
   (`RegistryEntry`, `registry.rs:41`).
-- **Ed25519-подпись** над строкой `"{slug}:{version}:{sha256}"`, публичный ключ
-  зашит в ядре (`MAINTAINER_PUBLIC_KEY_HEX`, `registry.rs:32`) или переопределён
-  через `marketplace_public_key` в конфиге.
-- Подпись **не покрывает URL** → перенос реестра/архивов на другой хост не требует
-  переподписи (sha256 не меняется).
+- **Ed25519-подпись** над канонической строкой S1
+  `"{slug}:{version}:{sha256}:{status}:{archive_url}:{min_kernel_version}:{max_kernel_version}"`
+  (S1 fix 2026-08-14), публичный ключ зашит в vynkor-manager
+  (`official_source()`, `src/source.rs`) или переопределён через
+  `marketplace_public_key` в конфиге.
+- Подпись **покрывает archive_url** → переезд хоста требует либо относительных
+  `archive_url` (резолвятся от базы реестра — строка не меняется, подпись
+  валидна), либо переподписи. `archive_url` в реестре теперь относительные.
 - Утверждение из кода: «attacker who only compromises the registry host/CDN cannot
   forge it» — открытый канал раздачи безопасен по дизайну.
 
@@ -94,23 +97,40 @@ vyn plugin list|search|install <slug>
 
 ### 3.1 Настройка Cloudflare
 
-1. Дашборд → **R2 → Create bucket**, имя например `veyron-plugins`.
-2. **Публичный доступ** (обязательно кастомный домен, не r2.dev):
-   - Бакет → Settings → Public access → **Connect domain** → `plugins.veyron.dev`.
-   - Домен должен быть на DNS Cloudflare — TLS-сертификат выпустится автоматически.
-   - r2.dev (`pub-<hash>.r2.dev`) — только для локальных тестов (rate limits, не для прода).
-3. **S3 API-токен**: R2 → Manage API Tokens → создать токен с правами на бакет
+> **Статус (2026-08-24): выполнено в тестовом виде.** Бакет `vynkor-plugins`
+> создан, публичный доступ через r2.dev
+> `https://pub-6fd4e146631e43028372c95cbd2b9b42.r2.dev` (временная мера —
+> rate limits; кастомный домен подключить, когда появится домен на CF DNS).
+> Публикация: `vynkor-plugins/scripts/publish-r2.sh` (rclone + `.env`).
+
+1. Дашборд → **R2 → Create bucket**, имя `vynkor-plugins`.
+2. **Публичный доступ** — кастомный домен (не r2.dev) для прода:
+   - Бакет → Settings → Public access → **Connect domain** → `plugins.<домен>`.
+   - Домен должен быть на DNS Cloudflare — TLS выпустится автоматически.
+   - r2.dev (`pub-<hash>.r2.dev`) — только для тестов (rate limits).
+3. **S3 API-токен**: R2 → Manage API Tokens → Object Read & Write на бакет
    (нужен только для загрузки, не для раздачи).
 
 ### 3.2 Layout бакета (стабильный, не менять потом)
 
+Зеркало корня репозитория vynkor-plugins:
+
 ```
-plugins.veyron.dev/
-├── registry.json                  ← корень, фиксированный путь
-└── plugins/
+<base-url>/
+├── registry.json                       ← корень, фиксированный путь
+└── dist/
     └── <slug>/
-        └── <slug>-v<version>.zip
+        ├── latest.json                 # {"version": "<latest>"}
+        └── versions/<version>/
+            ├── <slug>-<version>.zip    # бинарный архив
+            ├── <slug>-<version>-src.zip
+            ├── plugin.json             # browse-копия
+            ├── checksum.sha256
+            └── signature.sig
 ```
+
+`archive_url` в реестре — **относительные** (`dist/<slug>/versions/<v>/...`),
+ядро/vynm склеивают их с базой реестра → переезд хоста не требует переподписи.
 
 ### 3.3 registry.json
 
@@ -137,19 +157,22 @@ plugins.veyron.dev/
 ### 3.4 config.yaml
 
 ```yaml
-registry_url: https://plugins.veyron.dev/registry.json
+registry_url: https://pub-6fd4e146631e43028372c95cbd2b9b42.r2.dev/registry.json
+# после подключения домена: https://plugins.<домен>/registry.json
 ```
+
+(дефолт уже зашит в vynkor-manager `official_source()` — конфиг не нужен)
 
 ### 3.5 Загрузка и CI
 
-- Вручную: aws CLI / rclone / drag-and-drop в дашборде.
-- CI: aws CLI с R2-endpoint и креденшелами из секретов:
+- Вручную: `vynkor-plugins/scripts/publish-r2.sh` (rclone, креды из `.env`,
+  gitignore-нут) — льёт архивы (immutable), сайдкары и реестр последним,
+  потом сверяет каждый `archive_url` с sha256.
+- rclone config подхватывается через env (`RCLONE_CONFIG_R2_*`), aws CLI
+  эквивалент:
 
 ```bash
-aws s3 cp registry.json s3://veyron-plugins/registry.json \
-  --endpoint-url https://<ACCOUNT_ID>.r2.cloudflarestorage.com
-aws s3 cp plugins/weather/weather-v1.2.3.zip \
-  s3://veyron-plugins/plugins/weather/weather-v1.2.3.zip \
+aws s3 cp registry.json s3://vynkor-plugins/registry.json \
   --endpoint-url https://<ACCOUNT_ID>.r2.cloudflarestorage.com
 ```
 
