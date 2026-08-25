@@ -101,6 +101,15 @@ fn generated_python_binding_is_not_stale() {
              run ../vynkor-sdk-python/scripts/gen_proto_python.py"
         );
     }
+
+    // v1.7 (E-01) additions — same escaped-leading-byte pattern.
+    for marker in ["EVOKED", "reated", "xpires"] {
+        assert!(
+            source.contains(marker),
+            "generated {pb2_path:?} is missing v1.7 marker {marker}; \
+             run ../vynkor-sdk-python/scripts/gen_proto_python.py"
+        );
+    }
 }
 
 // D-01: the proto header comment (`// v 1.x`) and vynkor_wire::PROTOCOL_VERSION

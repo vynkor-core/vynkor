@@ -157,3 +157,22 @@ pub async fn start_kernel_secured(
     tokio::time::sleep(Duration::from_millis(30)).await;
     (shutdown_tx, registry, event_bus)
 }
+
+/// Like `start_kernel_secured` but points data_dir at a caller-owned tempdir
+/// so device-credential store tests are hermetic.
+pub async fn start_kernel_secured_with_data_dir(
+    socket: &str,
+    port: u16,
+    secret: &str,
+    data_dir: &std::path::Path,
+) -> (
+    tokio::sync::oneshot::Sender<()>,
+    Arc<PluginRegistry>,
+    Arc<EventBus>,
+) {
+    let mut cfg = test_config(socket, port);
+    cfg.allow_no_auth = false;
+    cfg.jwt_secret = Some(secret.to_string());
+    cfg.data_dir = data_dir.to_path_buf();
+    start_kernel_with_config(cfg).await
+}

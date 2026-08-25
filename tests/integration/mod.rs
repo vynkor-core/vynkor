@@ -4,6 +4,7 @@ mod jwt_helper;
 mod sdk_harness;
 mod test_audio_stream_permission;
 mod test_autoload;
+mod test_device_keys_ws;
 mod test_disconnect;
 mod test_event_store_integration;
 mod test_events;

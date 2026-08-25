@@ -546,20 +546,74 @@ async fn ws_client_that_registers_survives_the_deadline() {
 
 #[tokio::test]
 async fn per_device_token_registers_device_plugin_end_to_end() {
-    // D-07 acceptance: a per-device JWT (sub=device_id, aud + jti nonce)
-    // registers any plugin of that device over WS and the frame-MAC flow
-    // works with it — the same path a device agent uses.
+    // D-07 acceptance + E-01 update: a per-device JWT (sub=device_id, aud +
+    // jti nonce) registers any plugin of that device over WS — but only once
+    // the host has ISSUED a credential row for it, and the frame-MAC key now
+    // derives from that per-device secret instead of the master.
     use super::helpers::{start_kernel_with_config, test_config};
+    use vynkor::auth::device_store::DeviceStore;
+    use vynkor::proto::vynkor::PluginRegisterAck;
     use vynkor::utils::config::Config;
 
     let secret = "ws-device-token-secret-32-bytes-minimum";
+    let data_dir = tempfile::tempdir().unwrap();
     let cfg = Config {
         allow_no_auth: false,
         jwt_secret: Some(secret.to_string()),
+        data_dir: data_dir.path().to_path_buf(),
         ..test_config("/tmp/vynkor_ws_device_token.sock", 19359)
     };
     let (_shutdown, _reg, _bus) = start_kernel_with_config(cfg).await;
     tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // E-01 hard cut: an UNPAIRED device token is rejected outright
+    let unpaired_token = create_device_token(
+        "phone-2",
+        vec!["PERMISSION_IPC_SEND".into()],
+        secret.as_bytes(),
+        3600,
+    );
+    let mut ws0 = ws_connect_with_jwt(19359, &unpaired_token).await;
+    let reg_env = Envelope {
+        payload: Some(envelope::Payload::PluginRegister(PluginRegister {
+            plugin_id: "phone-2.geo".to_string(),
+            device_id: "phone-2".to_string(),
+            manifest: Some(PluginManifest::default()),
+            jwt_token: unpaired_token.clone(),
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+    let mut buf = Vec::new();
+    reg_env.encode(&mut buf).unwrap();
+    ws0.send(WsMsg::Binary(build_frame("kernel", &buf)))
+        .await
+        .unwrap();
+    let ack_data = match timeout(Duration::from_secs(3), ws0.next())
+        .await
+        .expect("ack timed out")
+        .expect("stream ended")
+        .expect("ws error")
+    {
+        WsMsg::Binary(b) => b,
+        other => panic!("expected binary ack, got: {other:?}"),
+    };
+    let (ack_payload, _) = parse_ws_frame(&ack_data);
+    match Envelope::decode(ack_payload.as_ref()).unwrap().payload {
+        Some(envelope::Payload::PluginRegisterAck(PluginRegisterAck {
+            accepted,
+            reject_reason,
+            ..
+        })) => {
+            assert!(!accepted, "unpaired device must be rejected");
+            assert!(reject_reason.contains("unknown device"), "{reject_reason}");
+        }
+        other => panic!("expected PluginRegisterAck, got {other:?}"),
+    }
+
+    // pair phone-1 exactly like `vyn device connect` does server-side
+    let store = DeviceStore::new(data_dir.path(), secret);
+    let device_secret = store.issue("phone-1", "phone-1", 3600).unwrap();
 
     let token = create_device_token(
         "phone-1",
@@ -571,7 +625,8 @@ async fn per_device_token_registers_device_plugin_end_to_end() {
     let nonce = register_and_get_nonce(&mut ws, "phone-1.geo", "phone-1", &token).await;
     assert_eq!(nonce.len(), 16, "must get a session nonce");
 
-    let key = derive_session_key(secret.as_bytes(), &nonce, "phone-1.geo");
+    // E-01: both sides key the MAC off the DEVICE secret
+    let key = derive_session_key(device_secret.as_bytes(), &nonce, "phone-1.geo");
 
     // MAC'd ping/pong round-trip proves the session key is live on both sides
     let ping_env = Envelope {

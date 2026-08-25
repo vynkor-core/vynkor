@@ -2,6 +2,7 @@
 mod jwt_helper;
 mod test_api;
 mod test_completions;
+mod test_device_keys;
 mod test_errors;
 mod test_event_bus;
 mod test_event_store;

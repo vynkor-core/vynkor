@@ -614,6 +614,7 @@ async fn rate_limit_applies_only_to_verified_sub_not_forged_tokens() {
     let validator = Arc::new(JwtValidator::new(SECRET));
     let app = create_router_full(RouterConfig {
         manager: make_manager(make_registry(), make_supervisor()),
+        device_store: None,
         jwt_validator: Some(validator),
         ws_router_tx: None,
         ws_disconnect_tx: None,
@@ -656,6 +657,7 @@ async fn rate_limit_enforced_per_verified_sub() {
     let validator = Arc::new(JwtValidator::new(SECRET));
     let app = create_router_full(RouterConfig {
         manager: make_manager(make_registry(), make_supervisor()),
+        device_store: None,
         jwt_validator: Some(validator),
         ws_router_tx: None,
         ws_disconnect_tx: None,
@@ -786,6 +788,7 @@ async fn start_plugin_spawns_process_declared_in_config() {
     let manager = make_manager(registry, make_supervisor());
     let app = create_router_full(RouterConfig {
         manager: Arc::clone(&manager),
+        device_store: None,
         jwt_validator: None,
         ws_router_tx: None,
         ws_disconnect_tx: None,
@@ -821,6 +824,7 @@ async fn start_plugin_spawns_process_declared_in_config() {
 async fn start_unknown_plugin_returns_404() {
     let app = create_router_full(RouterConfig {
         manager: make_manager(make_registry(), make_supervisor()),
+        device_store: None,
         jwt_validator: None,
         ws_router_tx: None,
         ws_disconnect_tx: None,
@@ -872,6 +876,7 @@ async fn start_plugin_rejects_manifest_requesting_ungranted_permission() {
 
     let app = create_router_full(RouterConfig {
         manager: make_manager(make_registry(), make_supervisor()),
+        device_store: None,
         jwt_validator: None,
         ws_router_tx: None,
         ws_disconnect_tx: None,
@@ -915,6 +920,7 @@ async fn start_already_running_plugin_returns_conflict() {
 
     let app = create_router_full(RouterConfig {
         manager: Arc::clone(&manager),
+        device_store: None,
         jwt_validator: None,
         ws_router_tx: None,
         ws_disconnect_tx: None,
