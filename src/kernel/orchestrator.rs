@@ -174,6 +174,15 @@ impl Kernel {
             .jwt_secret
             .as_ref()
             .map(|s| Arc::new(s.as_bytes().to_vec()));
+        // E-01: per-device credential store (encrypted at rest under a key
+        // derived from jwt_secret). Always present when auth is on; the router
+        // and the WS gateway only consult it for device-scoped connections.
+        let device_store = config.jwt_secret.as_ref().map(|s| {
+            Arc::new(crate::auth::device_store::DeviceStore::new(
+                &config.data_dir,
+                s,
+            ))
+        });
         // T-04: operator-declared permission allowlist per plugin id, used to
         // clamp JWT-claimed permissions at registration (see protocol.rs).
         let config_permissions = Arc::new(
@@ -222,6 +231,7 @@ impl Kernel {
             config.max_conn_errors,
             config.max_tracked_error_conns,
             config.session_idle_timeout_secs,
+            device_store.clone(),
             bridge_handle,
         ));
 
@@ -287,6 +297,7 @@ impl Kernel {
             bind_ip,
             manager,
             jwt_validator.clone(),
+            device_store,
             Some(ws_router_tx),
             Some(ws_disconnect_tx),
             kernel_start,

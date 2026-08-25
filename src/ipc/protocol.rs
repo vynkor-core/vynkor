@@ -90,6 +90,7 @@ impl MessageRouter {
             defaults.max_tracked_error_conns,
             defaults.session_idle_timeout_secs,
             None,
+            None,
         )
         .await
     }
@@ -122,6 +123,10 @@ impl MessageRouter {
         // R6-04: idle-timeout bound for accepted streaming sessions. None =
         // disabled, matching action_caller_rate_limit_rps's unlimited convention.
         session_idle_timeout_secs: Option<u32>,
+        // E-01: per-device credential store. When auth is on, any registration
+        // declaring a device_id must present an active row here, and the
+        // frame-MAC key for that connection derives from the row's secret.
+        device_store: Option<Arc<crate::auth::device_store::DeviceStore>>,
         // D-06: relay for `role: client` kernels — frames whose target is not
         // in the local registry fall through to the remote host.
         bridge: Option<BridgeHandle>,
@@ -278,6 +283,7 @@ impl MessageRouter {
                         action_limiter.as_deref(),
                         action_caller_max_concurrent,
                         action_timeout_ms,
+                        device_store.as_deref(),
                     )
                     .await
                 }
@@ -339,6 +345,7 @@ impl MessageRouter {
         action_limiter: Option<&DefaultKeyedRateLimiter<(String, String)>>,
         action_caller_max_concurrent: Option<u32>,
         action_timeout_ms: u32,
+        device_store: Option<&crate::auth::device_store::DeviceStore>,
     ) -> bool {
         let envelope = match Envelope::decode(msg.frame.payload.as_ref()) {
             Ok(e) => e,
@@ -412,6 +419,35 @@ impl MessageRouter {
                             Self::send_register_reject(&msg.write_tx, &format!("auth failed: {e}"))
                                 .await;
                             return true;
+                        }
+                    }
+                }
+
+                // E-01: a device-scoped registration (device_id present) on an
+                // auth-enabled kernel must present an active, unexpired
+                // credential row; the connection's frame-MAC key then derives
+                // from that row's secret instead of the master. Empty device_id
+                // = local plugin, unchanged master-secret path.
+                let mut device_secret: Option<Vec<u8>> = None;
+                if !reg.device_id.is_empty() && mac_secret.is_some() {
+                    if let Some(store) = device_store {
+                        match store.active_secret(&reg.device_id) {
+                            Ok(Some(secret)) => device_secret = Some(secret.into_bytes()),
+                            Ok(None) => {
+                                Self::send_register_reject(
+                                    &msg.write_tx,
+                                    &format!(
+                                        "unknown device '{}' — pair it via `vyn device connect`",
+                                        reg.device_id
+                                    ),
+                                )
+                                .await;
+                                return true;
+                            }
+                            Err(e) => {
+                                Self::send_register_reject(&msg.write_tx, &e.to_string()).await;
+                                return true;
+                            }
                         }
                     }
                 }
@@ -503,11 +539,14 @@ impl MessageRouter {
                 // it for inbound verification, and tell the write loop (ordered
                 // after the ack just sent) to start tagging outbound frames.
                 if let (Some(secret), true) = (&mac_secret, result.is_ok()) {
-                    let key = crate::auth::frame_mac::derive_session_key(
-                        secret,
-                        &session_nonce,
-                        &plugin_id,
-                    );
+                    // E-01: device-scoped connections key the MAC off their own
+                    // credential; everything else keeps the master secret.
+                    let ikm: &[u8] = match &device_secret {
+                        Some(s) => s.as_slice(),
+                        None => secret.as_slice(),
+                    };
+                    let key =
+                        crate::auth::frame_mac::derive_session_key(ikm, &session_nonce, &plugin_id);
                     // EnableMac installs the inbound key AND activates outbound tagging
                     // inside the write_loop, after the ack has been written to the socket.
                     // This prevents inbound MAC verification from activating before the

@@ -114,6 +114,9 @@ pub struct DeviceInfoView {
     /// unix millis of the last ping/pong from any plugin on the device
     pub last_seen: u64,
     pub state: String,
+    /// E-01 (v1.7): pairing lifecycle, unix millis; 0 = unpaired/unknown
+    pub created: u64,
+    pub expires: u64,
 }
 
 // D-04: discovery surface — the registry's device map as a serializable view.
@@ -130,6 +133,8 @@ pub async fn list_devices(State(state): State<Arc<AppState>>) -> Json<Vec<Device
                 capabilities: d.capabilities,
                 last_seen: d.last_seen,
                 state: crate::plugins::registry::device_state_str(d.state).to_string(),
+                created: d.created,
+                expires: d.expires,
             })
             .collect(),
     )

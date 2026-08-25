@@ -33,6 +33,9 @@ pub struct WsGateway {
     pub disconnect_tx: mpsc::Sender<u64>,
     pub conn_counter: Arc<AtomicU64>,
     pub jwt_validator: Option<Arc<JwtValidator>>,
+    /// E-01: per-device credential store — a token whose `sub` names a revoked
+    /// or expired device is rejected before the upgrade completes.
+    pub device_store: Option<Arc<crate::auth::device_store::DeviceStore>>,
     /// Current open WS connection count, gated against `max_connections` before
     /// the upgrade completes (T-09; mirrors the UDS listener's `max_connections`).
     pub open_conns: Arc<AtomicU64>,
@@ -61,10 +64,26 @@ pub async fn ws_handler(
 ) -> Response {
     if let Some(validator) = &state.jwt_validator {
         let token = extract_ws_token(&headers);
-        if let Err(e) = validator.validate(token) {
-            warn!("WS: JWT rejected");
-            let _ = e; // don't log token contents
-            return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+        match validator.validate(token) {
+            Ok(claims) => {
+                // E-01: a known device row must be active — revoked/expired
+                // devices die here, before any socket exists. Unknown subs pass
+                // (local clients and pre-pairing tokens).
+                if let Some(store) = &state.device_store {
+                    if let Err(e) = store.active_secret(&claims.sub) {
+                        warn!("WS: device rejected at upgrade");
+                        let _ = e; // don't log token contents or device state details
+                        counter!("ws_connections_rejected_total", "reason" => "device")
+                            .increment(1);
+                        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("WS: JWT rejected");
+                let _ = e; // don't log token contents
+                return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+            }
         }
     }
 

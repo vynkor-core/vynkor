@@ -224,6 +224,10 @@ impl PluginRegistry {
                     capabilities: meta.capabilities.clone(),
                     last_seen: now_ms,
                     state: DeviceState::Online as i32,
+                    // pairing lifecycle lives in the device store (E-01); the
+                    // runtime map only knows what the wire declared
+                    created: 0,
+                    expires: 0,
                 });
             }
         }
@@ -524,6 +528,8 @@ pub fn device_state_str(state: i32) -> &'static str {
     match DeviceState::try_from(state) {
         Ok(DeviceState::Online) => "online",
         Ok(DeviceState::Offline) => "offline",
+        // E-01 (v1.7): revoked devices surface distinctly, never as "online"
+        Ok(DeviceState::Revoked) => "revoked",
         _ => "unspecified",
     }
 }

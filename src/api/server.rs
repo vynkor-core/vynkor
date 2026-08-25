@@ -31,6 +31,8 @@ use crate::utils::config::PluginDef;
 pub struct RouterConfig {
     pub manager: Arc<PluginManager>,
     pub jwt_validator: Option<Arc<JwtValidator>>,
+    /// E-01: device credential store for WS-upgrade revocation checks.
+    pub device_store: Option<Arc<crate::auth::device_store::DeviceStore>>,
     pub ws_router_tx: Option<mpsc::Sender<IncomingMessage>>,
     pub ws_disconnect_tx: Option<mpsc::Sender<u64>>,
     pub started_at: Instant,
@@ -59,6 +61,7 @@ pub fn create_router(
     create_router_full(RouterConfig {
         manager,
         jwt_validator,
+        device_store: None,
         ws_router_tx: None,
         ws_disconnect_tx: None,
         started_at: Instant::now(),
@@ -140,6 +143,7 @@ pub fn create_router_full(config: RouterConfig) -> BuiltRouter {
             disconnect_tx,
             conn_counter: Arc::new(AtomicU64::new(0)),
             jwt_validator: config.jwt_validator,
+            device_store: config.device_store,
             open_conns: Arc::new(AtomicU64::new(0)),
             max_connections: config.max_ws_connections,
             register_timeout_secs: config.ws_register_timeout_secs,
@@ -174,6 +178,7 @@ pub struct ApiServer {
     bind_ip: std::net::IpAddr,
     manager: Arc<PluginManager>,
     jwt_validator: Option<Arc<JwtValidator>>,
+    device_store: Option<Arc<crate::auth::device_store::DeviceStore>>,
     ws_router_tx: Option<mpsc::Sender<IncomingMessage>>,
     ws_disconnect_tx: Option<mpsc::Sender<u64>>,
     started_at: Instant,
@@ -194,6 +199,7 @@ impl ApiServer {
         bind_ip: std::net::IpAddr,
         manager: Arc<PluginManager>,
         jwt_validator: Option<Arc<JwtValidator>>,
+        device_store: Option<Arc<crate::auth::device_store::DeviceStore>>,
         ws_router_tx: Option<mpsc::Sender<IncomingMessage>>,
         ws_disconnect_tx: Option<mpsc::Sender<u64>>,
         started_at: Instant,
@@ -211,6 +217,7 @@ impl ApiServer {
             bind_ip,
             manager,
             jwt_validator,
+            device_store,
             ws_router_tx,
             ws_disconnect_tx,
             started_at,
@@ -229,6 +236,7 @@ impl ApiServer {
         let built = create_router_full(RouterConfig {
             manager: Arc::clone(&self.manager),
             jwt_validator: self.jwt_validator.clone(),
+            device_store: self.device_store.clone(),
             ws_router_tx: self.ws_router_tx.clone(),
             ws_disconnect_tx: self.ws_disconnect_tx.clone(),
             started_at: self.started_at,
