@@ -119,7 +119,7 @@ The binary is at `target/release/vyn`.
 
 ```yaml
 # config.yaml
-port: 8080
+port: 8000
 # socket_path defaults to $XDG_RUNTIME_DIR/veyron.sock (never shared /tmp);
 # set explicitly only if you need a custom location.
 jwt_secret: "change-me-in-production"
@@ -136,6 +136,12 @@ restart: on-failure   # always | on-failure | never
 max_restarts: 5
 sandbox: true        # Linux only
 ```
+
+Config problems surface loudly: an invalid `log_level` warns and falls back
+to `info`, an unknown `restart:` value warns and falls back to `on-failure`,
+and every CLI command except `start` fails with the load error instead of
+silently running on defaults (`start` proceeds on defaults with a warning so
+a broken config can never brick a running deployment).
 
 `vynm` (the [vynkor-manager](https://github.com/veyron-core/vynkor-manager)
 companion tool) installs plugins: it fetches a registry, verifies maintainer

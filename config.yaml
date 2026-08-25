@@ -1,4 +1,4 @@
-port: 8888
+port: 8000 # binary default (UX-3: keep in sync with config.rs default_port)
 log_level: debug
 # pid_file / log_file / data_dir default to a per-user private dir
 # (XDG_RUNTIME_DIR, /run/user/<uid>, or ~/.veyron/run) — never the shared

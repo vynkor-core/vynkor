@@ -537,6 +537,81 @@ async fn router_responds_to_ping_with_pong() {
     );
 }
 
+// PERF-1: the shared router task must never await a peer's full write
+// channel — a stuck plugin loses its own kernel replies, but every other
+// connection keeps being served. (With the old blocking send this test
+// hangs on the healthy plugin's pong.)
+#[tokio::test]
+async fn kernel_replies_do_not_block_router_on_full_peer_channel() {
+    let reg = Arc::new(PluginRegistry::new());
+    let bus = Arc::new(EventBus::new());
+    let router_tx = spawn_router(Arc::clone(&reg), bus);
+
+    let (stuck_tx, mut stuck_rx) = make_write_pair();
+    let (healthy_tx, mut healthy_rx) = make_write_pair();
+    reg.register(
+        "stuck".to_string(),
+        1,
+        dummy_manifest(),
+        stuck_tx.clone(),
+        "",
+        "",
+    )
+    .unwrap();
+    reg.register(
+        "healthy".to_string(),
+        2,
+        dummy_manifest(),
+        healthy_tx.clone(),
+        "",
+        "",
+    )
+    .unwrap();
+
+    // saturate "stuck" (capacity 16) — nobody drains it
+    for i in 0..16u8 {
+        stuck_tx
+            .send(out_frame(make_frame("kernel", vec![i])))
+            .await
+            .unwrap();
+    }
+
+    let ping = |ts: u64| {
+        kernel_frame(Envelope {
+            payload: Some(envelope::Payload::Ping(Ping { timestamp: ts })),
+            ..Default::default()
+        })
+    };
+
+    // stuck plugin pings — its pong hits the full channel and is dropped
+    router_tx
+        .send(incoming(1, ping(1), stuck_tx))
+        .await
+        .unwrap();
+
+    // the router must stay live for other connections
+    router_tx
+        .send(incoming(2, ping(2), healthy_tx))
+        .await
+        .unwrap();
+    let pong = recv_frame(&mut healthy_rx).await;
+    assert!(matches!(
+        decode_envelope(&pong).payload,
+        Some(envelope::Payload::Pong(_))
+    ));
+
+    // the saturated channel holds exactly the pre-filled frames — the
+    // dropped pong never enqueued
+    let mut drained = 0;
+    while stuck_rx.try_recv().is_ok() {
+        drained += 1;
+    }
+    assert_eq!(
+        drained, 16,
+        "dropped reply must not appear on the full channel"
+    );
+}
+
 #[tokio::test]
 async fn router_rejects_non_register_from_unregistered_conn() {
     let reg = Arc::new(PluginRegistry::new());

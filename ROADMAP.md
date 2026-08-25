@@ -334,7 +334,7 @@ backlog (polish).
     `veyron_wire::socket::default_private_dir()` (XDG_RUNTIME_DIR pattern);
     `EventStore::new` rejects world-writable dirs; shipped via PR #35.
 
-- [ ] PERF-1 — **Router kernel replies block on `.send().await` — one slow
+- [x] PERF-1 — **Router kernel replies block on `.send().await` — one slow
       plugin stalls all IPC (Medium):** `send_envelope`
       (`protocol.rs:1145-1149`) awaits the target's 64-slot write channel
       from the single shared router task; peer forwards already use
@@ -343,7 +343,13 @@ backlog (polish).
   - Files: `src/ipc/protocol.rs`.
   - Acceptance: a plugin that stops draining its write channel delays only
     its own kernel replies; other connections are unaffected.
-  - **Status (2026-08-14): OPEN.**
+  - **Status (2026-08-26): FIXED** — `send_envelope`/`send_error`/
+    `send_register_reject` are now sync + `try_send`: a full channel drops
+    the reply (`kernel_replies_dropped_total` counter + `warn!`), a closed
+    one logs `debug`. Regression test
+    `kernel_replies_do_not_block_router_on_full_peer_channel`
+    (tests/unit/test_router.rs) saturates a peer's channel and asserts the
+    router stays live for other connections (hangs on the old code).
 
 - [ ] PERF-2 — **Synchronous SQLite + std Mutex on the async runtime in the
       router path (Medium):** `EventBus::publish → store.persist`
@@ -409,9 +415,18 @@ backlog (polish).
       double payload copy per frame (`websocket.rs:220,246-258`).
   - Files: `../vynkor-wire/src/framing.rs`, `src/plugins/supervisor.rs`,
     `src/api/websocket.rs`.
-  - **Status (2026-08-14): OPEN.**
+  - **Status (2026-08-26): PARTIAL** — watchdog `/proc` sweep now runs in one
+    `spawn_blocking` batch instead of stalling the shared async task per pid,
+    and the watchdog ping uses `try_send` (same shared-task rationale as
+    PERF-1; `watchdog_pings_dropped_total`). WS "double payload copy" closed
+    as non-issue: since wire 0.2.0 `Frame.payload` is `Arc<[u8]>`, so the
+    inbound `to_vec()`→`Arc` hop and the outbound single
+    `extend_from_slice` into the WS binary message are already one copy each.
+    Remaining (wire-crate release cycle): dedup the CRC32 between kernel
+    build sites and `write_frame_raw`, offload zstd off async threads — both
+    live in `vynkor-wire/src/framing.rs` and need a published bump.
 
-- [ ] UX-3 — **Config validation gaps + silent parse-error swallowing (Low):**
+- [x] UX-3 — **Config validation gaps + silent parse-error swallowing (Low):**
       unknown `restart:` silently → `on-failure` (`loader.rs:19-23`) while
       `max_fs_access` warns (two conventions); bad `log_level` → EnvFilter
       matches nothing → silent no-logs; binary defaults (port 8000) drift
@@ -419,7 +434,20 @@ backlog (polish).
       `.unwrap_or_default()` on load errors (`main.rs:85-123`).
   - Files: `src/plugins/loader.rs`, `src/utils/config.rs`, `src/main.rs`,
     `config.yaml`.
-  - **Status (2026-08-14): OPEN.**
+  - Acceptance: unknown `restart` warns; bad `log_level` warns and falls
+    back to `info`; port defaults aligned; all CLI commands surface load
+    errors.
+  - **Status (2026-08-26): FIXED** — `config_from_def` warns on an
+    unrecognized `restart:` value before falling back to `on-failure`
+    (same convention as `max_fs_access`; regression-tested);
+    `logging::sanitize_log_level` accepts only known level names, numeric
+    1–5 or explicit `target=level` directives — anything else warns and
+    falls back to `info` (a bare word otherwise becomes an implicit
+    EnvFilter *target* directive and logs vanish); applied to both
+    `try_init` and runtime `set_log_level`; `config.yaml` + README example
+    aligned to the binary default `port: 8000`; the six non-start CLI
+    commands propagate `load_config` errors instead of silently proceeding
+    with defaults.
 
 - [x] UX-4 — **CLI polish (Low):** sparse subcommand `about` text and a
       hardcoded version string (`cli/mod.rs`); mixed output style
@@ -778,6 +806,11 @@ rest) · **P1** = F3/F4/F5/F6 (this cycle).
     0o700 private dir (S2 already shipped — PR #35, 2026-08-18); the publish
     path performs no synchronous SQLite I/O (PERF-2); event-delivery
     integration tests stay green.
+  - **Status (2026-08-26): wording DONE** — README §1 carries the
+    "no databases *for application state*; single exception: event-delivery
+    outbox" carve-out and the Manifesto above names the explicit exception
+    (landed in `2f47d5f`, verified present). Item stays open solely on the
+    PERF-2 gate (publish path off synchronous SQLite I/O).
 
 ---
 
@@ -1335,15 +1368,15 @@ surfaces cover every planned plugin).
 | S1 | registry signature must bind the full entry (`status`/`archive_url`/compat) — revocation bypass + download redirect — **FIXED** (2026-08-14): full-message signature, resolution moved to install (after verification), cache schema v2, tamper regression tests | none |
 | S3 | `crossbeam-epoch` 0.9.18 → 0.9.20 (RUSTSEC-2026-0204) — **FIXED** (2026-08-14, PR #20) | none |
 | S2 | `data_dir` off shared /tmp + 0o700 store dir — **FIXED** (2026-08-18, PR #35) | none |
-| PERF-1 | router kernel replies off the shared-task `.send().await` — **OPEN** (P1) | none |
+| PERF-1 | router kernel replies off the shared-task `.send().await` — **FIXED** (2026-08-26): sync `try_send` replies, drop+counter on full channel, regression-tested | none |
 | PERF-2 | event-store SQLite off the async runtime (`spawn_blocking`) — **OPEN** (P1) | none |
 | UX-1 | JSON error envelope + honest stop status + API doc — **OPEN** (P2) | none |
 | S5 | stable wire error codes, no internals — **OPEN** (P2) | UX-1 |
-| UX-2 | stable `PluginInfo.state` values — **OPEN** (P2) | UX-1 |
+| UX-2 | stable `PluginInfo.state` values — **FIXED** (2026-08-24): shared lowercase `plugin_state_str`, all sites | UX-1 |
 | PERF-3 | `Arc<PluginEntry>` + action→provider index — **OPEN** (P2) | none |
-| PERF-4 | drop double CRC / offload zstd / `/proc` reads off the async runtime — **OPEN** (P3) | none |
-| UX-3 | config validation consistency + surface load errors to all CLI — **OPEN** (P3) | none |
-| UX-4 | CLI help/output polish — **OPEN** (P3) | none |
+| PERF-4 | hot-path constant factors — **PARTIAL** (2026-08-26): watchdog `/proc` batched via `spawn_blocking`, ping `try_send`; WS copy closed non-issue; CRC dedup + zstd offload deferred to a wire release | vynkor-wire release (remainder) |
+| UX-3 | config validation consistency + surface load errors to all CLI — **FIXED** (2026-08-26): restart/log_level warn+fallback, port aligned, CLI errors propagated | none |
+| UX-4 | CLI help/output polish — **FIXED** (2026-08-24): version from cargo env, clap `about` everywhere, `plugin logs` renders line-per-entry | none |
 | S4 | dependency advisories (anyhow / number_prefix) — **FIXED** (2026-08-21): anyhow 1.0.104, h2 0.4.18, number_prefix dropped via indicatif 0.18 — cargo audit clean | none |
 | MA-01 | split `ipc/protocol.rs` + `marketplace/registry.rs` monoliths — **OPEN** (P0, 2026-08-20 audit) | MA-02 |
 | MA-02 | extract duplicated `target_bytes`/`build_frame` + `resolve_*_url` helpers — **OPEN** (P0) | none |
@@ -1369,7 +1402,7 @@ surfaces cover every planned plugin).
 | F3 | bridge stays as transport; strip `device.<cap>` capability interpretation (DC-2) — **OPEN** (P1) | F2 |
 | F4 | neutralize AI tool-calling surface → generic manifest feature (DC-3) — kernel-side comments landed (PR #64, 2026-08-24); proto wording open (vynkor-wire) | none |
 | F5 | drop hardcoded action→permission fallback (DC-4) — **OPEN** (P1) | network plugin v2 manifest (veyron-plugins) |
-| F6 | manifesto wording + event-store hardening (DC-5) — **OPEN** (P1) | PERF-2 (S2 already shipped, PR #35) |
+| F6 | manifesto wording + event-store hardening (DC-5) — wording **DONE** (README §1 + Manifesto carve-out, `2f47d5f`); item open solely on PERF-2 (S2 already shipped, PR #35) | PERF-2 |
 
 **Ship gate:** R8-01..R8-05 are kernel-local and land together on `develop`;
 R8-06/R8-07 are cross-repo coordination items shipped from their own repos.

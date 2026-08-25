@@ -9,6 +9,30 @@ type BaseStack = Layered<reload::Layer<EnvFilter, Registry>, Registry>;
 
 static LOG_FILTER_HANDLE: OnceLock<FilterHandle> = OnceLock::new();
 
+/// UX-3: a bare word that isn't a level name becomes an implicit *target*
+/// directive in EnvFilter — it matches nothing globally and logs vanish
+/// silently. Accept only known levels (numeric 1–5 included) or explicit
+/// `target=level` directives; anything else warns and falls back to info.
+fn is_log_level_token(tok: &str) -> bool {
+    matches!(
+        tok.to_ascii_lowercase().as_str(),
+        "trace" | "debug" | "info" | "warn" | "error" | "off"
+    ) || matches!(tok, "1" | "2" | "3" | "4" | "5")
+        || tok.contains('=')
+}
+
+pub(crate) fn sanitize_log_level(level: &str) -> String {
+    let trimmed = level.trim();
+    if !trimmed.is_empty() && trimmed.split(',').all(is_log_level_token) {
+        return trimmed.to_string();
+    }
+    tracing::warn!(
+        level = %level,
+        "invalid log_level — falling back to \"info\" (levels: trace|debug|info|warn|error|off|1-5, or RUST_LOG-style target=level)"
+    );
+    "info".to_string()
+}
+
 /// Install the global tracing subscriber with a reloadable log filter.
 /// `RUST_LOG` (if set) wins; otherwise falls back to the kernel's configured
 /// log level. Set `LOG_FORMAT=json` for structured JSON output. When the `otel`
@@ -24,6 +48,7 @@ static LOG_FILTER_HANDLE: OnceLock<FilterHandle> = OnceLock::new();
 /// The json/plain choice is made once into a boxed fmt layer, so the field
 /// config is not duplicated per branch; the otel tail composes after it.
 pub fn try_init(level: &str) -> bool {
+    let level = sanitize_log_level(level);
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level));
     let (reloadable, handle) = reload::Layer::new(filter);
     LOG_FILTER_HANDLE.set(handle).ok();
@@ -66,7 +91,9 @@ pub fn try_init(level: &str) -> bool {
 /// Has no effect if `try_init` was not called (e.g., in tests that don't init tracing).
 pub fn set_log_level(level: &str) -> bool {
     if let Some(handle) = LOG_FILTER_HANDLE.get() {
-        handle.modify(|f| *f = EnvFilter::new(level)).is_ok()
+        handle
+            .modify(|f| *f = EnvFilter::new(sanitize_log_level(level)))
+            .is_ok()
     } else {
         false
     }
@@ -95,4 +122,25 @@ fn setup_otel_tracer() -> Option<opentelemetry_sdk::trace::SdkTracer> {
         &tracer_provider,
         "vynkor",
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_log_level;
+
+    #[test]
+    fn sanitize_accepts_known_levels_and_directives() {
+        assert_eq!(sanitize_log_level("debug"), "debug");
+        assert_eq!(sanitize_log_level(" INFO "), "INFO");
+        assert_eq!(sanitize_log_level("off"), "off");
+        assert_eq!(sanitize_log_level("3"), "3");
+        assert_eq!(sanitize_log_level("info,vynkor=trace"), "info,vynkor=trace");
+    }
+
+    #[test]
+    fn sanitize_falls_back_to_info_on_bad_input() {
+        for bad in ["verboose", "", "   ", "info,badtoken"] {
+            assert_eq!(sanitize_log_level(bad), "info", "input: {bad:?}");
+        }
+    }
 }

@@ -18,10 +18,20 @@ impl PluginLoader {
     /// Build the supervisor's `PluginConfig` from a config.yaml plugin entry.
     /// Shared by the boot-time loader and the HTTP `POST /plugins/:id/start` route.
     pub fn config_from_def(def: &PluginDef) -> PluginConfig {
+        // UX-3: same convention as max_fs_access — an unrecognized value
+        // warns and falls back, never silently
         let policy = match def.restart.as_str() {
             "always" => RestartPolicy::Always,
+            "on-failure" => RestartPolicy::OnFailure,
             "never" => RestartPolicy::Never,
-            _ => RestartPolicy::OnFailure,
+            other => {
+                warn!(
+                    id = %def.id,
+                    value = %other,
+                    "unknown restart policy — falling back to on-failure (valid: always | on-failure | never)"
+                );
+                RestartPolicy::OnFailure
+            }
         };
         PluginConfig {
             plugin_id: def.id.clone(),

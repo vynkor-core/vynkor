@@ -789,17 +789,34 @@ impl PluginSupervisor {
                 .map(|e| (e.key().clone(), e.value().pid, e.value().shim_pid))
                 .collect();
 
-            for (plugin_id, pid, shim_pid) in supervised {
-                // --- T-07: per-plugin resource metrics (Linux only) ---
-                // reads the plugin pid, not the shim's
-                #[cfg(target_os = "linux")]
-                if let Some((cpu, rss)) = proc_resource_usage(pid) {
+            // PERF-4 + T-07: per-plugin resource metrics, Linux only. /proc
+            // reads are blocking file I/O and this loop is a single shared
+            // task — batch the whole sweep into one blocking thread instead
+            // of stalling the async worker per pid. Reads the plugin pid,
+            // not the shim's.
+            #[cfg(target_os = "linux")]
+            let samples: Vec<Option<(f64, f64)>> = tokio::task::spawn_blocking({
+                let supervised = supervised.clone();
+                move || {
+                    supervised
+                        .into_iter()
+                        .map(|(_, pid, _)| proc_resource_usage(pid))
+                        .collect()
+                }
+            })
+            .await
+            .unwrap_or_default();
+            #[cfg(target_os = "linux")]
+            for ((plugin_id, _, _), sample) in supervised.iter().zip(samples) {
+                if let Some((cpu, rss)) = sample {
                     gauge!("vynkor_plugin_cpu_seconds_total", "plugin_id" => plugin_id.clone())
                         .set(cpu);
                     gauge!("vynkor_plugin_memory_rss_bytes", "plugin_id" => plugin_id.clone())
                         .set(rss);
                 }
+            }
 
+            for (plugin_id, pid, shim_pid) in supervised {
                 if let Some(last_pong) = registry.last_pong(&plugin_id) {
                     if last_pong.elapsed() > deadline {
                         warn!(plugin_id = %plugin_id, "watchdog: plugin unresponsive, sending SIGKILL");
@@ -839,7 +856,12 @@ impl PluginSupervisor {
                             payload: payload.into(),
                             mac: None,
                         };
-                        let _ = reg_entry.write_tx.send(out_frame(frame)).await;
+                        // same shared-task rationale as PERF-1: a plugin that
+                        // stops draining its channel must not stall the
+                        // watchdog for every other plugin
+                        if reg_entry.write_tx.try_send(out_frame(frame)).is_err() {
+                            counter!("watchdog_pings_dropped_total").increment(1);
+                        }
                     }
                 }
             }
