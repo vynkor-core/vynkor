@@ -98,12 +98,12 @@ async fn run_kernel(cli: Cli) -> Result<()> {
             }
         }
         Commands::Stop { config } => {
-            let cfg = load_config(&config).unwrap_or_default();
+            let cfg = load_config(&config)?;
             utils::logging::try_init(&cfg.log_level);
             stop_kernel(&cfg.pid_file)?;
         }
         Commands::Restart { config, debug } => {
-            let cfg = load_config(&config).unwrap_or_default();
+            let cfg = load_config(&config)?;
             utils::logging::try_init(&cfg.log_level);
             ensure_auth_configured(&cfg)?;
             // Capture the PID before stop_kernel removes the pid file, so we can
@@ -121,7 +121,7 @@ async fn run_kernel(cli: Cli) -> Result<()> {
             daemonize_and_run(&cfg, &config, debug)?;
         }
         Commands::Status { config } => {
-            let cfg = load_config(&config).unwrap_or_default();
+            let cfg = load_config(&config)?;
             utils::logging::try_init(&cfg.log_level);
             if is_running(&cfg.pid_file)? {
                 let pid = read_pid(&cfg.pid_file)?;
@@ -131,12 +131,12 @@ async fn run_kernel(cli: Cli) -> Result<()> {
             }
         }
         Commands::Logs { lines, config } => {
-            let cfg = load_config(&config).unwrap_or_default();
+            let cfg = load_config(&config)?;
             utils::logging::try_init(&cfg.log_level);
             show_logs(&cfg.log_file, lines)?;
         }
         Commands::Plugin { cmd, config, token } => {
-            let cfg = load_config(&config).unwrap_or_default();
+            let cfg = load_config(&config)?;
             let token = token.or_else(|| std::env::var("VYN_JWT_TOKEN").ok());
             let cert_path = vynkor::utils::config::effective_tls_cert_path(&cfg);
             plugin::handle(
@@ -150,7 +150,7 @@ async fn run_kernel(cli: Cli) -> Result<()> {
             .await?;
         }
         Commands::Devices { config, token } => {
-            let cfg = load_config(&config).unwrap_or_default();
+            let cfg = load_config(&config)?;
             let token = token.or_else(|| std::env::var("VYN_JWT_TOKEN").ok());
             let cert_path = vynkor::utils::config::effective_tls_cert_path(&cfg);
             devices::handle(cfg.port, cfg.tls, cert_path.as_deref(), token.as_deref()).await?;

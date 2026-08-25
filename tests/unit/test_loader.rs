@@ -287,3 +287,16 @@ fn topo_sort_refused_nodes_excluded() {
         "refused node must not appear in order"
     );
 }
+
+// UX-3: an unknown restart value warns and falls back to on-failure instead
+// of silently switching policy (same convention as max_fs_access)
+#[test]
+fn config_from_def_falls_back_to_on_failure_on_unknown_restart() {
+    let mut def = sleep_def("pol");
+    def.restart = "weekly".to_string();
+    let cfg = PluginLoader::config_from_def(&def);
+    assert!(matches!(
+        cfg.restart_policy,
+        vynkor::plugins::supervisor::RestartPolicy::OnFailure
+    ));
+}
