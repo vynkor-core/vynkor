@@ -14,7 +14,7 @@ use crate::bridge::{Bridge, BridgeHandle};
 use crate::events::bus::{run_retry_worker, EventBus};
 use crate::events::store::EventStore;
 use crate::ipc::connection::out_frame;
-use crate::ipc::framing::Frame;
+use crate::ipc::framing::build_frame;
 use crate::ipc::protocol::MessageRouter;
 use crate::ipc::server::UdsServer;
 use crate::plugins::loader::PluginLoader;
@@ -391,20 +391,10 @@ impl Kernel {
             if env.encode(&mut payload).is_err() {
                 continue;
             }
-            let crc = crc32fast::hash(&payload);
-            let mut target = [0u8; 32];
-            target[..4].copy_from_slice(b"self");
-
-            let frame = Frame {
-                magic: 0x5652,
-                flags: 0,
-                length: payload.len() as u32,
-                target,
-                crc32: crc,
-                payload: payload.into(),
-                mac: None,
-            };
-            let _ = entry.write_tx.send(out_frame(frame)).await;
+            let _ = entry
+                .write_tx
+                .send(out_frame(build_frame("self", 0, payload)))
+                .await;
         }
 
         supervisor.graceful_shutdown(default_grace_seconds).await;
