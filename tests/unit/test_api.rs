@@ -299,12 +299,40 @@ async fn get_plugin_by_id_returns_404_for_unknown() {
 }
 
 #[tokio::test]
-async fn stop_plugin_returns_200_and_unregisters() {
+async fn stop_supervised_plugin_returns_200_and_cleans_up() {
     let registry = make_registry();
     register(&registry, "stoppable", 1);
-    assert!(registry.get("stoppable").is_some());
+    let manager = make_manager(Arc::clone(&registry), make_supervisor());
+    let app = create_router_full(RouterConfig {
+        manager: Arc::clone(&manager),
+        device_store: None,
+        jwt_validator: None,
+        ws_router_tx: None,
+        ws_disconnect_tx: None,
+        started_at: Instant::now(),
+        rate_limit_rps: None,
+        rate_limit_burst: None,
+        plugin_defs: vec![sleep_def("stoppable")],
+        ws_handshake_timeout_secs: 5,
+        max_ws_connections: 1024,
+        ws_register_timeout_secs: 10,
+    })
+    .app;
 
-    let app = create_router(make_manager(Arc::clone(&registry), make_supervisor()), None);
+    let start = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/plugins/stoppable/start")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(start.status(), StatusCode::OK);
+    assert!(manager.is_supervised("stoppable"));
+
     let response = app
         .oneshot(
             Request::builder()
@@ -316,6 +344,10 @@ async fn stop_plugin_returns_200_and_unregisters() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        !manager.is_supervised("stoppable"),
+        "plugin must not stay supervised after stop"
+    );
     assert!(
         registry.get("stoppable").is_none(),
         "plugin must be unregistered after stop"
@@ -330,6 +362,26 @@ async fn stop_nonexistent_plugin_returns_404() {
             Request::builder()
                 .method("POST")
                 .uri("/plugins/ghost/stop")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn stop_registered_but_not_supervised_returns_404() {
+    // ux-1: registered != supervised — nothing to stop, say 404 not silent ok
+    let registry = make_registry();
+    register(&registry, "idle", 1);
+
+    let app = create_router(make_manager(Arc::clone(&registry), make_supervisor()), None);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/plugins/idle/stop")
                 .body(Body::empty())
                 .unwrap(),
         )
