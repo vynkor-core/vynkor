@@ -85,6 +85,7 @@ Every message on UDS is wrapped in a strict 44-byte header:
 - JWT validation is mandatory. The kernel refuses to start without `jwt_secret` in config unless the operator explicitly sets `allow_no_auth: true`.
 - WebSocket clients present their JWT in the `Sec-WebSocket-Protocol` header (`veyron, <token>`) — validated before the upgrade handshake completes.
 - Per-session HMAC-SHA256 frame authentication activates after registration. A single tampered byte kills the connection.
+- **Per-device credentials (E-01):** remote devices never receive the host master `jwt_secret`. `vyn device connect` issues a unique per-device secret + a device-scoped JWT via the pairing QR, stores the secret encrypted at rest under a key derived from the master (`<data_dir>/devices.json`, AES-256-GCM), and derives each device session's frame-MAC key from that credential instead of the master. Devices can be listed and revoked (`vyn device list` / `vyn device revoke <id>`); revoked or expired devices are rejected at the WebSocket upgrade and at registration. Rotating `jwt_secret` invalidates all paired devices — re-pair (see docs/RFC_E01_PER_DEVICE_KEYS.md in the Android repo for the full design).
 - Permissions are default-deny. A plugin that wants to send frames to another plugin must declare `PERMISSION_IPC_SEND` *and* name the target in its `ipc_targets` allowlist.
 
 ### 5. Process Isolation

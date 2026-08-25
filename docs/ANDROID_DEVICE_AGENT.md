@@ -61,6 +61,15 @@ Stable `device_id` per install (Android has no `$HOSTNAME`). Random UUID on
 first run, persisted app-private. Registers as `<device_id>.<cap>`; JWT `sub =
 device_id` + restricted claims (kernel clamps at registration, D-03).
 
+**Credentials (E-01):** the device never holds the host master `jwt_secret`.
+`vyn device connect` issues a per-device random secret + a master-signed
+device JWT and hands both exactly once via the pairing QR (`v=2`, deflate +
+base64url). The frame-MAC session key derives from the per-device secret; the
+host can revoke the row server-side, which rejects the device at WS upgrade
+and registration. Pairing payloads of the legacy v1 shape (they carry the host
+master secret) are rejected with an explicit error — re-pair against an
+upgraded host.
+
 ## Capabilities
 
 Each = one `<device_id>.<cap>` plugin on the host, backed by a restricted JWT
