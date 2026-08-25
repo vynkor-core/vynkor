@@ -159,7 +159,7 @@ async fn run_kernel(cli: Cli) -> Result<()> {
             token::handle(cmd, &config).await?;
         }
         Commands::Device { cmd, config } => {
-            device::handle(cmd, &config)?;
+            device::handle(cmd, &config).await?;
         }
         Commands::Completions { shell } => {
             complete::generate_completions(shell);
