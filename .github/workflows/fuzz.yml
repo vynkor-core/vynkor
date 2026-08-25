@@ -29,6 +29,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # [patch.crates-io] resolves vynkor-wire + vynkor-sdk from sibling paths;
+      # without these checkouts cargo fuzz can't resolve the dep graph at all
+      - name: Clone siblings (wire, sdk)
+        run: |
+          git clone --depth 1 https://github.com/vynkor-core/vynkor-wire.git ../vynkor-wire
+          git clone --depth 1 https://github.com/vynkor-core/vynkor-sdk.git ../vynkor-sdk
+
       - name: Install nightly toolchain
         uses: dtolnay/rust-toolchain@nightly
 
