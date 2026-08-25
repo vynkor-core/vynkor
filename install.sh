@@ -208,7 +208,7 @@ gen_config() {
     else
         step "config: writing ${CONFIG_FILE}"
     fi
-    printf 'port: %s\njwt_secret: "%s"\n' "${PORT}" "${secret}" >"${CONFIG_FILE}"
+    printf 'bind: 127.0.0.1\nport: %s\njwt_secret: "%s"\n' "${PORT}" "${secret}" >"${CONFIG_FILE}"
 }
 
 # ---------------------------------------------------------------------------
