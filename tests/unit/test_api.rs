@@ -7,6 +7,7 @@ use tokio::sync::mpsc;
 use tower::ServiceExt;
 use vynkor::api::server::{create_router, create_router_full, RouterConfig};
 use vynkor::auth::jwt::JwtValidator;
+use vynkor::plugins::loader::PluginLoader;
 use vynkor::plugins::manager::PluginManager;
 use vynkor::plugins::registry::PluginRegistry;
 use vynkor::plugins::supervisor::PluginSupervisor;
@@ -66,6 +67,15 @@ fn register_with_device(registry: &PluginRegistry, plugin_id: &str, conn_id: u64
 async fn body_string(body: axum::body::Body) -> String {
     let bytes = axum::body::to_bytes(body, usize::MAX).await.unwrap();
     String::from_utf8(bytes.to_vec()).unwrap()
+}
+
+// ux-1: stop probes need a supervised process — spawn via manager, not the
+// auth-gated start route
+async fn supervise(manager: &PluginManager, id: &str) {
+    manager
+        .start(PluginLoader::config_from_def(&sleep_def(id)))
+        .await
+        .unwrap();
 }
 
 // ── tests ────────────────────────────────────────────────────────────────────
@@ -432,11 +442,10 @@ async fn post_endpoint_requires_auth_when_jwt_secret_set() {
     let validator = Arc::new(JwtValidator::new(SECRET));
     let registry = make_registry();
     register(&registry, "guarded", 1);
+    let manager = make_manager(registry, make_supervisor());
+    supervise(&manager, "guarded").await;
 
-    let app = create_router(
-        make_manager(Arc::clone(&registry), make_supervisor()),
-        Some(validator.clone()),
-    );
+    let app = create_router(Arc::clone(&manager), Some(validator.clone()));
 
     // No token → 401
     let res = app
@@ -459,10 +468,7 @@ async fn post_endpoint_requires_auth_when_jwt_secret_set() {
         SECRET,
         3600,
     );
-    let registry2 = make_registry();
-    register(&registry2, "guarded", 1);
-    let app2 = create_router(make_manager(registry2, make_supervisor()), Some(validator));
-    let res2 = app2
+    let res2 = app
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -522,11 +528,10 @@ async fn admin_route_allows_token_with_kernel_admin_permission() {
     let validator = Arc::new(JwtValidator::new(SECRET));
     let registry = make_registry();
     register(&registry, "guarded", 1);
+    let manager = make_manager(registry, make_supervisor());
+    supervise(&manager, "guarded").await;
 
-    let app = create_router(
-        make_manager(Arc::clone(&registry), make_supervisor()),
-        Some(validator),
-    );
+    let app = create_router(Arc::clone(&manager), Some(validator));
 
     let token = create_test_token(
         "admin",
