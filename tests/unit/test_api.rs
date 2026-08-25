@@ -7,6 +7,7 @@ use tokio::sync::mpsc;
 use tower::ServiceExt;
 use vynkor::api::server::{create_router, create_router_full, RouterConfig};
 use vynkor::auth::jwt::JwtValidator;
+use vynkor::plugins::loader::PluginLoader;
 use vynkor::plugins::manager::PluginManager;
 use vynkor::plugins::registry::PluginRegistry;
 use vynkor::plugins::supervisor::PluginSupervisor;
@@ -66,6 +67,15 @@ fn register_with_device(registry: &PluginRegistry, plugin_id: &str, conn_id: u64
 async fn body_string(body: axum::body::Body) -> String {
     let bytes = axum::body::to_bytes(body, usize::MAX).await.unwrap();
     String::from_utf8(bytes.to_vec()).unwrap()
+}
+
+// ux-1: stop probes need a supervised process — spawn via manager, not the
+// auth-gated start route
+async fn supervise(manager: &PluginManager, id: &str) {
+    manager
+        .start(PluginLoader::config_from_def(&sleep_def(id)))
+        .await
+        .unwrap();
 }
 
 // ── tests ────────────────────────────────────────────────────────────────────
@@ -299,12 +309,40 @@ async fn get_plugin_by_id_returns_404_for_unknown() {
 }
 
 #[tokio::test]
-async fn stop_plugin_returns_200_and_unregisters() {
+async fn stop_supervised_plugin_returns_200_and_cleans_up() {
     let registry = make_registry();
     register(&registry, "stoppable", 1);
-    assert!(registry.get("stoppable").is_some());
+    let manager = make_manager(Arc::clone(&registry), make_supervisor());
+    let app = create_router_full(RouterConfig {
+        manager: Arc::clone(&manager),
+        device_store: None,
+        jwt_validator: None,
+        ws_router_tx: None,
+        ws_disconnect_tx: None,
+        started_at: Instant::now(),
+        rate_limit_rps: None,
+        rate_limit_burst: None,
+        plugin_defs: vec![sleep_def("stoppable")],
+        ws_handshake_timeout_secs: 5,
+        max_ws_connections: 1024,
+        ws_register_timeout_secs: 10,
+    })
+    .app;
 
-    let app = create_router(make_manager(Arc::clone(&registry), make_supervisor()), None);
+    let start = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/plugins/stoppable/start")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(start.status(), StatusCode::OK);
+    assert!(manager.is_supervised("stoppable"));
+
     let response = app
         .oneshot(
             Request::builder()
@@ -316,6 +354,10 @@ async fn stop_plugin_returns_200_and_unregisters() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        !manager.is_supervised("stoppable"),
+        "plugin must not stay supervised after stop"
+    );
     assert!(
         registry.get("stoppable").is_none(),
         "plugin must be unregistered after stop"
@@ -330,6 +372,26 @@ async fn stop_nonexistent_plugin_returns_404() {
             Request::builder()
                 .method("POST")
                 .uri("/plugins/ghost/stop")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn stop_registered_but_not_supervised_returns_404() {
+    // ux-1: registered != supervised — nothing to stop, say 404 not silent ok
+    let registry = make_registry();
+    register(&registry, "idle", 1);
+
+    let app = create_router(make_manager(Arc::clone(&registry), make_supervisor()), None);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/plugins/idle/stop")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -380,11 +442,10 @@ async fn post_endpoint_requires_auth_when_jwt_secret_set() {
     let validator = Arc::new(JwtValidator::new(SECRET));
     let registry = make_registry();
     register(&registry, "guarded", 1);
+    let manager = make_manager(registry, make_supervisor());
+    supervise(&manager, "guarded").await;
 
-    let app = create_router(
-        make_manager(Arc::clone(&registry), make_supervisor()),
-        Some(validator.clone()),
-    );
+    let app = create_router(Arc::clone(&manager), Some(validator.clone()));
 
     // No token → 401
     let res = app
@@ -407,10 +468,7 @@ async fn post_endpoint_requires_auth_when_jwt_secret_set() {
         SECRET,
         3600,
     );
-    let registry2 = make_registry();
-    register(&registry2, "guarded", 1);
-    let app2 = create_router(make_manager(registry2, make_supervisor()), Some(validator));
-    let res2 = app2
+    let res2 = app
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -470,11 +528,10 @@ async fn admin_route_allows_token_with_kernel_admin_permission() {
     let validator = Arc::new(JwtValidator::new(SECRET));
     let registry = make_registry();
     register(&registry, "guarded", 1);
+    let manager = make_manager(registry, make_supervisor());
+    supervise(&manager, "guarded").await;
 
-    let app = create_router(
-        make_manager(Arc::clone(&registry), make_supervisor()),
-        Some(validator),
-    );
+    let app = create_router(Arc::clone(&manager), Some(validator));
 
     let token = create_test_token(
         "admin",

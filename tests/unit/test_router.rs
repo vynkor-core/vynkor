@@ -1512,7 +1512,7 @@ async fn router_rejects_protocol_major_mismatch() {
                 "major mismatch must use ERR_PROTOCOL_MISMATCH"
             );
             assert!(
-                err.message.contains("2.0") && err.message.contains("1.6"),
+                err.message.contains("2.0") && err.message.contains(vynkor_wire::PROTOCOL_VERSION),
                 "message must carry both versions, got: {}",
                 err.message
             );

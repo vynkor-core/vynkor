@@ -7,7 +7,7 @@ use crate::bridge::BridgeHandle;
 use crate::events::bus::EventBus;
 use crate::events::store::EventStore;
 use crate::ipc::connection::{out_frame, Outbound};
-use crate::ipc::framing::{target_as_str, Frame, FLAG_RAW_BINARY};
+use crate::ipc::framing::{build_frame, target_as_str, Frame, FLAG_RAW_BINARY};
 use crate::ipc::messages::IncomingMessage;
 use crate::kernel::commands::{CommandHandler, CommandOutcome};
 use crate::plugins::registry::{ActionLookup, DeviceMeta, PendingAction, PluginRegistry};
@@ -1320,21 +1320,7 @@ impl MessageRouter {
         if env.encode(&mut payload).is_err() {
             return None;
         }
-        let crc = crc32fast::hash(&payload);
-        let frame = Frame {
-            magic: 0x5652,
-            flags: 0,
-            length: payload.len() as u32,
-            target: {
-                let mut t = [0u8; 32];
-                t[..6].copy_from_slice(b"client");
-                t
-            },
-            crc32: crc,
-            payload: payload.into(),
-            mac: None,
-        };
-        Some(out_frame(frame))
+        Some(out_frame(build_frame("client", 0, payload)))
     }
 
     async fn send_envelope(tx: &mpsc::Sender<Outbound>, env: Envelope) {

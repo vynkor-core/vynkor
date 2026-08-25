@@ -28,6 +28,10 @@ jobs:
       - name: Clone veyron-sdk-python (sibling)
         run: git clone --depth 1 https://github.com/vynkor-core/vynkor-sdk-python.git ../vynkor-sdk-python
 
+      # E-01: [patch.crates-io] also pins vynkor-sdk to a relative sibling path
+      - name: Clone veyron-sdk (sibling)
+        run: git clone --depth 1 https://github.com/vynkor-core/vynkor-sdk.git ../vynkor-sdk
+
       - name: Proto drift check (T-17)
         run: |
           diff -u ../vynkor-wire/proto/vynkor_protocol.proto ../vynkor-sdk-cpp/proto/vynkor_protocol.proto

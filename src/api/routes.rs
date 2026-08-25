@@ -166,13 +166,17 @@ pub async fn start_plugin(
     }
 }
 
+/// Stop a supervised plugin and remove its registration (manager unregisters
+/// regardless of the stop outcome). 404 when `id` has no supervised process —
+/// including one that exited between the registry check and the stop.
 pub async fn stop_plugin(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> StatusCode {
     if state.manager.get(&id).is_none() {
         return StatusCode::NOT_FOUND;
     }
     match state.manager.stop(&id).await {
         Ok(()) => StatusCode::OK,
-        Err(VynkorError::PluginNotFound(_)) => StatusCode::OK,
+        // ux-1: race with plugin exit is a miss, not a success
+        Err(VynkorError::PluginNotFound(_)) => StatusCode::NOT_FOUND,
         Err(_) => StatusCode::UNPROCESSABLE_ENTITY,
     }
 }

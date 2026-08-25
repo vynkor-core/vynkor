@@ -6,7 +6,9 @@ use crate::api::websocket::{frame_to_bytes, parse_frame};
 use crate::auth::frame_mac::{compute_tag, derive_session_key, verify_tag};
 use crate::auth::permissions::normalize_permission;
 use crate::ipc::connection::{out_frame, Outbound, SessionKeyCell};
-use crate::ipc::framing::{serialize_header, Frame, FLAG_MAC_PRESENT};
+use crate::ipc::framing::{
+    build_frame, serialize_header, target_as_str, target_bytes, Frame, FLAG_MAC_PRESENT,
+};
 use crate::ipc::messages::IncomingMessage;
 use crate::plugins::registry::{DeviceMeta, PluginRegistry};
 use crate::proto::vynkor::{envelope, Envelope, PluginManifest, PluginRegister};
@@ -392,7 +394,7 @@ async fn write_loop(
             // the register arm) — nothing to do
             Outbound::EnableMac(_, _) => continue,
         };
-        if frame_target(&frame) == "client" {
+        if target_as_str(&frame) == Some("client") {
             frame.target = target_bytes("kernel");
         }
         if let Some(k) = &key {
@@ -492,36 +494,16 @@ fn is_kernel_routed(frame: &Frame) -> bool {
         })
 }
 
-fn frame_target(frame: &Frame) -> String {
-    let end = frame.target.iter().position(|&b| b == 0).unwrap_or(32);
-    String::from_utf8_lossy(&frame.target[..end]).into_owned()
-}
-
-fn target_bytes(target: &str) -> [u8; 32] {
-    let mut t = [0u8; 32];
-    let len = target.len().min(32);
-    t[..len].copy_from_slice(&target.as_bytes()[..len]);
-    t
-}
-
-fn build_frame(target: &str, flags: u16, payload: Vec<u8>) -> Frame {
-    let crc = crc32fast::hash(&payload);
-    Frame {
-        magic: 0x5652,
-        flags,
-        length: payload.len() as u32,
-        target: target_bytes(target),
-        crc32: crc,
-        payload: payload.into(),
-        mac: None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::proto::vynkor::{Event, PluginRegisterAck};
     use tokio::net::TcpListener;
+
+    fn frame_target(frame: &Frame) -> String {
+        let end = frame.target.iter().position(|&b| b == 0).unwrap_or(32);
+        String::from_utf8_lossy(&frame.target[..end]).into_owned()
+    }
 
     fn manifest_with(actions: &[&str]) -> PluginManifest {
         PluginManifest {
@@ -535,16 +517,7 @@ mod tests {
     fn plain_frame(target: &str, env: &Envelope) -> Frame {
         let mut payload = Vec::new();
         env.encode(&mut payload).unwrap();
-        let crc = crc32fast::hash(&payload);
-        Frame {
-            magic: 0x5652,
-            flags: 0,
-            length: payload.len() as u32,
-            target: target_bytes(target),
-            crc32: crc,
-            payload: payload.into(),
-            mac: None,
-        }
+        build_frame(target, 0, payload)
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use crate::events::store::EventStore;
 use crate::ipc::connection::out_frame;
-use crate::ipc::framing::Frame;
+use crate::ipc::framing::build_frame;
 use crate::ipc::protocol::kernel_message_id;
 use crate::plugins::registry::{device_os_str, PluginRegistry};
 use crate::proto::vynkor::{envelope, Envelope, Event};
@@ -145,7 +145,7 @@ impl EventBus {
         for plugin_id in targets {
             match registry.get(&plugin_id) {
                 Some(entry) => {
-                    let frame = build_frame(payload.clone(), &plugin_id);
+                    let frame = build_frame(&plugin_id, 0, payload.clone());
                     // Non-blocking send: a slow/full subscriber must not stall the
                     // publisher or any other subscriber in this fan-out loop.
                     match entry.write_tx.try_send(out_frame(frame)) {
@@ -207,23 +207,6 @@ pub async fn run_retry_worker(
         if pruned > 0 {
             debug!(count = pruned, "EventStore: pruned terminal events");
         }
-    }
-}
-
-fn build_frame(payload: Arc<[u8]>, target: &str) -> Frame {
-    let crc = crc32fast::hash(&payload);
-    let mut t = [0u8; 32];
-    let bytes = target.as_bytes();
-    let len = bytes.len().min(32);
-    t[..len].copy_from_slice(&bytes[..len]);
-    Frame {
-        magic: 0x5652,
-        flags: 0,
-        length: payload.len() as u32,
-        target: t,
-        crc32: crc,
-        payload,
-        mac: None,
     }
 }
 

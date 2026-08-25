@@ -16,6 +16,12 @@ crc32fast = "1"
 [dependencies.vynkor]
 path = ".."
 
+# the parent crate's [patch.crates-io] does not cross package boundaries;
+# wire 0.0.3 isn't on crates.io yet, so pin both to the sibling checkouts
+[patch.crates-io]
+vynkor-wire = { path = "../../vynkor-wire" }
+vynkor-sdk = { path = "../../vynkor-sdk" }
+
 # Prevent this from interfering with the workspace
 [workspace]
 
