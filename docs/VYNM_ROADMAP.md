@@ -504,12 +504,11 @@ lives in the manager repo and any format change is deliberate.
     empty → stable at parse time since PR #24.
 
 - [ ] **V-19 — stage 4/C: installer, docs sweep, packaging.** ◐ PARTIAL
-  1. ◐ `install.sh` EXISTS (kernel repo root + copy under
-     `vynkor-web/public/`) and already targets `~/.config/vyn/` — the old
-     `veyron` path is gone. NOT yet hosted at `https://vynkor.dev/install.sh`
-     (domain pending, served via raw.githubusercontent today). NOTE: the
-     kernel and vynkor-web copies have DIVERGED — pick one canonical source
-     before the domain goes live.
+  1. ☐ Installer: the curl-pipe `install.sh` was REMOVED (kernel root and
+     the diverged vynkor-web copy) — distribution is `cargo install
+     vynkor-manager` (0.1.0 crates.io prep) plus a future AUR PKGBUILD.
+     The script already targeted `~/.config/vyn/`, so no path migration
+     was lost with it.
   2. ◐ Docs sweep across repos: README/roadmaps/audit largely speak vynkor;
      residual old-name mentions kept only as history.
   3. ☐ AUR PKGBUILD ships `/usr/bin/vyn` + `/usr/bin/vynm`; pacman owns
