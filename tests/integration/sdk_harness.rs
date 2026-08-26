@@ -49,6 +49,11 @@ impl SdkHarness {
         let cfg = Config {
             socket_path: socket_str,
             port,
+            // isolated per-harness EventStore: the default data_dir is the
+            // real user dir — kernels here would share one events.db across
+            // tests AND runs, and the retry worker would redeliver stale
+            // pending events into unrelated tests' subscribers
+            data_dir: PathBuf::from(format!("/tmp/vynkor_sdk_data_{port}")),
             pid_file: format!("/tmp/vynkor_sdk_{port}.pid").into(),
             log_file: format!("/tmp/vynkor_sdk_{port}.log").into(),
             allow_no_auth: jwt_secret.is_none(),
