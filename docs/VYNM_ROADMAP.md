@@ -14,9 +14,12 @@ identifiers cutover everywhere (`proto::vynkor`, subprotocol `vynkor`,
 Gates re-run independently: kernel 430 / manager 92 / wire / sdk / cpp 62 /
 python 40 — all green; live-registry smoke OK. Stage-3 manager backlog is
 now FULLY shipped incl. former parked items (`rollback`, `bundle`,
-`package`, non-linux drop-ins — 2026-08-26). Remaining: **Phase B**
-(V-18: R2 + plugin re-sign at 0.0.1 — needs domain+key), **Phase C**
-(V-19: installer/docs/AUR), org-name decision.
+`package`, non-linux drop-ins — 2026-08-26). **Phase B (V-18) is
+functionally SHIPPED** — registry live on Cloudflare R2, every published
+version S1-signed and verified by the pinned key; only the custom-domain
+binding is pending. **Phase C (V-19) is PARTIAL** — installer exists and
+targets `~/.config/vyn`; custom hosting + AUR outstanding. Also open:
+org-name decision.
 
 > ID prefix `V-` = vynm. One task ≈ one reviewable PR; every merged commit is
 > green in its repo. Where this file and VYNM_PLAN differ, VYNM_PLAN wins.
@@ -68,8 +71,8 @@ Complexity: **S** ≤ half day · **M** ~1–2 days · **L** multi-session.
 | V-15 | install from local archive / direct URL | P3 | M | vynkor-manager | V-05 |
 | V-16 | CLI polish package | P3 | M | vynkor-manager | V-09…V-15 |
 | V-17 | **stage 4/A:** rename code+packages (`vynkor-wire/sdk 0.0.1`, kernel crate, env/paths hard cut, GitHub last) | P0 | L | all repos | wire publish; domain not required |
-| V-18 | **stage 4/B:** registry on Cloudflare R2 + S1 re-sign, plugins 0.0.1 | P0 | M | veyron-plugins + manager + kernel | V-17; domain; signing key |
-| V-19 | **stage 4/C:** installer `install.sh` on `~/.config/vyn/` + docs sweep + AUR PKGBUILD | P1 | M | veyron + distro | V-17, V-18 |
+| V-18 | **stage 4/B:** registry on Cloudflare R2 + S1 re-sign, plugins 0.0.1 | P0 | M | veyron-plugins + manager + kernel | ✅ shipped 2026-08-26, domain binding pending |
+| V-19 | **stage 4/C:** installer `install.sh` on `~/.config/vyn/` + docs sweep + AUR PKGBUILD | P1 | M | veyron + distro | ◐ partial — installer done; hosting/AUR pending |
 
 Parallel lanes after V-01: kernel lane (V-02) and manager lane
 (V-03 → V-04 → V-05 → V-06) proceed independently; V-07 joins them.
@@ -471,29 +474,50 @@ lives in the manager repo and any format change is deliberate.
     build + full suites pass with ZERO references to `veyron` identifiers in
     code (docs history excepted).
 
-- [ ] **V-18 — stage 4/B: registry on Cloudflare R2 + re-sign at 0.0.1.**
-  Absorbs veyron-plugins Sequencing #4 (S1 seven-field signing fix).
-  1. Domain + CF account + R2 bucket bound to `cdn.vynkor.dev`.
-  2. `package.sh`: upload step (wrangler/rclone) AND S1 seven-field
-     signature `{slug}:{version}:{sha256}:{status}:{archive_url}:min:max`
-     against `cdn.vynkor.dev/...` URLs; update dist-layout comments/README.
-  3. Re-sign ALL plugins as version **0.0.1** (maintainer key required);
-     regenerate `registry.json` entries; `signature.sig` files refreshed.
-  4. `registry.json` STAYS IN GIT — PR review + revocation history; R2 hosts
-     archives only.
-  - Acceptance: `vynm search database` lists 0.0.1; `vynm install database`
-     exits 0 against `cdn.vynkor.dev`; tamper test still exits 3.
+- [x] **V-18 — stage 4/B: registry on Cloudflare R2 + re-sign.**
+  ✅ SHIPPED (verified live 2026-08-26), with two recorded deviations from
+  the text below:
+  - DEVIATION 1 — versions: plugins were re-signed at their REAL released
+    versions (0.1.x) via `vynkor-plugins/scripts/resign.py` (S1 seven-field
+    form, `--check` mode verifies against the pinned key), NOT reset to
+    0.0.1. Resetting would have discarded release history for zero value.
+  - DEVIATION 2 — hosting: the registry + dist/ tree serve from the R2
+    bucket's public r2.dev endpoint
+    (`pub-6fd4….r2.dev`, wired into manager `source::official_source`);
+    upload runs through `vynkor-plugins/scripts/publish-r2.sh` (rclone/S3:
+    archives immutable, sidecars 1h, registry.json 5min, post-upload sha256
+    verification) instead of an in-package.sh step. The custom domain
+    `cdn.vynkor.dev` is still UNBOUND — swap one URL in `source.rs` once it
+    is.
+  1. ~~Domain + CF account + R2 bucket bound to `cdn.vynkor.dev`.~~
+     CF account + bucket DONE; domain binding PENDING (only open item).
+  2. ~~Upload step AND S1 seven-field signatures~~ DONE as publish-r2.sh +
+     resign.py (see deviations).
+  3. ~~Re-sign ALL plugins~~ DONE at real versions (deviation 1);
+     `registry.json` regenerated, `signature.sig` refreshed.
+  4. ~~`registry.json` STAYS IN GIT~~ DONE as specified.
+  - Acceptance RE-RUN LIVE 2026-08-26: `vynm search database`,
+    `info database`, and a real `vynm install database` against the DEFAULT
+    official source all exit 0 with signature verification on; tamper
+    refusal stays exit 3. Cosmetic finding: 19/27 published entries carry
+    explicit `"status": ""` (older packagers); vynkor-manager normalizes
+    empty → stable at parse time since PR #24.
 
-- [ ] **V-19 — stage 4/C: installer, docs sweep, packaging.**
-  1. `install.sh` targets `~/.config/vyn/` and lives at
-     `https://vynkor.dev/install.sh` (draft currently writes
-     `~/.config/veyron/` — align during this task).
-  2. Docs sweep across repos: README/roadmaps/audit speak vynkor; old-name
-     mentions kept only as history.
-  3. AUR PKGBUILD ships `/usr/bin/vyn` + `/usr/bin/vynm`; pacman owns
+- [ ] **V-19 — stage 4/C: installer, docs sweep, packaging.** ◐ PARTIAL
+  1. ◐ `install.sh` EXISTS (kernel repo root + copy under
+     `vynkor-web/public/`) and already targets `~/.config/vyn/` — the old
+     `veyron` path is gone. NOT yet hosted at `https://vynkor.dev/install.sh`
+     (domain pending, served via raw.githubusercontent today). NOTE: the
+     kernel and vynkor-web copies have DIVERGED — pick one canonical source
+     before the domain goes live.
+  2. ◐ Docs sweep across repos: README/roadmaps/audit largely speak vynkor;
+     residual old-name mentions kept only as history.
+  3. ☐ AUR PKGBUILD ships `/usr/bin/vyn` + `/usr/bin/vynm`; pacman owns
      updates (NO self-update by policy); completions ride V-16 later.
   - Acceptance: fresh machine + package install → `vyn start` → `vynm
     install database` works touching only XDG dirs under `~/.config/vyn`.
+    (Install-from-source path verified manually; binary-package acceptance
+    blocked on AUR.)
 
 - [x] **V-20 — `vynm new <name>`: plugin scaffolding.** ✅ DONE & verified
     2026-08-22 (`include_str!` templates, identifier gate, acceptance build
