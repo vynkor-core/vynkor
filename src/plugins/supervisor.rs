@@ -305,12 +305,27 @@ impl PluginSupervisor {
         let max_vmem_mb = config
             .max_vmem_mb
             .unwrap_or(crate::plugins::runner::DEFAULT_MAX_VMEM_MB);
+        // DEBUG kill-switches (sherpa supervised-stall bisection): set on the
+        // KERNEL process env, not per plugin.
+        let dbg_skip_cgroup =
+            std::env::var("VYN_DEBUG_SKIP_CGROUP").as_deref() == Ok("1");
+        let dbg_skip_rlimits =
+            std::env::var("VYN_DEBUG_SKIP_RLIMITS").as_deref() == Ok("1");
+        if dbg_skip_cgroup || dbg_skip_rlimits {
+            warn!(
+                "DEBUG: resource-limit bisection active (skip_cgroup={dbg_skip_cgroup}, skip_rlimits={dbg_skip_rlimits})"
+            );
+        }
         // R9-01: per-plugin process accounting via cgroup v2 `pids.max`. The
         // scope is prepared here (parent side) so a failure degrades to the
         // RLIMIT_NPROC fallback without killing the spawn; the child only
         // moves itself into the prepared scope in `pre_exec`.
         #[cfg(target_os = "linux")]
-        let cgroup_path = crate::plugins::runner::prepare_pids_cgroup(&config.plugin_id, max_procs);
+        let cgroup_path = if dbg_skip_cgroup {
+            None
+        } else {
+            crate::plugins::runner::prepare_pids_cgroup(&config.plugin_id, max_procs)
+        };
         #[cfg(not(target_os = "linux"))]
         let cgroup_path: Option<PathBuf> = None;
         #[cfg(target_os = "linux")]
@@ -320,6 +335,9 @@ impl PluginSupervisor {
             let cgroup_for_pre_exec = cgroup_path.clone();
             unsafe {
                 cmd.as_std_mut().pre_exec(move || {
+                    if dbg_skip_rlimits {
+                        return Ok(());
+                    }
                     if sandbox {
                         crate::plugins::runner::sandbox_pre_exec(
                             max_procs,
@@ -425,14 +443,18 @@ impl PluginSupervisor {
             let pid = child
                 .id()
                 .ok_or_else(|| VynkorError::Internal("no pid".into()))?;
+            let mirror = std::env::var("VYN_DEBUG_SKIP_RLIMITS").as_deref() == Ok("1")
+                || std::env::var("VYN_DEBUG_SKIP_CGROUP").as_deref() == Ok("1");
             if let Some(stdout) = child.stdout.take() {
-                drain_to_log(stdout, Arc::clone(&log_buf), max_lines);
+                drain_to_log(stdout, Arc::clone(&log_buf), max_lines, mirror);
             }
             (pid, None)
         };
 
+        let mirror_stderr = std::env::var("VYN_DEBUG_SKIP_RLIMITS").as_deref() == Ok("1")
+            || std::env::var("VYN_DEBUG_SKIP_CGROUP").as_deref() == Ok("1");
         if let Some(stderr) = child.stderr.take() {
-            drain_to_log(stderr, Arc::clone(&log_buf), max_lines);
+            drain_to_log(stderr, Arc::clone(&log_buf), max_lines, mirror_stderr);
         }
 
         // Verify the child landed in its pids cgroup. The join happens in
