@@ -7,13 +7,20 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::sync::Mutex;
 
 /// Drain a child stream into the plugin's ring log buffer.
-pub(crate) fn drain_to_log<S>(stream: S, buf: Arc<Mutex<VecDeque<String>>>, max_lines: usize)
-where
+pub(crate) fn drain_to_log<S>(
+    stream: S,
+    buf: Arc<Mutex<VecDeque<String>>>,
+    max_lines: usize,
+    mirror_to_kernel_log: bool,
+) where
     S: AsyncRead + Unpin + Send + 'static,
 {
     tokio::spawn(async move {
         let mut lines = BufReader::new(stream).lines();
         while let Ok(Some(line)) = lines.next_line().await {
+            if mirror_to_kernel_log {
+                eprintln!("[plugin-stderr] {line}");
+            }
             let mut locked = buf.lock().await;
             if locked.len() >= max_lines {
                 locked.pop_front();
