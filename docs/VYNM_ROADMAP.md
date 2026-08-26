@@ -12,9 +12,11 @@ identifiers cutover everywhere (`proto::vynkor`, subprotocol `vynkor`,
 `vynkor-frame-mac-v1`; PROTOCOL_VERSION stays 1.6), published:
 `vynkor-wire 0.0.2`, `vynkor-sdk 0.0.3` (PyPI pending credentials).
 Gates re-run independently: kernel 430 / manager 92 / wire / sdk / cpp 62 /
-python 40 — all green; live-registry smoke OK. Remaining: **Phase B**
+python 40 — all green; live-registry smoke OK. Stage-3 manager backlog is
+now FULLY shipped incl. former parked items (`rollback`, `bundle`,
+`package`, non-linux drop-ins — 2026-08-26). Remaining: **Phase B**
 (V-18: R2 + plugin re-sign at 0.0.1 — needs domain+key), **Phase C**
-(V-19: installer/docs/AUR), org-name decision, stage-3 features.
+(V-19: installer/docs/AUR), org-name decision.
 
 > ID prefix `V-` = vynm. One task ≈ one reviewable PR; every merged commit is
 > green in its repo. Where this file and VYNM_PLAN differ, VYNM_PLAN wins.
@@ -510,8 +512,11 @@ lives in the manager repo and any format change is deliberate.
   - Acceptance: the scaffolded plugin builds against the published
     `vynkor-sdk` out of the box.
 
-**Parked (not promised):** `rollback <slug>` (the install pipeline's `.bak`
-mechanism is half of it), air-gapped `bundle export/import`.
+**Parked (not promised):** ~~`rollback <slug>`~~ and ~~air-gapped
+`bundle export/import`~~ — both SHIPPED 2026-08-26 in vynkor-manager
+(rollback keeps `<slug>.prev` + ledger `previous`; bundle is a
+transactional digest-verified offline zip; see manager
+`docs/STAGE4_MANAGER_WAVES.md` wave 5). Nothing remains parked.
 
 **Open questions to settle during stage 3** (plan §10): whether
 `vynm list --installed` also queries `GET /plugins` when reachable (lean: no

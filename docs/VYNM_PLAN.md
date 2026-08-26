@@ -525,10 +525,9 @@ releases per D7.
 1. Should `vynm list --installed` also show kernel-visible state by querying
    `GET /plugins` when reachable? (Lean: no — keeps vynm offline-pure;
    `vyn status` exists.)
-2. Windows/macOS support for the drop-in writer: paths are already
-   `PathBuf`-based; sandbox flags are linux-only — the generated template
-   should omit `sandbox:` on non-linux instead of writing `sandbox: true`
-   that the kernel ignores there.
+2. RESOLVED 2026-08-26 (manager PR #23): non-linux drop-in templates omit
+   the `sandbox:` key entirely instead of writing a flag the kernel ignores
+   there.
 
 ---
 
