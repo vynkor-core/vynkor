@@ -36,17 +36,52 @@ Env-киллсвитчи на процессе **ядра** (не на плаг�
    же клиент работает. Исключены: rlimits, cgroup, action_id дубликаты,
    sandbox/seccomp/cwd/пайпы/ONNX threads.
 
-## Следующий шаг диагностики
+## Resolved 2026-08-26 — fix/supervised-stall-and-limits (PR → develop)
 
-```bash
-# терминал 1: ядро с киллсвитчами + debug-лог
-RUST_LOG=vynkor=debug VYN_DEBUG_SKIP_RLIMITS=1 vyn start --foreground ...
-# терминал 2: strace на процесс плагина во время вызова
-strace -f -p <plugin_pid> -e trace=write,writev,futex,recvfrom,sendto
-```
-Сравнить: уходит ли `write()` ActionResponse в UDS; что отвечает ядро;
-где блокируется. Затем читать reply-лег `src/ipc/protocol.rs`
-(ветка `ActionResponse`, pending-реестр) в сравнении «db vs tts».
+Ветка диагностическая закрыта; фиксы влиты в `develop` одним PR.
 
-Фиксы по пп. 1–2 просить/делать в `develop` отдельными PR; эта ветка —
-диагностическая, мерджить опционально.
+### Problem A — главная загадка: `ActionResponse` не доходит
+
+**Root cause:** `src/ipc/protocol.rs` — per-connection error-budget
+throttling (`max_conn_errors = 16`). Каждый denied `tts_speak` audio-chunk
+forward (`ipc_targets` не содержит `sound` → `ERR_PERMISSION_DENIED`,
+`errored = true`) инкрементил `error_counts[tts_conn]`. После 16 denied
+чанков соединение помечалось `throttled` и **все** дальнейшие сообщения от
+того же `conn_id` дропались молча (`continue` без `send_error`), включая
+легитимный финальный `ActionResponse` провайдера. `db_*` не шлёт
+peer-to-peer фреймов перед ответом, поэтому не триггерит throttling и
+работает. С полностью скипнутыми лимитами `time-to-first-audio: 0 ms`
+подтверждало что хендлер завершился, но ответ уже был в дроп-зоне.
+
+**Fix:** `is_throttle_exempt()` — `ActionResponse`,
+`ActionResponseChunk`, `ActionRequestChunk`, `SessionClose`, `Pong`
+проходят мимо throttling-гейта и сбрасывают бюджет (`errored == false →
+error_counts.remove`). Это сохраняет защиту от amplification (VULN-007)
+для error-генерирующих сообщений, но не блокирует легитимные replies и
+watchdog `Pong`.
+
+Live verification (scratch `/tmp/opencode/vynfix`, без `VYN_DEBUG_*`,
+cgroup `pids.max` активен, `DEFAULT_MAX_VMEM_MB = 2048`):
+`tts_speak` (sherpa piper `ru_RU-denis-medium`, "Один два три.")
+→ 47 Opus пакетов, `duration 1.0s`, `TTFA 0 ms`, `elapsed 1633 ms` (cold)
+и `0 ms` (warm); `tts_speak_stream` (3 предложения, 162 пакета)
+→ `TTFA stream 0 ms`, оба `status=OK`. `speech` plugin (swap drop-in) —
+аналогично `tts_speak` / `tts_speak_stream` с теми же TTFA.
+
+### Problem B — `RLIMIT_NPROC` fallback
+
+`RLIMIT_NPROC` считает треды всего uid (десктоп > 64), поэтому `max_procs`
+64 ронял любой thread-heavy плагин `EAGAIN` → tokio panic. Фикс:
+`apply_resource_limits` больше не ставит `RLIMIT_NPROC` вообще; при
+`!joined_cgroup` только `warn!` ("process accounting degraded"), cgroup
+`pids.max` остаётся единственным лимитом. Юнит-тесты в `runner.rs`.
+
+### Problem C — `DEFAULT_MAX_VMEM_MB = 512`
+
+ONNX Runtime резервирует ~500 MiB VA → модель не mmap-илась. Дефолт
+поднят до **2048**, `0` = unlimited (skip `setrlimit`). Обновлены
+`src/utils/config.rs`, `plugins/{tts,speech}/config.example.yaml` и
+`README.md`.
+
+Kill-switches `VYN_DEBUG_SKIP_CGROUP` / `VYN_DEBUG_SKIP_RLIMITS` сохранены
+как есть (требование миссии), зеркалирование `[plugin-stderr]` тоже.
