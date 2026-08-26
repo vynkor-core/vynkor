@@ -351,7 +351,7 @@ backlog (polish).
     (tests/unit/test_router.rs) saturates a peer's channel and asserts the
     router stays live for other connections (hangs on the old code).
 
-- [ ] PERF-2 — **Synchronous SQLite + std Mutex on the async runtime in the
+- [x] PERF-2 — **Synchronous SQLite + std Mutex on the async runtime in the
       router path (Medium):** `EventBus::publish → store.persist`
       (`bus.rs:85`), `mark_delivered` (`protocol.rs:929`) and the retry
       worker (`bus.rs:160-180`) run blocking rusqlite under
@@ -360,7 +360,20 @@ backlog (polish).
   - Files: `src/events/store.rs`, `src/events/bus.rs`, `src/ipc/protocol.rs`.
   - Acceptance: event persistence never blocks the router task
     (`tokio::task::spawn_blocking` or a dedicated writer task).
-  - **Status (2026-08-14): OPEN.**
+  - **Status (2026-08-26): FIXED** — `EventStore::persist_async` /
+    `mark_delivered_async` wrap the sync calls in `spawn_blocking`;
+    completion is awaited on purpose (outbox persist-before-deliver order,
+    delivered-mark must not race exit). `publish` uses the async persist,
+    `handle_kernel_message` now takes `Option<&Arc<EventStore>>` and awaits
+    `mark_delivered_async`; `run_retry_worker` batches the whole sweep
+    (pending scan → retry bump → prune) into one blocking task per tick,
+    preserving bump-before-redeliver order. Sync store methods unchanged for
+    non-async callers; async round-trip regression test added. Same PR:
+    `SdkHarness` gets a per-port `data_dir` — harness kernels previously
+    shared the real user-dir `events.db`, so stale pending events from a
+    timed-out test were redelivered by the retry worker into unrelated
+    tests' subscribers (observed as cross-suite "cpp payload in python
+    test" corruption).
 
 ### P2 — this cycle
 
@@ -1382,7 +1395,7 @@ surfaces cover every planned plugin).
 | S3 | `crossbeam-epoch` 0.9.18 → 0.9.20 (RUSTSEC-2026-0204) — **FIXED** (2026-08-14, PR #20) | none |
 | S2 | `data_dir` off shared /tmp + 0o700 store dir — **FIXED** (2026-08-18, PR #35) | none |
 | PERF-1 | router kernel replies off the shared-task `.send().await` — **FIXED** (2026-08-26): sync `try_send` replies, drop+counter on full channel, regression-tested | none |
-| PERF-2 | event-store SQLite off the async runtime (`spawn_blocking`) — **OPEN** (P1) | none |
+| PERF-2 | event-store SQLite off the async runtime (`spawn_blocking`) — **FIXED** (2026-08-26): async store wrappers + batched retry sweep; SdkHarness data_dir isolation kills cross-test events.db reuse | none |
 | UX-1 | JSON error envelope + honest stop status + API doc — **OPEN** (P2) | none |
 | S5 | stable wire error codes, no internals — **OPEN** (P2) | UX-1 |
 | UX-2 | stable `PluginInfo.state` values — **FIXED** (2026-08-24): shared lowercase `plugin_state_str`, all sites | UX-1 |

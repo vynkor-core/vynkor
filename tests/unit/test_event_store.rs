@@ -165,3 +165,15 @@ fn new_rejects_world_writable_dir() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// PERF-2: the async entry points round-trip through spawn_blocking and keep
+// the same store semantics (idempotent persist, delivered leaves pending)
+#[tokio::test]
+async fn async_persist_and_mark_delivered_round_trip() {
+    let store = std::sync::Arc::new(tmp_store("async_roundtrip"));
+    store.persist_async(ev("a1")).await;
+    store.persist_async(ev("a1")).await;
+    assert_eq!(store.pending_older_than(0).len(), 1);
+    store.mark_delivered_async("a1".to_string()).await;
+    assert!(store.pending_older_than(0).is_empty());
+}

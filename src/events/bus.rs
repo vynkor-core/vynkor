@@ -94,7 +94,7 @@ impl EventBus {
 
     pub async fn publish(&self, event: Event, registry: &PluginRegistry) {
         if let Some(store) = self.event_store() {
-            store.persist(&event);
+            store.persist_async(event.clone()).await;
         }
         self.deliver(event, registry).await;
     }
@@ -197,13 +197,25 @@ pub async fn run_retry_worker(
 ) {
     loop {
         tokio::time::sleep(Duration::from_secs(5)).await;
-        let pending = store.pending_older_than(10);
+        // PERF-2: the whole SQLite sweep (pending scan + retry bump + prune)
+        // runs in one blocking task — none of it touches a tokio worker.
+        // Redelivery below stays async; bumping retries before redelivery
+        // preserves the original per-event order.
+        let (pending, pruned) = tokio::task::spawn_blocking({
+            let store = Arc::clone(&store);
+            move || {
+                let pending = store.pending_older_than(10);
+                for event in &pending {
+                    store.increment_retry_or_dead(&event.event_id, max_retries);
+                }
+                (pending, store.prune(retention_secs))
+            }
+        })
+        .await
+        .unwrap_or_default();
         for event in pending {
-            let event_id = event.event_id.clone();
-            store.increment_retry_or_dead(&event_id, max_retries);
             bus.redeliver(event, &registry).await;
         }
-        let pruned = store.prune(retention_secs);
         if pruned > 0 {
             debug!(count = pruned, "EventStore: pruned terminal events");
         }

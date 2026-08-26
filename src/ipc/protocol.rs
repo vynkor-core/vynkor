@@ -275,7 +275,7 @@ impl MessageRouter {
                         &jwt_validator,
                         start_time,
                         config_path.as_deref(),
-                        event_store.as_deref(),
+                        event_store.as_ref(),
                         &mac_secret,
                         config_permissions.as_deref(),
                         action_limiter.as_deref(),
@@ -337,7 +337,7 @@ impl MessageRouter {
         jwt_validator: &Option<Arc<JwtValidator>>,
         start_time: Instant,
         config_path: Option<&str>,
-        event_store: Option<&EventStore>,
+        event_store: Option<&Arc<EventStore>>,
         mac_secret: &Option<Arc<Vec<u8>>>,
         config_permissions: Option<&HashMap<String, Vec<String>>>,
         action_limiter: Option<&DefaultKeyedRateLimiter<(String, String)>>,
@@ -1071,7 +1071,7 @@ impl MessageRouter {
 
             Some(envelope::Payload::EventAck(ack)) => {
                 if let Some(store) = event_store {
-                    store.mark_delivered(&ack.event_id);
+                    store.mark_delivered_async(ack.event_id).await;
                 }
                 false
             }

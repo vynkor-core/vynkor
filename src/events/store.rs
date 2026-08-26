@@ -2,7 +2,7 @@ use crate::proto::vynkor::Event;
 use crate::utils::sync::recover_poison;
 use rusqlite::{params, Connection};
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::warn;
 
@@ -147,5 +147,26 @@ impl EventStore {
             "UPDATE events SET status='dead' WHERE event_id=?1 AND retry_count >= ?2",
             params![event_id, max_retries as i64],
         );
+    }
+
+    // PERF-2 async entry points: rusqlite is blocking disk I/O, so async
+    // callers go through spawn_blocking instead of stalling a tokio worker.
+    // Completion is awaited on purpose — the outbox requires
+    // persist-before-deliver ordering and a delivered-mark must not race
+    // process exit.
+    pub async fn persist_async(self: &Arc<Self>, event: Event) {
+        let _ = tokio::task::spawn_blocking({
+            let store = Arc::clone(self);
+            move || store.persist(&event)
+        })
+        .await;
+    }
+
+    pub async fn mark_delivered_async(self: &Arc<Self>, event_id: String) {
+        let _ = tokio::task::spawn_blocking({
+            let store = Arc::clone(self);
+            move || store.mark_delivered(&event_id)
+        })
+        .await;
     }
 }
