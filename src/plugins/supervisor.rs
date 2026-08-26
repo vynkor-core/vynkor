@@ -1,6 +1,6 @@
 use crate::events::bus::EventBus;
 use crate::ipc::connection::out_frame;
-use crate::ipc::framing::Frame;
+use crate::ipc::framing::build_frame;
 use crate::plugins::metrics::drain_to_log;
 #[cfg(target_os = "linux")]
 use crate::plugins::metrics::proc_resource_usage;
@@ -844,22 +844,14 @@ impl PluginSupervisor {
                     };
                     let mut payload = Vec::new();
                     if env.encode(&mut payload).is_ok() {
-                        let crc = crc32fast::hash(&payload);
-                        let mut target = [0u8; 32];
-                        target[..6].copy_from_slice(b"client");
-                        let frame = Frame {
-                            magic: 0x5652,
-                            flags: 0,
-                            length: payload.len() as u32,
-                            target,
-                            crc32: crc,
-                            payload: payload.into(),
-                            mac: None,
-                        };
                         // same shared-task rationale as PERF-1: a plugin that
                         // stops draining its channel must not stall the
                         // watchdog for every other plugin
-                        if reg_entry.write_tx.try_send(out_frame(frame)).is_err() {
+                        if reg_entry
+                            .write_tx
+                            .try_send(out_frame(build_frame("client", 0, payload)))
+                            .is_err()
+                        {
                             counter!("watchdog_pings_dropped_total").increment(1);
                         }
                     }

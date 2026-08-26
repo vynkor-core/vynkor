@@ -353,18 +353,12 @@ fn resolve_ws_url(host_url: &str) -> Result<String, BridgeError> {
     if host_url.starts_with("ws://") || host_url.starts_with("wss://") {
         return Ok(host_url.to_string());
     }
-    let (ws_scheme, rest) = if let Some(r) = host_url.strip_prefix("https://") {
-        ("wss", r)
-    } else if let Some(r) = host_url.strip_prefix("http://") {
-        ("ws", r)
-    } else {
-        return Err(BridgeError::Wire(
-            "host_url must start with ws://, wss://, http://, or https://",
-        ));
-    };
+    let bad = || BridgeError::Wire("host_url must start with ws://, wss://, http://, or https://");
+    let (scheme, rest) = host_url.split_once("://").ok_or_else(bad)?;
+    let ws_scheme = crate::utils::url::ws_scheme_for(scheme).ok_or_else(bad)?;
     let (host, path) = match rest.split_once('/') {
         Some((h, p)) => (h, format!("/{p}")),
-        None => (rest, "/ws".to_string()),
+        None => (rest, crate::utils::url::DEFAULT_WS_PATH.to_string()),
     };
     Ok(format!("{ws_scheme}://{host}{path}"))
 }
@@ -501,8 +495,7 @@ mod tests {
     use tokio::net::TcpListener;
 
     fn frame_target(frame: &Frame) -> String {
-        let end = frame.target.iter().position(|&b| b == 0).unwrap_or(32);
-        String::from_utf8_lossy(&frame.target[..end]).into_owned()
+        target_as_str(frame).unwrap_or_default().to_string()
     }
 
     fn manifest_with(actions: &[&str]) -> PluginManifest {
