@@ -473,7 +473,7 @@ fn resolve_advertise_url(cfg: &Config, host_override: Option<&str>) -> anyhow::R
         url.set_port(Some(cfg.port)).ok();
     }
     if url.path().is_empty() || url.path() == "/" {
-        url.set_path("/ws");
+        url.set_path(crate::utils::url::DEFAULT_WS_PATH);
     }
     url.set_scheme(scheme)
         .map_err(|()| anyhow::anyhow!("bad --host '{host}'"))?;

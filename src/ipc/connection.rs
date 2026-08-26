@@ -1,7 +1,7 @@
 use crate::auth::frame_mac::{compute_tag, verify_tag};
 use crate::ipc::framing::{
-    parse_frag_header, read_frame, serialize_header, write_frame_raw, Frame, FLAG_FRAGMENTED,
-    FLAG_MAC_PRESENT, FRAG_HEADER_SIZE, MAX_PAYLOAD_SIZE,
+    build_frame, parse_frag_header, read_frame, serialize_header, write_frame_raw, Frame,
+    FLAG_FRAGMENTED, FLAG_MAC_PRESENT, FRAG_HEADER_SIZE, MAX_PAYLOAD_SIZE,
 };
 use crate::ipc::messages::IncomingMessage;
 use crate::proto::vynkor::ErrorCode;
@@ -371,19 +371,7 @@ impl ConnectionHandler {
         if env.encode(&mut payload).is_err() {
             return;
         }
-        let crc = crc32fast::hash(&payload);
-        let mut target = [0u8; 32];
-        target[..6].copy_from_slice(b"client");
-        let frame = Frame {
-            magic: 0x5652,
-            flags: 0,
-            length: payload.len() as u32,
-            target,
-            crc32: crc,
-            payload: payload.into(),
-            mac: None,
-        };
-        let _ = tx.send(out_frame(frame)).await;
+        let _ = tx.send(out_frame(build_frame("client", 0, payload))).await;
     }
 }
 
@@ -424,7 +412,7 @@ async fn write_loop(mut write_half: OwnedWriteHalf, mut rx: mpsc::Receiver<Outbo
 mod tests {
     use super::*;
     use crate::auth::frame_mac::{derive_session_key, verify_tag};
-    use crate::ipc::framing::{read_frame, write_frame_raw, FLAG_MAC_PRESENT};
+    use crate::ipc::framing::{build_frame, read_frame, write_frame_raw, FLAG_MAC_PRESENT};
 
     /// Build a fragmented-frame payload: 10-byte header + data.
     fn frag_payload(
@@ -451,34 +439,15 @@ mod tests {
         stream_id: u32,
         data: &[u8],
     ) -> Frame {
-        let payload = frag_payload(fragment_id, seq, total, stream_id, data);
-        let crc = crc32fast::hash(&payload);
-        let mut t = [0u8; 32];
-        t[..target.len()].copy_from_slice(target.as_bytes());
-        Frame {
-            magic: 0x5652,
-            flags: FLAG_FRAGMENTED,
-            length: payload.len() as u32,
-            target: t,
-            crc32: crc,
-            payload: payload.into(),
-            mac: None,
-        }
+        build_frame(
+            target,
+            FLAG_FRAGMENTED,
+            frag_payload(fragment_id, seq, total, stream_id, data),
+        )
     }
 
     fn plain(target: &str, payload: &[u8]) -> Frame {
-        let crc = crc32fast::hash(payload);
-        let mut t = [0u8; 32];
-        t[..target.len()].copy_from_slice(target.as_bytes());
-        Frame {
-            magic: 0x5652,
-            flags: 0,
-            length: payload.len() as u32,
-            target: t,
-            crc32: crc,
-            payload: payload.into(),
-            mac: None,
-        }
+        build_frame(target, 0, payload.to_vec())
     }
 
     #[tokio::test]

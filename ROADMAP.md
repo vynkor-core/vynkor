@@ -493,7 +493,7 @@ the audit's §E: **P0** before next release (monoliths + error-system unificatio
     split into `marketplace/registry/{cache,fetch,verify,parse}.rs` (or
     `#[cfg(test)] mod tests` moved out). Full suite + clippy + fmt green.
 
-- [ ] MA-02 — **Extract duplicated frame/URL helpers:** `target_bytes` /
+- [x] MA-02 — **Extract duplicated frame/URL helpers:** `target_bytes` /
       `frame_target` / `build_frame` copied in 5 sites
       (`ipc/protocol.rs`, `bridge/mod.rs`, `events/bus.rs`,
       `plugins/supervisor.rs`, `api/websocket.rs`); `resolve_ws_url` /
@@ -505,6 +505,19 @@ the audit's §E: **P0** before next release (monoliths + error-system unificatio
     `src/marketplace/registry.rs`.
   - Acceptance: frame helpers live in `ipc/helpers.rs` or `veyron_wire`; URL
     helpers in `utils/url.rs`; zero duplicated copies remain.
+  - **Status (2026-08-26): FIXED** — re-inventoried post-F1 (marketplace
+    fetcher now lives in vynkor-manager, so only two URL sites remain here).
+    `protocol.rs`/`bus.rs` already imported the canonical
+    `ipc::framing::build_frame`; the real duplicates were inline Frame
+    constructions: connection.rs error-frame + both test frame builders and
+    supervisor's watchdog ping now call `build_frame("client", 0, payload)`;
+    bridge's test-local `frame_target` delegates to `framing::target_as_str`.
+    New `utils/url.rs` is the single home for `DEFAULT_WS_PATH` +
+    `ws_scheme_for` — bridge's `resolve_ws_url` and device's advertise path
+    consume them instead of hardcoding `/ws` and the http→ws scheme map.
+    Remaining crc32 call sites are not build_frame duplicates: websocket.rs
+    inbound verification (MA-13 scope) and fragment reassembly (preserves
+    original magic/flags/target).
 
 - [x] MA-03 — **Unify the error system on `VeyronError`:** three error types
       coexist — `VeyronError`, `anyhow::Error`, and `Result<_, String>`
@@ -1379,7 +1392,7 @@ surfaces cover every planned plugin).
 | UX-4 | CLI help/output polish — **FIXED** (2026-08-24): version from cargo env, clap `about` everywhere, `plugin logs` renders line-per-entry | none |
 | S4 | dependency advisories (anyhow / number_prefix) — **FIXED** (2026-08-21): anyhow 1.0.104, h2 0.4.18, number_prefix dropped via indicatif 0.18 — cargo audit clean | none |
 | MA-01 | split `ipc/protocol.rs` + `marketplace/registry.rs` monoliths — **OPEN** (P0, 2026-08-20 audit) | MA-02 |
-| MA-02 | extract duplicated `target_bytes`/`build_frame` + `resolve_*_url` helpers — **OPEN** (P0) | none |
+| MA-02 | extract duplicated `target_bytes`/`build_frame` + `resolve_*_url` helpers — **FIXED** (2026-08-26): inline Frame builds → `ipc::framing::build_frame`, `utils/url.rs` owns `DEFAULT_WS_PATH` + ws-scheme map | none |
 | MA-03 | unify error system on `VeyronError`; `jwt::validate() -> VeyronError` — **FIXED** (2026-08-24): `VynkorError::Auth`, jwt paths unified, main.rs chain preserved (PR #64) | none |
 | MA-04 | replace deprecated `rand::thread_rng()` — **FIXED** (2026-08-21): jti nonce from OsRng | none |
 | MA-05 | `docs/COMMENT_TAGS.md` + reduce comment duplication + consistent style — **OPEN** (P1) | none |
