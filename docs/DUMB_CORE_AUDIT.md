@@ -45,7 +45,7 @@ clause is technically violated by the event store:
 | DC-2 | Device-fleet domain model (D-01…D-14) | Medium | OPEN |
 | DC-3 | AI tool-calling surface in protocol + kernel | Low-Med | OPEN (decision) |
 | DC-4 | Hardcoded action→permission policy | Low | OPEN |
-| DC-5 | Events SQLite DB vs "no databases" clause | Info/Low-Med | OPEN (wording + S2/PERF-2) |
+| DC-5 | Events SQLite DB vs "no databases" clause | Info/Low-Med | CLOSED (2026-08-26: wording + S2 + PERF-2 all shipped) |
 
 The drift is not accidental rot — it is deliberate shipped product work
 (D-series remote devices, Phase 10 marketplace state, D-08 tool schemas). The
@@ -438,11 +438,15 @@ files, steps and acceptance criteria.
 - **Acceptance:** manifesto wording matches reality; `events.db` lives in a
   0o700 private dir; the publish path performs no synchronous SQLite I/O;
   event-delivery integration tests stay green.
+- **Status: SHIPPED 2026-08-26.** Step 1 landed in `2f47d5f` (README §1 +
+  ROADMAP Manifesto carve-out); step 2 = S2 (PR #35, 2026-08-18); step 3 =
+  PERF-2 (PR #70 — `spawn_blocking` wrappers + batched retry sweep);
+  step 4 documented (README "bounded 1h retention" + `event_retention_secs`
+  in config.yaml). Event-delivery integration tests green throughout.
 
 ---
 
 ## 7. Decisions (resolved 2026-08-16)
-
 All four open decisions are settled — the fix plan in §6 is decision-complete.
 
 1. **Marketplace extraction target** (F1): **separate binary `vynm`** ("vyn

@@ -821,22 +821,20 @@ rest) · **P1** = F3/F4/F5/F6 (this cycle).
     without a declared permission is **denied by default**; legacy string-form
     plugins keep working with a boot warning.
 
-- [ ] F6 (DC-5, P1) — **Manifesto wording + event-store hardening:** the "no
+- [x] F6 (DC-5, P1) — **Manifesto wording + event-store hardening:** the "no
   databases" clause says what it means (event-delivery outbox carve-out); the
   SQLite outbox is safe (S2) and off the async hot path (PERF-2).
-  - Files: `README.md` §1, `ROADMAP.md` Manifesto (wording change applied by
-    the separate F6 wording task — tracked here), `src/events/store.rs`,
+  - Files: `README.md` §1, `ROADMAP.md` Manifesto, `src/events/store.rs`,
     `src/events/bus.rs`, `src/utils/config.rs` (`data_dir` default),
     `config.yaml`.
   - Acceptance: manifesto wording matches reality; `events.db` lives in a
-    0o700 private dir (S2 already shipped — PR #35, 2026-08-18); the publish
-    path performs no synchronous SQLite I/O (PERF-2); event-delivery
-    integration tests stay green.
-  - **Status (2026-08-26): wording DONE** — README §1 carries the
-    "no databases *for application state*; single exception: event-delivery
-    outbox" carve-out and the Manifesto above names the explicit exception
-    (landed in `2f47d5f`, verified present). Item stays open solely on the
-    PERF-2 gate (publish path off synchronous SQLite I/O).
+    0o700 private dir; the publish path performs no synchronous SQLite I/O;
+    event-delivery integration tests stay green.
+  - **Status (2026-08-26): SHIPPED.** Wording landed (`2f47d5f`: README §1 +
+    Manifesto carve-out); S2 shipped (PR #35, 2026-08-18); PERF-2 shipped
+    (PR #70 — `spawn_blocking` wrappers + batched retry sweep); retention
+    documented (README "bounded 1h retention" + `event_retention_secs`).
+    Integration tests green throughout.
 
 ---
 
@@ -1428,7 +1426,7 @@ surfaces cover every planned plugin).
 | F3 | bridge stays as transport; strip `device.<cap>` capability interpretation (DC-2) — **OPEN** (P1) | F2 |
 | F4 | neutralize AI tool-calling surface → generic manifest feature (DC-3) — kernel-side comments landed (PR #64, 2026-08-24); proto wording open (vynkor-wire) | none |
 | F5 | drop hardcoded action→permission fallback (DC-4) — **OPEN** (P1) | network plugin v2 manifest (veyron-plugins) |
-| F6 | manifesto wording + event-store hardening (DC-5) — wording **DONE** (README §1 + Manifesto carve-out, `2f47d5f`); item open solely on PERF-2 (S2 already shipped, PR #35) | PERF-2 |
+| F6 | manifesto wording + event-store hardening (DC-5) — **SHIPPED** 2026-08-26: wording (`2f47d5f`) + S2 (PR #35) + PERF-2 (PR #70); DC-5 closed | none |
 
 **Ship gate:** R8-01..R8-05 are kernel-local and land together on `develop`;
 R8-06/R8-07 are cross-repo coordination items shipped from their own repos.
@@ -1501,12 +1499,12 @@ D-04** (identity + versioning + discovery, one proto bump), then D-05 → D-07
     parses the wire fields.
 
 **Delta audit (2026-08-14):** 13 new findings, all kernel-local, with
-priorities P0–P3 (see "Immediate — Delta audit findings" above): S1 (P0 —
-registry signature binding) **FIXED (2026-08-14)**; S2 **FIXED (2026-08-18,
-PR #35)**; S3/PERF-1/PERF-2 (P1),
-UX-1/S5/UX-2/PERF-3 (P2), PERF-4/UX-3/UX-4/S4 (P3) remain **OPEN**. S1 was
-the only one touching the trust anchor; the rest are independent and can land
-in any order.
+priorities P0–P3 (see "Immediate — Delta audit findings" above). As of
+2026-08-26 only three remain open: **UX-1**, **S5** (both P2, S5 gated on
+UX-1), **PERF-3** (P2) — plus the wire-crate remainder of **PERF-4**
+(CRC dedup + zstd offload, needs a `vynkor-wire` release). Shipped: S1
+(2026-08-14), S3 (PR #20), S2 (PR #35), PERF-1 (PR #68), PERF-2 (PR #70),
+UX-2/UX-4 (2026-08-24), UX-3 (PR #68); PERF-4 partial (PR #68).
 
 ## Definition of Done
 

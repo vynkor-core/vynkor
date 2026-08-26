@@ -22,16 +22,20 @@ Method: three parallel read-only code-audit passes. Findings below are deduplica
 `ROADMAP.md` ("Immediate — Delta audit findings") with priorities P0–P3.
 Security: **S1** (Medium, P0 — registry signature doesn't bind `status`/
 `archive_url` → revocation bypass + download redirect) **— FIXED 2026-08-14**;
-**S2** (Low-Med, P1 —
-events DB in `/tmp/veyron`), **S3** (Low, P1 — RUSTSEC-2026-0204
-`crossbeam-epoch`), **S5** (Low, P2 — internals leak into plugin-facing
-errors), **S4** (Low, P3 — `anyhow`/`number_prefix` advisories) remain OPEN.
+**S2** (Low-Med, P1) **— FIXED 2026-08-18, PR #35**, **S3** (Low, P1)
+**— FIXED 2026-08-14, PR #20**, **S5** (Low, P2 — internals leak into
+plugin-facing errors; gated on UX-1) and **S4** (Low, P3 — advisories)
+**— FIXED 2026-08-21** remain: only S5 is still OPEN.
 Performance: **PERF-1**/**PERF-2** (Medium, P1 — router blocking sends; sync
-SQLite on the async runtime), **PERF-3** (Low-Med, P2 — per-message clones +
-O(n) scans), **PERF-4** (Low, P3 — double CRC / sync zstd / `/proc` reads /
-WS copies). UX: **UX-1** (Medium, P2 — body-less REST errors, 200-on-failure),
-**UX-2** (Low-Med, P2 — Debug repr leaks), **UX-3**/**UX-4** (Low, P3 —
-config validation, CLI polish). M7 remains deferred.
+SQLite on the async runtime) **— both FIXED 2026-08-26 (PRs #68/#70)**,
+**PERF-3** (Low-Med, P2 — per-message clones +
+O(n) scans; OPEN), **PERF-4** (Low, P3 — double CRC / sync zstd / `/proc` reads /
+WS copies) **— PARTIAL 2026-08-26 (PR #68: watchdog `/proc` + ping off the
+async task; WS copy closed non-issue; CRC/zstd deferred to a wire release)**.
+UX: **UX-1** (Medium, P2 — body-less REST errors, 200-on-failure; OPEN),
+**UX-2** (Low-Med, P2 — Debug repr leaks) **— FIXED 2026-08-24**, **UX-3**
+(Low, P3 — config validation) **— FIXED 2026-08-26 (PR #68)**, **UX-4**
+(Low, P3 — CLI polish) **— FIXED 2026-08-24**. M7 remains deferred.
 
 ---
 
@@ -320,6 +324,11 @@ audit findings", priorities P0–P3).
   IPC fabric.
 - **Fix:** `try_send` + bounded overflow handling, or a per-connection send
   task.
+- **Status (2026-08-26): FIXED (PR #68).** `send_envelope`/`send_error`/
+  `send_register_reject` are sync + `try_send`; a full channel drops the
+  reply (`kernel_replies_dropped_total` + `warn!`), closed logs `debug`.
+  Regression test saturates a peer channel and asserts router liveness.
+  Watchdog ping got the same treatment (`watchdog_pings_dropped_total`).
 
 ### PERF-2. Synchronous SQLite + std Mutex on the async runtime in the router path (Medium, P1)
 
@@ -330,6 +339,12 @@ audit findings", priorities P0–P3).
 - **Impact:** blocking SQLite writes under a std mutex on tokio workers in
   the hottest path (every event publish / ack).
 - **Fix:** `tokio::task::spawn_blocking` or a dedicated writer task.
+- **Status (2026-08-26): FIXED (PR #70).** Async wrappers
+  (`persist_async`/`mark_delivered_async`) via `spawn_blocking`, awaited to
+  keep outbox persist-before-deliver order; retry-worker sweep batched into
+  one blocking task per tick. Sync methods unchanged for non-async callers.
+  Same PR isolates `SdkHarness` `data_dir` per port (shared user-dir
+  `events.db` let stale pending events redeliver across tests).
 
 ### PERF-3. Per-message full `PluginEntry` clones + O(n) registry scans (Low-Med, P2)
 
@@ -349,6 +364,11 @@ audit findings", priorities P0–P3).
   (double payload copy per WS frame)
 - **Fix:** drop the redundant second CRC; offload zstd; move `/proc` reads off
   the async runtime.
+- **Status (2026-08-26): PARTIAL (PR #68).** Watchdog `/proc` sweep batched
+  into one `spawn_blocking`; ping `try_send`. WS "double payload copy" closed
+  non-issue (`Arc<[u8]>` payloads since wire 0.2.0 — already single-copy).
+  CRC dedup + zstd offload live in `vynkor-wire/src/framing.rs` — deferred to
+  a wire release.
 
 ### UX-1. REST errors are bare `StatusCode` with no body; lie-prone statuses (Medium, P2)
 
@@ -364,6 +384,8 @@ audit findings", priorities P0–P3).
 - **Files:** `src/api/routes.rs:59` (`PluginInfo.state = format!("{:?}",
   e.state)` — a Rust Debug enum name is the public field)
 - **Fix:** stable, documented string/enum values.
+- **Status (2026-08-24): FIXED** — shared `registry::plugin_state_str()`
+  (lowercase) is the single source across REST and kernel `list_plugins`.
 
 ### UX-3. Config validation gaps + silent parse-error swallowing (Low, P3)
 
@@ -374,12 +396,18 @@ audit findings", priorities P0–P3).
   (non-start subcommands `.unwrap_or_default()` on config load errors)
 - **Fix:** consistent validation + warnings; surface load errors to all CLI
   subcommands, not just `start`.
+- **Status (2026-08-26): FIXED (PR #68).** Unknown `restart:` warns before
+  the `on-failure` fallback; `log_level` sanitized in
+  `try_init`/`set_log_level` (warn + `info` fallback); config.yaml/README
+  aligned to default port 8000; non-start CLI commands propagate load errors.
 
 ### UX-4. CLI polish (Low, P3)
 
 - **Files:** `src/cli/mod.rs` (sparse subcommand `about` text, hardcoded
   version string), `src/cli/plugin.rs:135` (`vyn plugin logs` prints the raw
   JSON array; mixed ✓/⚠/plain output style)
+- **Status (2026-08-24): FIXED** — version from `CARGO_PKG_VERSION`, clap
+  `about` on every subcommand, `vyn plugin logs` renders line-per-entry.
 
 **Confirmed sound on re-check (delta):** MAC scheme + header coverage, fragment
 reassembly bounds, UDS 0o600 + non-socket refusal, JWT min-secret + HS256-only,
@@ -453,7 +481,10 @@ findings below are **OPEN** (2026-08-16); fix plan in `docs/DUMB_CORE_AUDIT.md`.
 - **Files:** `src/events/store.rs` (single table `events(event_id, event_type, payload_json, status, created_at, retry_count)`, `:17-26`), `src/events/bus.rs` (`persist` on publish `:84-89`, retry worker `:180-200`), `src/kernel/orchestrator.rs:91` (opens at boot; failure non-fatal), `src/ipc/protocol.rs:1024-1028` (EventAck → `mark_delivered`)
 - **Issue:** the DB is a **delivery outbox for at-least-once event delivery** — infrastructure, not application state (the plugin registry is honestly in-memory DashMap; marketplace state is JSON files). But the manifesto's literal "no databases" wording is violated; `payload_json` BLOB transiently stores full plugin event payloads (bounded: 1h retention prune); open audit items S2 (world-writable `/tmp` default `data_dir`) and PERF-2 (sync rusqlite under `std::sync::Mutex` on tokio workers) sit on this path.
 - **Fix:** amend the manifesto to carve out the delivery outbox explicitly ("no databases *for application state*; the event-delivery outbox is an exception"); keep the DB; close S2 + PERF-2 (0o700 private runtime dir + `spawn_blocking`/dedicated writer task).
-- **Status (2026-08-16): OPEN (manifesto wording + S2/PERF-2).**
+- **Status (2026-08-26): CLOSED.** All three legs shipped: manifesto carve-out
+  landed (`2f47d5f`); S2 fixed (PR #35, 2026-08-18); PERF-2 fixed (PR #70,
+  2026-08-26). Retention documented in README §1 ("bounded 1h retention") +
+  the `event_retention_secs` knob in `config.yaml`.
 
 **Confirmed dumb-core-clean (do not re-litigate without new evidence):** zero-parse
 frame routing + MAC + fragmentation (`src/ipc`, `wire/`), process supervision
@@ -509,9 +540,9 @@ Remaining open:
 
 Delta (2026-08-14) ordering (priorities P0–P3, tracked in `ROADMAP.md`):
 1. **P0 — S1** (registry signature must bind the full entry: `status`/`archive_url`/compat). Trust-anchor correctness; everything else waits. **FIXED 2026-08-14.**
-2. **P1 — S3** (one-command `crossbeam-epoch` CVE fix), **S2** (`data_dir` off shared /tmp — **FIXED 2026-08-18, PR #35**), **PERF-1** (router kernel replies off the shared-task `.send().await`), **PERF-2** (event-store SQLite off the async runtime).
-3. **P2 — UX-1** (JSON error envelope + honest stop status), **S5** (stable wire error codes), **UX-2** (stable `PluginInfo.state`), **PERF-3** (`Arc<PluginEntry>` + action→provider index).
-4. **P3 — PERF-4** (double CRC / sync zstd / `/proc` reads / WS copies), **UX-3** (config validation consistency), **UX-4** (CLI polish), **S4** (dependency advisories).
+2. **P1 — S3** (one-command `crossbeam-epoch` CVE fix — **FIXED 2026-08-14, PR #20**), **S2** (`data_dir` off shared /tmp — **FIXED 2026-08-18, PR #35**), **PERF-1** (router kernel replies off the shared-task `.send().await` — **FIXED 2026-08-26, PR #68**), **PERF-2** (event-store SQLite off the async runtime — **FIXED 2026-08-26, PR #70**). All P1 items shipped.
+3. **P2 — UX-1** (JSON error envelope + honest stop status; OPEN), **S5** (stable wire error codes; OPEN, gated on UX-1), **UX-2** (stable `PluginInfo.state` — **FIXED 2026-08-24**), **PERF-3** (`Arc<PluginEntry>` + action→provider index; OPEN).
+4. **P3 — PERF-4** (**PARTIAL 2026-08-26**: watchdog `/proc` + ping shipped, WS copy closed non-issue, CRC/zstd deferred to a wire release), **UX-3** (**FIXED 2026-08-26, PR #68**), **UX-4** (**FIXED 2026-08-24**), **S4** (**FIXED 2026-08-21**).
 
 ---
 
@@ -591,6 +622,7 @@ Delta (2026-08-14) ordering (priorities P0–P3, tracked in `ROADMAP.md`):
 
 **C3. `Mutex<Connection>` в `events/store.rs:9` (Medium — дублирует PERF-2).**
 - Синхронный `rusqlite` под `std::sync::Mutex` блокирует tokio worker на каждом `publish`/`ack`. Нужно `spawn_blocking` или `sqlx`/dedicated writer task. `unwrap_or_else(|p| p.into_inner())` глушит poison — логируй.
+- **Закрыто 2026-08-26:** PERF-2 (PR #70) — async-обёртки через `spawn_blocking`; poison уже логируется через общий `recover_poison` (MA-12).
 
 **C4. `api/websocket.rs:229` дублирует `veyron_wire` фрейминг (Low-Med).**
 - Кастомный `parse_frame` без `COMPRESSED/FRAGMENTED` — любой фикс фрейминга правится в 2 местах. Реюзать `veyron_wire::framing::read_frame` или вынести WS-фрейминг в wire.
@@ -618,7 +650,7 @@ Nits этого аудита:
 **P0 (до след. релиза):**
 1. Разбить `ipc/protocol.rs` и `marketplace/registry.rs` — review невозможен.
 2. Вынести `target_bytes/frame_target/build_frame` и `resolve_*_url` в `ipc/helpers` / `utils/url`.
-3. Пофиксить `events/store.rs` — `spawn_blocking` для sqlite (дубль PERF-2).
+3. ~~Пофиксить `events/store.rs` — `spawn_blocking` для sqlite (дубль PERF-2).~~ **Готово 2026-08-26 (PR #70).**
 4. Унифицировать `auth/jwt::validate() -> VeyronError`, заменить `thread_rng`.
 
 **P1 (гигиена):**
