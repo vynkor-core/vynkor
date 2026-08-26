@@ -24,8 +24,9 @@ pub struct PluginDef {
     /// every plugin, not just sandboxed ones.
     #[serde(default)]
     pub max_procs: Option<u64>,
-    /// RLIMIT_AS cap in MiB. Unset = `runner::DEFAULT_MAX_VMEM_MB`. Applied
-    /// to every plugin, not just sandboxed ones.
+    /// RLIMIT_AS cap in MiB. Unset = `runner::DEFAULT_MAX_VMEM_MB` (2048).
+    /// 0 = unlimited (RLIM_INFINITY). Applied to every plugin, not just
+    /// sandboxed ones.
     #[serde(default)]
     pub max_vmem_mb: Option<u64>,
     /// Permissions granted to this plugin by the operator. Any permission declared

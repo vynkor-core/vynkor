@@ -62,6 +62,27 @@ fn envelope_message_id(frame: &Frame) -> String {
         .unwrap_or_default()
 }
 
+/// Throttled connections drop further messages without a reply to cap
+/// amplification (VULN-007). Provider replies must be exempt or a burst of
+/// preceding errors (e.g. many `tts_speak` audio chunk forwards denied by
+/// `ipc_targets`) would stall the caller: the final `ActionResponse` would
+/// be silently dropped, exactly the supervised-stall observed for sherpa
+/// TTS. `Pong` is also exempt or the watchdog would SIGKILL a throttled
+/// plugin that is otherwise healthy.
+fn is_throttle_exempt(frame: &Frame) -> bool {
+    let Ok(env) = Envelope::decode(frame.payload.as_ref()) else {
+        return false;
+    };
+    matches!(
+        env.payload,
+        Some(envelope::Payload::ActionResponse(_))
+            | Some(envelope::Payload::ActionResponseChunk(_))
+            | Some(envelope::Payload::ActionRequestChunk(_))
+            | Some(envelope::Payload::SessionClose(_))
+            | Some(envelope::Payload::Pong(_))
+    )
+}
+
 pub struct MessageRouter;
 
 impl MessageRouter {
@@ -244,8 +265,16 @@ impl MessageRouter {
             };
 
             if error_counts.get(&conn_id).map(|(c, _)| *c).unwrap_or(0) >= max_conn_errors {
-                counter!("ipc_throttled_messages_total").increment(1);
-                continue;
+                if is_throttle_exempt(&msg.frame) {
+                    debug!(
+                        conn_id,
+                        throttled = true,
+                        "throttled connection: allowing exempt message through"
+                    );
+                } else {
+                    counter!("ipc_throttled_messages_total").increment(1);
+                    continue;
+                }
             }
 
             // D-10: hop-0 trace log. `envelope_message_id` is a best-effort

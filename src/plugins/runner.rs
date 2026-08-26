@@ -18,8 +18,10 @@ use tracing::{info, trace, warn};
 /// per-plugin via `max_procs`.
 pub const DEFAULT_MAX_PROCS: u64 = 1024;
 /// Default cap on virtual memory in MiB (RLIMIT_AS) when a plugin doesn't
-/// configure `max_vmem_mb`.
-pub const DEFAULT_MAX_VMEM_MB: u64 = 512;
+/// configure `max_vmem_mb`. 0 = unlimited (RLIM_INFINITY). Raised from 512
+/// (2026-08-26) because ONNX Runtime reserves ~500 MiB of virtual address
+/// space at init — the old default starved tts/speech models on mmap.
+pub const DEFAULT_MAX_VMEM_MB: u64 = 2048;
 
 /// Component name (under the delegated cgroup root) holding all per-plugin
 /// pids scopes.
@@ -100,17 +102,25 @@ pub fn apply_resource_limits(
 ) -> io::Result<()> {
     use nix::sys::resource::{setrlimit, Resource};
 
-    let max_vmem_bytes = max_vmem_mb * 1024 * 1024;
-
     let joined_cgroup = pids_cgroup
         .map(|path| join_pids_cgroup(path).is_ok())
         .unwrap_or(false);
     if !joined_cgroup {
-        setrlimit(Resource::RLIMIT_NPROC, max_procs, max_procs)
+        warn!(
+            max_procs,
+            "no per-plugin cgroup pids scope — RLIMIT_NPROC not applied (would count uid-wide \
+             threads and break thread-heavy plugins); process accounting degraded"
+        );
+    }
+    if max_vmem_mb == 0 {
+        // 0 = unlimited — don't impose a new limit, just keep the inherited one.
+        // Raising to RLIM_INFINITY would require CAP_SYS_RESOURCE when the hard
+        // limit is already lowered (e.g. a previous test set 2048), so we skip.
+    } else {
+        let max_vmem_bytes = max_vmem_mb * 1024 * 1024;
+        setrlimit(Resource::RLIMIT_AS, max_vmem_bytes, max_vmem_bytes)
             .map_err(|e| io::Error::other(e.to_string()))?;
     }
-    setrlimit(Resource::RLIMIT_AS, max_vmem_bytes, max_vmem_bytes)
-        .map_err(|e| io::Error::other(e.to_string()))?;
     Ok(())
 }
 
@@ -414,5 +424,39 @@ mod tests {
             "+pids\n"
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn default_vmem_is_2048_and_zero_means_unlimited() {
+        assert_eq!(DEFAULT_MAX_VMEM_MB, 2048);
+        // 0 is documented as unlimited — apply_resource_limits must not cap
+        // vmem to 0 bytes (would instantly OOM on any mmap).
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn apply_resource_limits_zero_vmem_sets_infinity() {
+        // should succeed and set RLIMIT_AS to infinity without error
+        let result = apply_resource_limits(1024, 0, None);
+        assert!(
+            result.is_ok(),
+            "0 vmem should mean unlimited, not error: {result:?}"
+        );
+        // restore a sane limit for this test process so later tests aren't
+        // left with infinity (harmless, but keep deterministic)
+        let _ = apply_resource_limits(1024, 2048, None);
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn apply_resource_limits_without_cgroup_warns_but_succeeds() {
+        // no cgroup scope — must warn but still succeed (no NPROC cap)
+        let result = apply_resource_limits(64, 512, None);
+        assert!(result.is_ok());
+        // even with small max_procs (64) the fallback must NOT set NPROC
+        // to 64 — desktop sessions exceed that and would EAGAIN on thread spawn
+        let result2 =
+            apply_resource_limits(64, 512, Some(std::path::Path::new("/nonexistent/cgroup")));
+        assert!(result2.is_ok());
     }
 }

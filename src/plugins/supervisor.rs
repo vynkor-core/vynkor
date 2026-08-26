@@ -307,10 +307,8 @@ impl PluginSupervisor {
             .unwrap_or(crate::plugins::runner::DEFAULT_MAX_VMEM_MB);
         // DEBUG kill-switches (sherpa supervised-stall bisection): set on the
         // KERNEL process env, not per plugin.
-        let dbg_skip_cgroup =
-            std::env::var("VYN_DEBUG_SKIP_CGROUP").as_deref() == Ok("1");
-        let dbg_skip_rlimits =
-            std::env::var("VYN_DEBUG_SKIP_RLIMITS").as_deref() == Ok("1");
+        let dbg_skip_cgroup = std::env::var("VYN_DEBUG_SKIP_CGROUP").as_deref() == Ok("1");
+        let dbg_skip_rlimits = std::env::var("VYN_DEBUG_SKIP_RLIMITS").as_deref() == Ok("1");
         if dbg_skip_cgroup || dbg_skip_rlimits {
             warn!(
                 "DEBUG: resource-limit bisection active (skip_cgroup={dbg_skip_cgroup}, skip_rlimits={dbg_skip_rlimits})"
