@@ -1,5 +1,7 @@
 # VYNM — marketplace extraction plan (F1 / DC-1)
 
+> **Note (2026-08-28):** historical snapshot at wire `0.2.4–0.2.6` era — now `vynkor-wire 0.0.2` proto `v1.7` (legacy `veyron-wire` still readable).
+
 Working plan for extracting the marketplace out of the kernel into a standalone
 `vynm` binary ("vynkor plugin manager"). Covers the verified coupling map, the
 architecture decision, the staged migration, and the multi-source registry

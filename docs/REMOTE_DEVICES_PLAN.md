@@ -1,8 +1,8 @@
 # Remote Devices — Design & Plan
 
-Status: **partially shipped** — D-01..D-14 shipped (2026-08-14..2026-08-16, proto v1.6), D-15..D-23 deferred. Design decisions remain valid; kernel implementation lives in REMOTE_DEVICES_ROADMAP.md.
+Status: **partially shipped** — D-01..D-14 shipped (2026-08-14..2026-08-16, proto v1.6), E-01 per-device credentials shipped as proto v1.7 (2026-08-22), D-15..D-23 deferred. Design decisions remain valid; kernel implementation lives in REMOTE_DEVICES_ROADMAP.md. Design decisions remain valid; kernel implementation lives in REMOTE_DEVICES_ROADMAP.md.
 
-Goal: let a single Veyron kernel (running on the user's own machine) act as a
+Goal: let a single Vynkor kernel (renamed from Veyron 2026-08-22, running on the user's own machine) act as a
 **hub** that additional "device" clients (phone, second PC, laptop) connect to
 over the network. Devices host their own capabilities, are addressed/routed
 through the kernel, and are permission-limited per device.
@@ -25,7 +25,7 @@ through the kernel, and are permission-limited per device.
 
 ## 2. Model
 
-- **Main kernel** (user's PC): full Veyron, unchanged core. Hosts the AI agent
+- **Main kernel** (user's PC): full Vynkor (formerly Veyron), unchanged core. Hosts the AI agent
   (Kairo), `database`, `secrets`, heavy compute.
 - **Device agents**: phone / second PC / laptop. Each connects over WS (JWT)
   and registers its capabilities as namespaced plugins:
@@ -54,7 +54,7 @@ Flow: `pc-plugin → kernel → Kairo → kernel → phone-plugin`
 
 ## 5. Kernel changes (additive, ~1–2 weeks)
 
-1. **proto** — **DONE (D-01, 2026-08-14, proto v1.6):** `PluginRegister` +=
+1. **proto** — **DONE (D-01, 2026-08-14, proto v1.6; E-01 bumped to v1.7 2026-08-22):** `PluginRegister` +=
    `device_id`, `os` (enum), `arch`, `os_version`, `capabilities[]`,
    `protocol_version`, `user_id`. `PluginManifest` += `platforms[]`
    (install filtering) + `action_specs[]` (tool schema). New `DeviceInfo`.
@@ -206,12 +206,12 @@ story (open question #1).
 - Physics: at least one endpoint must be reachable. In hub-and-spoke only the
   host needs it (clients dial out).
 - **Now**: free Tailscale — zero code/ops, works through CGNAT, end-to-end
-  encrypted (the coordination server sees device metadata, not Veyron frames).
+  encrypted (the coordination server sees device metadata, not Vynkor frames).
 - **Later (self-hosted)**: headscale as a plugin on the host
   (protocol-compatible with Tailscale clients) — still needs one reachable
   address, so a cheap VPS if the home is behind CGNAT. Direct WireGuard works
   only with a real/forwarded IP.
-- Zero kernel/protocol change — a deployment overlay under Veyron.
+- Zero kernel/protocol change — a deployment overlay under Vynkor (formerly Veyron).
 
 ## 20. Notification delivery (host → phone)
 

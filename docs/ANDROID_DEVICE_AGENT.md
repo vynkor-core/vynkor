@@ -23,7 +23,7 @@ release signing (D-16), F-Droid metadata.
 ## Stack: Kotlin + Rust (UniFFI)
 
 - **Rust core** owns everything protocol/backend. Reuses **`vynkor-wire`
-  (currently `veyron-wire`) types only** — 44-byte frame framing,
+  (now `vynkor-wire 0.0.2`, proto v1.7 — legacy `veyron-wire 0.2.3` still readable) types only** — 44-byte frame framing,
   HMAC-SHA256 frame-MAC, protobuf `Envelope`. **Do NOT pull `vynkor-sdk`
   (currently `veyron-sdk-rust`)**: the agent is a device bridge (like the D-06
   bridge), not a `Plugin` — the SDK's `Plugin` trait brings nothing we need.

@@ -1,5 +1,7 @@
 # Veyron ROADMAP — vynm marketplace extraction (F1 / DC-1)
 
+> **Note (2026-08-28):** historical snapshot at wire `0.2.4–0.2.6` era — now `vynkor-wire 0.0.2` proto `v1.7` (legacy `veyron-wire` still readable).
+
 **Baseline:** 2026-08-21 · Kernel `0.1.0` · `veyron-wire` `0.2.3` (proto v1.6)
 **Branch:** `develop`
 **Source:** architecture + decisions in `docs/VYNM_PLAN.md` (authoritative);
