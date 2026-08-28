@@ -70,12 +70,13 @@ All repos live in `vynkor-core`. The wire protocol in `vynkor-wire` is the singl
 ## Get started in 60 seconds
 
 ```bash
-cargo install vynkor-manager          # → vynm
 git clone https://github.com/vynkor-core/vynkor && cd vynkor
 cargo build --release                 # → target/release/vyn
 ./target/release/vyn start --foreground --debug
 # in another shell
 vyn status
+# vynm is the plugin manager (separate repo):
+# git clone https://github.com/vynkor-core/vynkor-manager && cargo build --release # → target/release/vynm
 vynm search ai
 vynm install ai network database
 vyn device connect --name my-phone    # → QR, scan with Android app
