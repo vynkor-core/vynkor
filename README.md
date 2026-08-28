@@ -1,192 +1,99 @@
-# Veyron
+# Vynkor
 
-**A Unix-native plugin kernel written in Rust.** Routes bytes between isolated processes over Unix Domain Sockets. Knows nothing about your business logic. Does not care about AI.
+**Your personal cloud. One kernel, any language, any device.**
 
-> **Two projects. Clear boundaries.**
->
-> - **Veyron** — the "dumb" core. Routes frames, supervises processes, enforces permissions.
-> - **Kairo** — a smart plugin built *on top of* Veyron. AI agent, memory, voice. Uses the kernel as infrastructure.
+> A tiny Rust daemon that turns a laptop into a private cloud. Plugins — AI, storage, automations — run as isolated processes and talk through Vynkor. Your phone becomes a remote device. No vendor, no cloud account.
 
----
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    External Clients                         │
-│           (browser, mobile app, remote sensor)              │
-└──────────────────────────┬──────────────────────────────────┘
-                           │ WebSocket / HTTP  (JWT required)
-                           │
-┌──────────────────────────▼──────────────────────────────────┐
-│                   Veyron Core (Rust)                        │
-│                                                             │
-│  ┌─────────────┐  ┌──────────────┐  ┌────────────────────┐  │
-│  │ API Gateway │  │ Message      │  │ Plugin Supervisor  │  │
-│  │ (Axum WS/   │  │ Router       │  │ (spawn, restart,   │  │
-│  │  HTTP)      │  │ (target-key  │  │  SIGTERM, watchdog)│  │
-│  └──────┬──────┘  │  routing,    │  └────────────────────┘  │
-│         │         │  zero-parse) │                          │
-│         └────────►│              │  ┌────────────────────┐  │
-│                   └──────┬───────┘  │ Plugin Registry    │  │
-│                          │          │ (DashMap, pong     │  │
-│                          │          │  timestamps)       │  │
-│                          │          └────────────────────┘  │
-└──────────────────────────┼──────────────────────────────────┘
-                           │ Unix Domain Sockets (UDS)
-         ┌─────────────────┼────────────────────┐
-         │                 │                    │
-┌────────▼───────┐ ┌───────▼───────┐ ┌──────────▼─────────┐
-│  Plugin: Kairo │ │ Plugin: STT   │ │  Plugin: Weather   │
-│  (Rust)        │ │ (Python)      │ │  (any language)    │
-│  AI agent      │ │ Speech-to-text│ │                    │
-└────────────────┘ └───────────────┘ └────────────────────┘
-```
-
-**Data flow:** `Client → WebSocket (JWT validated) → Veyron Core → UDS frame → Plugin → UDS frame → Core → Client`
-
-The core never inspects the payload. It reads 44 bytes, extracts the target field, and routes. That is all.
+[![Kernel 0.1.0](https://img.shields.io/badge/kernel-0.1.0-blue)](ROADMAP.md) [![Proto v1.7](https://img.shields.io/badge/proto-v1.7-green)](../vynkor-wire/proto/vynkor_protocol.proto) [![License MIT/Apache](https://img.shields.io/badge/license-MIT%2FApache--2.0-orange)](LICENSE-MIT) [![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-red)](Cargo.toml)
 
 ---
 
-## The Veyron Manifesto
+## Why Vynkor?
 
-These rules are non-negotiable. PRs that violate them are rejected.
+**You keep control.** AI, files and automations run on your host. No data leaves unless a plugin you allowed sends it. Offline works.
 
-### 1. Dumb Core
+**Any language you already know.** Same `Plugin` trait in Rust, Python and C++ — one protocol, one `proto` file. Prototype in Python, ship in Rust.
 
-The kernel contains **no** business logic, **no** AI models, **no** databases for application state. The single exception is the event-delivery outbox (`<data_dir>/events.db`, SQLite, at-least-once delivery, see `docs/DUMB_CORE_AUDIT.md` DC-5): not application state, bounded 1h retention, infrastructure only. It is a high-speed byte router and process supervisor. All intelligence lives in plugins.
+**Your phone is a plugin.** Android device-agent exposes `battery`, `geo`, `clipboard`, `notifications`, `mic`/`speaker` as `my-phone.geo`, `my-phone.mic` — call them like any local plugin.
 
-### 2. UDS-Only Intra-Host IPC
+**One command to extend.** `vynm install ai` fetches a signed archive, verifies it, and drops a `plugins.d/ai.yaml`. No kernel rebuild, no manual wiring.
 
-Plugin↔kernel communication uses Unix Domain Sockets exclusively. No TCP, no Redis, no RabbitMQ, no message queues. The kernel's UDS socket bypasses the TCP/IP stack entirely — lower latency, stricter access control (file permissions `0o600`).
-
-### 3. Binary Frame Protocol
-
-Every message on UDS is wrapped in a strict 44-byte header:
-
-```
- 0        2        4        8                            40       44
- ├────────┼────────┼────────┼────────────────────────────┼────────┤
- │ Magic  │ Flags  │ Length │ Target (32 bytes, UTF-8)   │ CRC32  │ Payload…
- │ 0x5652 │ 2 B    │ 4 B BE │ plugin_id or "kernel"      │ 4 B    │
- └────────┴────────┴────────┴────────────────────────────┴────────┘
-```
-
-- **Magic `0x5652`** ("VR") — bad magic closes connection instantly, no further read.
-- **Zero-parse routing** — the core routes by the 32-byte target field *without deserializing the Protobuf payload*. A frame destined for `"weather-plugin"` is forwarded with zero copies and zero JSON parsing.
-- **CRC32** — computed over payload only. Corrupt frame → `FrameCrcMismatch` → the kernel **drops the connection** (corruption on a local UDS is never line noise; a supervised plugin is restarted per its restart policy).
-- **Flag Bit 0 (`0x0001`)** — `FLAG_MAC_PRESENT`: a 32-byte HMAC-SHA256 tag is appended after the payload. Active on all authenticated connections.
-- **Flag Bit 1 (`0x0002`)** — `FLAG_COMPRESSED`: payloads ≥ 64 KiB are transparently zstd-compressed on the wire. See `docs/FRAMING.md` for the full flag table and MAC interaction.
-- **Payload** — Protobuf `Envelope` (see `proto/veyron_protocol.proto`). The kernel only decodes it when `target == "kernel"`.
-
-### 4. Security by Default
-
-- JWT validation is mandatory. The kernel refuses to start without `jwt_secret` in config unless the operator explicitly sets `allow_no_auth: true`.
-- WebSocket clients present their JWT in the `Sec-WebSocket-Protocol` header (`veyron, <token>`) — validated before the upgrade handshake completes.
-- Per-session HMAC-SHA256 frame authentication activates after registration. A single tampered byte kills the connection.
-- **Per-device credentials (E-01):** remote devices never receive the host master `jwt_secret`. `vyn device connect` issues a unique per-device secret + a device-scoped JWT via the pairing QR, stores the secret encrypted at rest under a key derived from the master (`<data_dir>/devices.json`, AES-256-GCM), and derives each device session's frame-MAC key from that credential instead of the master. Devices can be listed and revoked (`vyn device list` / `vyn device revoke <id>`); revoked or expired devices are rejected at the WebSocket upgrade and at registration. Rotating `jwt_secret` invalidates all paired devices — re-pair (see docs/RFC_E01_PER_DEVICE_KEYS.md in the Android repo for the full design).
-- Permissions are default-deny. A plugin that wants to send frames to another plugin must declare `PERMISSION_IPC_SEND` *and* name the target in its `ipc_targets` allowlist.
-
-### 5. Process Isolation
-
-Every plugin runs in a separate OS process. The kernel spawns it, injects `VEYRON_SOCKET_PATH`, and supervises it. On Linux with `sandbox: true`, the plugin runs in private **user + network + PID + mount namespaces**: `pre_exec` switches into a private user namespace (so it works without CAP_SYS_ADMIN) and a private network namespace, while a shim process (`vyn __shim`) creates a fresh PID namespace and private `/proc` and forks the plugin into it as PID 1. Resource caps `RLIMIT_NPROC=1024` and `RLIMIT_AS=512MiB` apply by default, with per-plugin `pids.max` accounting when cgroup v2 is available. A shim is required because the kernel cannot move the exec'd plugin into a PID namespace from its own spawn path: a process with a pending `pid_for_children` namespace cannot create threads, which kills every multithreaded plugin with EINVAL. The shim forwards lifecycle signals to the plugin and mirrors its exit status, so supervision (restart, SIGTERM shutdown, watchdog) is unchanged — inside the sandbox the plugin sees only its own processes and can no longer enumerate or signal host/other-plugin processes. A plugin crash does not affect other plugins or the kernel.
-
-Optionally, a sandboxed plugin's filesystem access is restricted with the Landlock LSM (R9-03): `max_fs_access: none` (exec requirements + `writable_paths` only) or `read-only` (+ `readonly_paths`) denies reads/writes of everything else with `EACCES`, enforced by the shim in the plugin's `pre_exec` before it runs — a plugin that cannot be restricted is killed, never run unrestricted. `max_fs_access` is only honored when `sandbox: true`.
-
-Every sandboxed plugin additionally runs under a seccomp syscall filter (R9-04): a tight denylist of kernel-escape-capable syscalls — `ptrace`, `bpf`, kernel keyrings (`keyctl`/`add_key`/`request_key`), module loading, `reboot`/`kexec_*`, mount-namespace escape (`mount`, `pivot_root`, `chroot`, `setns`, ...), file-handle Landlock bypass (`open_by_handle_at`/`name_to_handle_at`), cross-process memory, `perf_event_open`, `userfaultfd`, `io_uring_*` — is installed in the plugin's `pre_exec` (after Landlock, before it runs) via the pure-Rust `seccompiler` crate. A denied syscall kills the plugin with `SIGSYS`; a plugin that cannot be filtered is killed, never run unfiltered. Everything else stays allowed, so arbitrary third-party plugins keep working without a per-SDK allowlist.
+**Built to be boring (in a good way).** The kernel only routes 44-byte frames, supervises processes and checks permissions. If a plugin crashes, only that plugin restarts. Zero-parse routing, HMAC-signed frames, default-deny permissions, Landlock + seccomp sandbox on Linux.
 
 ---
 
-## Getting Started
+## How it works
 
-### Prerequisites
+```
+Browser ──┐
+Phone ────┼─ wss (TLS + per-device JWT) ──→  Vynkor (vyn)  ── UDS (0o600) ──→  Plugins
+Laptop ───┘                                  routing + auth     44-byte frame: Magic|Flags|Target|CRC
+                                                                  ai · network · stt/tts · database · secrets · …
+```
 
-- Rust 1.85+ (`rustup update stable`) — matches `veyron-wire`'s MSRV, which the kernel depends on
-- Linux or macOS (Linux required for full sandbox isolation)
+1. Plugin registers over UDS: `PluginRegister { plugin_id, manifest }` → `PluginRegisterAck { session_nonce }`.
+2. Kernel derives a per-session HMAC key and enforces `ipc_targets` + permissions.
+3. Clients talk over `wss://host:port/ws` (`Sec-WebSocket-Protocol: vynkor, <jwt>`). Phone pairs by scanning a `vynkor://pair` QR.
 
-### Build
+The kernel never inspects the payload — it reads 32 bytes of `target` and routes.
+
+---
+
+## Ecosystem — one org, many repos
+
+All repos live in `vynkor-core`. The wire protocol in `vynkor-wire` is the single source of truth.
+
+| Repo | You need it when… |
+|---|---|
+| **`vynkor`** — kernel `vyn` | You run a host. `vyn start / status / logs`, `vyn device connect` (QR). |
+| **`vynkor-wire`** `0.0.2` | You build anything — framing, MAC, protobuf types. Everyone depends on it. |
+| **`vynkor-manager`** — `vynm` | You install plugins. `vynm search/install/remove/update`, signed registry at `~/.local/lib/vyn/plugins/`. |
+| **`vynkor-sdk`** (Rust) · **`vynkor-sdk-cpp`** · **`vynkor-sdk-python`** | You write a plugin. `impl Plugin { on_init, on_message, on_shutdown }`, `VynkorClient::send_action / publish_event`. |
+| **`vynkor-plugins`** | You want ready-made power. 30+ plugins: `ai` (multi-provider chat), `network` (guarded HTTP), `stt`/`tts`, `database` (KV/SQL), `secrets`, `scheduler`, `media`… |
+| **`vynkor-web`** | You want a UI. Marketplace + device list + plugin control (Vite + Tailwind). |
+| **`vynkor-client-android`** | You want your phone as a device. Pairs by QR, streams mic/speaker, exposes phone capabilities. |
+
+> One config `~/.config/vyn/config.yaml` for both `vyn` and `vynm`. Plugins live in `~/.local/lib/vyn/plugins/`, state in `~/.local/share/vyn/`, socket at `$XDG_RUNTIME_DIR/vyn.sock`. Legacy `~/.local/lib/veyron` and `VEYRON_*` env vars still read via shims (see `docs/VYN_PRODUCT_LAYOUT.md`).
+
+---
+
+## What you can do today — `0.1.0`
+
+- **Run plugins in isolation.** Supervised, auto-restart, resource limits (`512 MiB` / `1024` pids, cgroup `pids.max` + PID-namespace per plugin on Linux). One crash never takes the host down.
+- **Use any language.** `cargo add vynkor-sdk` / `pip install vynkor-sdk` — streaming actions (`ActionRequestChunk`/`ResponseChunk`), `publish_event`, `SessionClose` — same in Rust/Python/C++.
+- **Connect a phone in 10 seconds.** `vyn device connect --name my-phone` → QR with TLS cert pinning + encrypted `device_secret` (`AES-256-GCM`). `vyn devices`, `vyn device revoke <id>`, per-device JWT (`aud`/`jti`/`exp`).
+- **Install from a signed marketplace.** `vynm` fetches `registry.json`, verifies Ed25519 + sha256, checks kernel compat, writes `plugins.d/<slug>.yaml` drop-ins. Offline cache, no kernel marketplace code.
+- **Stay local by default, remote when you want.** `role: host` + Tailscale/headscale overlay — zero kernel change — or `role: client` bridge that mirrors local plugins as `device.<cap>`.
+
+---
+
+## Get started in 60 seconds
 
 ```bash
-git clone https://github.com/veyron-core/veyron
-cd veyron
-cargo build --release
-```
-
-The binary is at `target/release/vyn`.
-
-### Configure
-
-```yaml
-# config.yaml
-port: 8000
-# socket_path defaults to $XDG_RUNTIME_DIR/veyron.sock (never shared /tmp);
-# set explicitly only if you need a custom location.
-jwt_secret: "change-me-in-production"
-log_level: info
-
-# plugins_dir defaults to <config dir>/plugins.d/ — one file per plugin:
-```
-
-```yaml
-# plugins.d/my-plugin.yaml
-id: my-plugin
-binary: ./target/release/my_plugin
-restart: on-failure   # always | on-failure | never
-max_restarts: 5
-sandbox: true        # Linux only
-```
-
-Config problems surface loudly: an invalid `log_level` warns and falls back
-to `info`, an unknown `restart:` value warns and falls back to `on-failure`,
-and every CLI command except `start` fails with the load error instead of
-silently running on defaults (`start` proceeds on defaults with a warning so
-a broken config can never brick a running deployment).
-
-`vynm` (the [vynkor-manager](https://github.com/veyron-core/vynkor-manager)
-companion tool) installs plugins: it fetches a registry, verifies maintainer
-signatures + archive digests, extracts into `~/.local/lib/veyron/plugins/`,
-and writes the drop-in `plugins.d/<slug>.yaml`. The kernel itself ships no
-marketplace code — drop-ins are just files it reads.
-
-```bash
-cargo install vynkor-manager   # provides the vynm binary
-vynm install my-plugin         # same --config as the kernel
-```
-
-`vynm remove <slug>` deletes it; `vynm disable/enable <slug>` toggles
-auto-spawn by renaming the drop-in to `<slug>.yaml.disabled` (R10-04).
-The legacy `vyn plugin install/search/...` commands still work as
-delegation shims that exec `vynm` with forwarded args — they will be removed
-in stage 3. The legacy inline `plugins:` list in `config.yaml` also still
-works but is deprecated. SIGHUP re-reads config + drop-ins (surfacing parse
-errors / duplicate ids) but does not respawn the plugin set — restart the
-kernel to apply plugin changes.
-
-### Run
-
-```bash
-# Start in background (daemonizes)
-vyn start --config config.yaml
-
-# Start in foreground (dev mode)
-vyn start --foreground --debug
-
-# Check status
+cargo install vynkor-manager          # → vynm
+git clone https://github.com/vynkor-core/vynkor && cd vynkor
+cargo build --release                 # → target/release/vyn
+./target/release/vyn start --foreground --debug
+# in another shell
 vyn status
-
-# Tail logs
-vyn logs --lines 50
-
-# Stop
-vyn stop
+vynm search ai
+vynm install ai network database
+vyn device connect --name my-phone    # → QR, scan with Android app
 ```
 
-### Write a Plugin (Rust)
+**Next:** open `vynkor-web` or `vyn device list`, then from any plugin:
 
 ```rust
-use veyron_sdk::{Plugin, VeyronClient, VeyronError};
-use veyron::proto::veyron::{Envelope, PluginManifest};
+client.send_action("ai", "chat_completion", json!({ "prompt": "hello" })).await
+```
+
+---
+
+## Write a plugin
+
+```rust
+use vynkor_sdk::{Plugin, VynkorClient, VynkorError};
+use vynkor::proto::vynkor::{Envelope, PluginManifest};
 
 struct MyPlugin;
 
@@ -194,97 +101,81 @@ impl Plugin for MyPlugin {
     fn id(&self) -> &str { "my-plugin" }
     fn manifest(&self) -> PluginManifest { PluginManifest::default() }
 
-    async fn on_init(&mut self, _client: &mut VeyronClient) -> Result<(), VeyronError> {
-        Ok(())
+    async fn on_init(&mut self, _c: &mut VynkorClient) -> Result<(), VynkorError> { Ok(()) }
+    async fn on_message(&mut self, _env: Envelope) -> Result<Option<Envelope>, VynkorError> {
+        Ok(None) // return Some(envelope) to reply
     }
-    async fn on_message(&mut self, _env: Envelope) -> Result<Option<Envelope>, VeyronError> {
-        Ok(None) // return Some(envelope) to reply to the kernel
-    }
-    async fn on_shutdown(&mut self) -> Result<(), VeyronError> { Ok(()) }
+    async fn on_shutdown(&mut self) -> Result<(), VynkorError> { Ok(()) }
 }
 
-// MyPlugin.run().await connects via $VEYRON_SOCKET_PATH and registers.
+// MyPlugin.run().await — reads $VYN_SOCKET_PATH, registers, serves
 ```
 
-SDKs available: [`veyron-sdk-rust`](https://github.com/veyron-core/veyron-sdk-rust),
-[`veyron-sdk-cpp`](https://github.com/veyron-core/veyron-sdk-cpp), and
-[`veyron-sdk-python`](https://github.com/veyron-core/veyron-sdk-python) — all
-three support `send_action`, streaming actions (`send_action_streaming` +
-request/response chunks), `close_session`, and `publish_event`.
-
-Published packages:
+SDKs: [`vynkor-sdk`](https://github.com/vynkor-core/vynkor-sdk) · [`vynkor-sdk-cpp`](https://github.com/vynkor-core/vynkor-sdk-cpp) · [`vynkor-sdk-python`](https://github.com/vynkor-core/vynkor-sdk-python) — all support streaming actions and events.
 
 | Package | Registry |
 |---|---|
-| [`veyron-sdk`](https://crates.io/crates/veyron-sdk) | crates.io (Rust) |
-| [`veyron-wire`](https://crates.io/crates/veyron-wire) | crates.io (wire protocol types) |
-| [`veyron-sdk`](https://pypi.org/project/veyron-sdk/) | PyPI (Python) |
-
-```bash
-cargo add veyron-sdk    # Rust plugins
-pip install veyron-sdk  # Python plugins
-```
+| `vynkor-sdk` | crates.io (Rust) |
+| `vynkor-wire` | crates.io (wire types) |
+| `vynkor-sdk` | PyPI (Python) |
 
 ---
 
-## Project Structure
+## Security in one paragraph
+
+TLS on by default (auto self-signed `vyn-tls/`), `Sec-WebSocket-Protocol: vynkor, <jwt>` auth, per-device credentials instead of sharing the master `jwt_secret`, HMAC-SHA256 per frame after registration, default-deny `ipc_targets`, same-user IPC, sandboxed processes. Details: `docs/THREAT_MODEL.md`, `docs/FRAMING.md` (flag table), `AUDIT.md`.
+
+---
+
+## What is coming next
+
+Built for humans, not CLIs — the next wave is **zero-terminal onboarding and real-time UX**:
+
+- **One-tap pairing.** Single-use ticket QR (`v:2 {ws, ticket}`, 5-min TTL) — friend scans, kernel mints their JWT. Old QR still works.
+- **Real streaming.** Token-by-token `ai` stream + `cancel` stops billing, not just the typewriter.
+- **Announced models & agents.** `ai` lists `models[]`/`agents[]`, phone caches per profile — honest `unavailable` instead of guessing.
+- **Hands-free.** Wake-word on phone → assistant session <300 ms, `partial_transcript` → `turn_end` → `tts_interrupt`, mic → STT → capability or chat → TTS without opening chat.
+- **Trust you can see.** `capability_used {cap, ts, origin}` back to your phone.
+- **Hygiene.** Version negotiation, honest `device offline`, cert fingerprint in QR, per-device quota on `ai.chat`.
+
+Details and repo split per task: `docs/CLIENT_DRIVEN_SPLIT.md` + `docs/tasks/CD-00..CD-09`.
+
+---
+
+## Project layout
 
 ```
 src/
-├── kernel/         # Orchestrator: component wiring, shutdown sequencing
-├── api/            # Axum HTTP + WebSocket gateway
-├── auth/           # JWT validation, HMAC frame MAC, permission checks
-├── ipc/            # UDS server, framing, routing, connection handler
-├── plugins/        # Loader, manager, registry, supervisor, sandbox runner
-├── events/         # Event bus, at-least-once delivery store
-├── cli/            # `vyn` CLI (clap)
-└── utils/          # Config, logging, errors
-
-proto/
-└── veyron_protocol.proto   # Single source of truth for all IPC message types
+  kernel/  orchestrator + shutdown
+  api/     REST + WebSocket gateway
+  auth/    JWT + HMAC + permissions
+  ipc/     UDS framing + routing
+  plugins/ loader + registry + supervisor + sandbox
+  events/  bus + at-least-once store
+  cli/     vyn
+  utils/   config, logging
+docs/
+  VYN_PRODUCT_LAYOUT.md  paths & config discovery (authoritative)
+  FRAMING.md             flag bits + MAC interaction
+  PLUGIN_REGISTRY_SCHEMA.md  registry.json / plugin.json
+  CLIENT_DRIVEN_SPLIT.md client wave split by repo
 ```
 
 ---
 
-## Security
+## References
 
-Report vulnerabilities via GitHub Security Advisories (not public issues). See `AUDIT.md` for the current audit findings and score.
+- Frame format: `docs/FRAMING.md`
+- Registry schema: `docs/PLUGIN_REGISTRY_SCHEMA.md`
+- Product layout: `docs/VYN_PRODUCT_LAYOUT.md`
+- Protocol: `../vynkor-wire/proto/vynkor_protocol.proto` (vendored, single source of truth)
 
-Current posture: **pre-production**. Kernel core (framing, MAC, fragmentation, supervision) is solid and regression-tested; compressed-frame support works across all three SDKs (R5-01), and Rust/C++/Python SDKs now have full parity on `publish_event`, streaming actions, and session close (Phase 7). Remaining open items are tracked in `AUDIT.md` and `ROADMAP.md`.
+### Unpublished crates
 
----
-
-## Protocol Reference
-
-- **Frame format & flag bits:** `docs/FRAMING.md`
-- **Message schema:** `proto/veyron_protocol.proto` (single source of truth)
-- **Plugin registry schema:** `docs/PLUGIN_REGISTRY_SCHEMA.md`
-- **Audit:** `AUDIT.md`
-- **Roadmap:** `ROADMAP.md`
-
-### Consuming unpublished veyron crates
-
-`veyron-wire` and `veyron-sdk` (Rust) are normally pulled from crates.io.
-Between releases, the new versions may not be published yet — `Cargo.toml`
-then carries a `[patch.crates-io]` override resolving them from git. The
-version requirement stays in place; the patch only swaps the source:
-
-```toml
-[patch.crates-io]
-veyron-wire = { git = "https://github.com/veyron-core/veyron-wire", branch = "<branch>" }
-veyron-sdk   = { git = "https://github.com/veyron-core/veyron-sdk-rust", branch = "<branch>" }
-```
-
-Drop the section once the pinned versions are on crates.io. Branch pins
-must be replaced with `main`/tags before the branch is deleted.
+Between releases `Cargo.toml` may carry a `patch.crates-io` override to pull `vynkor-wire`/`vynkor-sdk` from git. The version requirement stays; the patch just swaps the source. Drop it once published.
 
 ---
 
 ## License
 
-Licensed under either of:
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
-- MIT license ([LICENSE-MIT](LICENSE-MIT))
-
-at your option.
+MIT or Apache-2.0, at your option — `LICENSE-MIT` / `LICENSE-APACHE`.

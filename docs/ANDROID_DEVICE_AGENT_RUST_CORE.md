@@ -157,14 +157,14 @@ Per capability `cap`:
 3. Read `PluginRegisterAck { accepted, session_nonce }`.
 4. Derive the per-session MAC key:
    `derive_session_key(jwt_secret, session_nonce, "<device_id>.<cap>")`
-   (`veyron_wire::mac::derive_session_key`, HKDF-SHA256).
+   (`vynkor_wire::mac::derive_session_key`, HKDF-SHA256).
 5. From then on every frame carries `FLAG_MAC_PRESENT` + `compute_tag(key,
    header, payload)`; inbound frames are MAC-verified with `verify_tag`.
 
 Reconnect + backoff mirrors the bridge (`BRIDGE_MAX_BACKOFF`); TLS pins the
 host's served certificate (same rule as the local `vyn` clients, D-07).
 
-Reused verbatim from `vynkor-wire` (currently `veyron-wire`): `write_frame_raw`,
+Reused verbatim from `vynkor-wire 0.0.2` (proto v1.7 — legacy `veyron-wire` 0.2.3 shim still present): `write_frame_raw`,
 `read_frame`, `serialize_header`, `Frame`, the `FLAG_*` constants,
 `derive_session_key`/`compute_tag`/`verify_tag`, and `proto::veyron::{Envelope,
 PluginRegister, PluginRegisterAck, AudioStreamChunk, ActionRequest, …}`.

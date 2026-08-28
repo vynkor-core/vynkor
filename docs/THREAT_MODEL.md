@@ -1,7 +1,7 @@
-# Veyron Threat Model
+# Vynkor Threat Model
 
-Date: **2026-08-15** · Phase 12 remote devices (D-01…D-10 shipped, baseline
-proto v1.6). Residual updated: S2 fixed (PR #35, 2026-08-18), S3 fixed (PR #20,
+Date: **2026-08-28** · Phase 12 remote devices (D-01…D-14 shipped, baseline
+proto v1.7 — E-01 per-device credentials). Residual updated: S2 fixed (PR #35, 2026-08-18), S3 fixed (PR #20,
 2026-08-14). Consolidates §10 (auth/channel security), §19 (host reachability)
 and §21 (AI tool-calling safety) of `docs/REMOTE_DEVICES_PLAN.md` into one
 focused threat model, so the security posture lives in a single place.
@@ -22,7 +22,7 @@ what is actually implemented, not a design wish-list.
 | JWTs + shared HS256 `jwt_secret` | kernel config + issued tokens | all identity and authorization |
 | Plugin registry + devices map | kernel memory (`DashMap`) | plugin topology and permissions |
 | Event bus + event store | kernel + SQLite `events.db` | at-least-once delivery state |
-| Plugin configs + credentials | `plugins.d/*.yaml`, env (`VEYRON_JWT_TOKEN`/`VEYRON_JWT_SECRET`) | the operator's grants |
+| Plugin configs + credentials | `plugins.d/*.yaml`, env (`VYN_JWT_TOKEN`/`VYN_JWT_SECRET` — legacy `VEYRON_*` still accepted as shim) | the operator's grants |
 | AI tool-calling surface (`action_specs`) | registry-served manifest data (D-08) | what the model can reach |
 | User data in flight | protobuf payloads through plugins | end-user content |
 
@@ -55,7 +55,7 @@ Denied by:
 
 Residual: brute force of a weak or leaked shared secret (no per-device
 revocation until D-18); low-severity dependency advisories (S4) and internal
-detail in plugin-facing errors (S5) aid recon. S2 (events DB in `/tmp/veyron`)
+detail in plugin-facing errors (S5) aid recon. S2 (events DB in per-user private dir — was `/tmp/veyron`, fixed PR #35)
 and S3 (`crossbeam-epoch` RUSTSEC) are closed: the event DB now lives in the
 per-user private runtime dir (0o700, PR #35, 2026-08-18) and `crossbeam-epoch`
 is at 0.9.20 (PR #20, 2026-08-14). All open items tracked in `AUDIT.md`.
@@ -147,7 +147,7 @@ schema it reads.
 
 | Control | What it does | Status | Ref |
 |---|---|---|---|
-| TLS (rustls) | encrypts the network path; self-signed auto-cert in `<private dir>/veyron-tls/`; local clients pin the cert; `tls: false` explicit opt-out | **SHIPPED** | D-07 |
+| TLS (rustls) | encrypts the network path; self-signed auto-cert in `<private dir>/vyn-tls/` (legacy `veyron-tls` shim still read); local clients pin the cert; `tls: false` explicit opt-out | **SHIPPED** | D-07 |
 | JWT (HS256) | per-device mint (`vyn token mint --device`); `sub=device_id`, restricted claims, `aud`/16-byte `jti`/short `exp`; `jwt_audience` required when set; min-secret enforced at boot | **SHIPPED** | D-07, M5 |
 | Frame MAC | HMAC-SHA256 per-session tag after registration; constant-time compare across SDKs; WS pre-MAC gap closed by register-or-drop | **SHIPPED** | D-07 |
 | Per-device permissions | device ceiling (claims clamp the manifest at registration); `ipc_targets` allowlist; default-deny; same-user IPC | **SHIPPED** | D-02/D-03 |
@@ -173,7 +173,7 @@ schema it reads.
   plugin-facing errors (Low, P2), PERF-1/PERF-2 (Medium, P1),
   PERF-3/UX-1/UX-2 (Low-Med, P2), PERF-4/UX-3/UX-4 (Low, P3), M7 C++/Python
   fuzz harness (deferred), MA-01..MA-19 (2026-08-20 maintainability), and
-  DC-1..DC-5 (dumb-core). S2 (events DB in `/tmp/veyron`) and S3
+  DC-1..DC-5 (dumb-core). S2 (events DB in per-user private dir — was `/tmp/veyron`, fixed PR #35) and S3
   (`crossbeam-epoch` RUSTSEC) are closed — see the external-attacker residual.
   None of these changes the controls above; they are hardening debt, not new
   exposures.

@@ -1,87 +1,87 @@
 # Debug: supervised plugin stall — bisection 2026-08-26 (sherpa TTS)
 
-Ветка `debug/sherpa-supervised-stall`. Контекст: локальный sherpa-синтез
-(tts/speech) под супервайзером грузит модель и никогда не завершает
-инференс; вне ядра тот же бинарник/env/rlimit — 80–100 мс. Полная матрица —
-в vynkor-plugins `plugins/speech/ROADMAP.md` и
+Branch `debug/sherpa-supervised-stall`. Context: local sherpa synthesis
+(tts/speech) under supervisor loads the model and never completes
+inference; outside the kernel the same binary/env/rlimit — 80–100 ms. Full matrix —
+in vynkor-plugins `plugins/speech/ROADMAP.md` and
 `docs/P0_BATCH_2026-08-26.md` (§3).
 
-## Что добавлено в этой ветке
+## What was added in this branch
 
-Env-киллсвитчи на процессе **ядра** (не на плагине):
+Env kill-switches on the **kernel** process (not the plugin):
 
-| Переменная | Эффект |
+| Variable | Effect |
 |---|---|
-| `VYN_DEBUG_SKIP_CGROUP=1` | не создавать/джойнить per-plugin cgroup v2 (включается RLIMIT_NPROC-фолбэк!) |
-| `VYN_DEBUG_SKIP_RLIMITS=1` | pre_exec не вызывает `apply_resource_limits` вообще |
+| `VYN_DEBUG_SKIP_CGROUP=1` | do not create/join per-plugin cgroup v2 (falls back to RLIMIT_NPROC!) |
+| `VYN_DEBUG_SKIP_RLIMITS=1` | pre_exec does not call `apply_resource_limits` at all |
 
-Оба флага также зеркалят stdout/stderr ребёнка в kernel log с префиксом
-`[plugin-stderr]` — иначе stderr незарегистрированного/упавшего плагина
-недоступен (`/plugins/{id}/logs` отвечает 404 до регистрации).
+Both flags also mirror child stdout/stderr into the kernel log with prefix
+`[plugin-stderr]` — otherwise stderr of an unregistered/crashed plugin
+is unavailable (`/plugins/{id}/logs` returns 404 before registration).
 
-## Факты, добытые бисектом
+## Facts obtained via bisection
 
-1. **NPROC-фолбэк ломает плагины (подтверждённый баг).** При скипе cgroup
-   ставится `RLIMIT_NPROC = max_procs` (дефолт 64). NPROC считает потоки всех
-   процессов uid; рабочая станция превышает 64 сразу ⇒ любой
-   thread-heavy плагин падает: `pthread_create → EAGAIN` → tokio panic
-   `OS can't spawn worker thread` (видно в `[plugin-stderr]`).
-   **Фикс:** не применять NPROC из `max_procs` (cgroup уже покрывает), либо
-   считать от текущего потребления, либо сильно поднять дефолт.
-2. **`DEFAULT_MAX_VMEM_MB = 512` мал для ONNX-плагинов**: модель не
-   аллоцируется уже на загрузке. tts/speech требуют ≥1536M.
-3. **Главная открытая загадка:** с полностью скипнутыми лимитами хендлер
-   завершается мгновенно (`time-to-first-audio: 0 ms` в зеркале), чанки
-   отправлены, но `ActionResponse` не доходит до вызывающего. db_* через тот
-   же клиент работает. Исключены: rlimits, cgroup, action_id дубликаты,
-   sandbox/seccomp/cwd/пайпы/ONNX threads.
+1. **NPROC fallback breaks plugins (confirmed bug).** When cgroup is skipped,
+   `RLIMIT_NPROC = max_procs` (default 64) is set. NPROC counts threads of all
+   uid processes; a workstation exceeds 64 immediately ⇒ any
+   thread-heavy plugin fails: `pthread_create → EAGAIN` → tokio panic
+   `OS can't spawn worker thread` (visible in `[plugin-stderr]`).
+   **Fix:** do not apply NPROC from `max_procs` (cgroup already covers), or
+   measure from current consumption, or raise default significantly.
+2. **`DEFAULT_MAX_VMEM_MB = 512` too small for ONNX plugins**: model fails to
+   allocate on load. tts/speech require ≥1536M.
+3. **Main open mystery:** with fully skipped limits the handler
+   completes instantly (`time-to-first-audio: 0 ms` in mirror), chunks
+   sent, but `ActionResponse` never reaches the caller. db_* via the
+   same client works. Excluded: rlimits, cgroup, duplicate action_id,
+   sandbox/seccomp/cwd/pipes/ONNX threads.
 
 ## Resolved 2026-08-26 — fix/supervised-stall-and-limits (PR → develop)
 
-Ветка диагностическая закрыта; фиксы влиты в `develop` одним PR.
+Diagnostic branch closed; fixes merged into `develop` in one PR.
 
-### Problem A — главная загадка: `ActionResponse` не доходит
+### Problem A — main mystery: `ActionResponse` never arrives
 
 **Root cause:** `src/ipc/protocol.rs` — per-connection error-budget
-throttling (`max_conn_errors = 16`). Каждый denied `tts_speak` audio-chunk
-forward (`ipc_targets` не содержит `sound` → `ERR_PERMISSION_DENIED`,
-`errored = true`) инкрементил `error_counts[tts_conn]`. После 16 denied
-чанков соединение помечалось `throttled` и **все** дальнейшие сообщения от
-того же `conn_id` дропались молча (`continue` без `send_error`), включая
-легитимный финальный `ActionResponse` провайдера. `db_*` не шлёт
-peer-to-peer фреймов перед ответом, поэтому не триггерит throttling и
-работает. С полностью скипнутыми лимитами `time-to-first-audio: 0 ms`
-подтверждало что хендлер завершился, но ответ уже был в дроп-зоне.
+throttling (`max_conn_errors = 16`). Every denied `tts_speak` audio-chunk
+forward (`ipc_targets` does not include `sound` → `ERR_PERMISSION_DENIED`,
+`errored = true`) incremented `error_counts[tts_conn]`. After 16 denied
+chunks the connection was marked `throttled` and **all** subsequent messages from
+the same `conn_id` were silently dropped (`continue` without `send_error`), including
+the legitimate final `ActionResponse` from the provider. `db_*` does not send
+peer-to-peer frames before responding, so it does not trigger throttling and
+works. With fully skipped limits `time-to-first-audio: 0 ms`
+confirmed the handler finished, but the response was already in the drop zone.
 
 **Fix:** `is_throttle_exempt()` — `ActionResponse`,
 `ActionResponseChunk`, `ActionRequestChunk`, `SessionClose`, `Pong`
-проходят мимо throttling-гейта и сбрасывают бюджет (`errored == false →
-error_counts.remove`). Это сохраняет защиту от amplification (VULN-007)
-для error-генерирующих сообщений, но не блокирует легитимные replies и
+bypass the throttling gate and reset the budget (`errored == false →
+error_counts.remove`). This preserves amplification protection (VULN-007)
+for error-generating messages, but does not block legitimate replies and
 watchdog `Pong`.
 
-Live verification (scratch `/tmp/opencode/vynfix`, без `VYN_DEBUG_*`,
-cgroup `pids.max` активен, `DEFAULT_MAX_VMEM_MB = 2048`):
+Live verification (scratch `/tmp/opencode/vynfix`, without `VYN_DEBUG_*`,
+cgroup `pids.max` active, `DEFAULT_MAX_VMEM_MB = 2048`):
 `tts_speak` (sherpa piper `ru_RU-denis-medium`, "Один два три.")
-→ 47 Opus пакетов, `duration 1.0s`, `TTFA 0 ms`, `elapsed 1633 ms` (cold)
-и `0 ms` (warm); `tts_speak_stream` (3 предложения, 162 пакета)
-→ `TTFA stream 0 ms`, оба `status=OK`. `speech` plugin (swap drop-in) —
-аналогично `tts_speak` / `tts_speak_stream` с теми же TTFA.
+→ 47 Opus packets, `duration 1.0s`, `TTFA 0 ms`, `elapsed 1633 ms` (cold)
+and `0 ms` (warm); `tts_speak_stream` (3 sentences, 162 packets)
+→ `TTFA stream 0 ms`, both `status=OK`. `speech` plugin (swap drop-in) —
+same `tts_speak` / `tts_speak_stream` with identical TTFA.
 
 ### Problem B — `RLIMIT_NPROC` fallback
 
-`RLIMIT_NPROC` считает треды всего uid (десктоп > 64), поэтому `max_procs`
-64 ронял любой thread-heavy плагин `EAGAIN` → tokio panic. Фикс:
-`apply_resource_limits` больше не ставит `RLIMIT_NPROC` вообще; при
-`!joined_cgroup` только `warn!` ("process accounting degraded"), cgroup
-`pids.max` остаётся единственным лимитом. Юнит-тесты в `runner.rs`.
+`RLIMIT_NPROC` counts threads of the whole uid (desktop > 64), so `max_procs`
+64 would crash any thread-heavy plugin with `EAGAIN` → tokio panic. Fix:
+`apply_resource_limits` no longer sets `RLIMIT_NPROC` at all; when
+`!joined_cgroup` only `warn!` ("process accounting degraded"), cgroup
+`pids.max` remains the sole limit. Unit tests in `runner.rs`.
 
 ### Problem C — `DEFAULT_MAX_VMEM_MB = 512`
 
-ONNX Runtime резервирует ~500 MiB VA → модель не mmap-илась. Дефолт
-поднят до **2048**, `0` = unlimited (skip `setrlimit`). Обновлены
-`src/utils/config.rs`, `plugins/{tts,speech}/config.example.yaml` и
+ONNX Runtime reserves ~500 MiB VA → model failed to mmap. Default
+raised to **2048**, `0` = unlimited (skip `setrlimit`). Updated
+`src/utils/config.rs`, `plugins/{tts,speech}/config.example.yaml` and
 `README.md`.
 
-Kill-switches `VYN_DEBUG_SKIP_CGROUP` / `VYN_DEBUG_SKIP_RLIMITS` сохранены
-как есть (требование миссии), зеркалирование `[plugin-stderr]` тоже.
+Kill-switches `VYN_DEBUG_SKIP_CGROUP` / `VYN_DEBUG_SKIP_RLIMITS` kept
+as-is (mission requirement), `[plugin-stderr]` mirroring as well.

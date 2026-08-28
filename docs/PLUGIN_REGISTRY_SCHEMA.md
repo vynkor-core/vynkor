@@ -11,7 +11,7 @@ derived from this document.
 **Canonical URL:**
 
 ```
-https://raw.githubusercontent.com/veyron-core/vynkor-plugins/main/registry.json
+https://raw.githubusercontent.com/vynkor-core/vynkor-plugins/main/registry.json
 ```
 
 Top-level structure: a JSON array of plugin entries.
@@ -33,8 +33,8 @@ Top-level structure: a JSON array of plugin entries.
   "description": "Speech-to-text via OpenAI Whisper. Supports 16kHz mono PCM input.",
   "version": "1.2.0",
   "permissions": ["audio_stream", "network"],
-  "archive_url": "https://github.com/veyron-core/vynkor-plugins/releases/download/stt-whisper-1.2.0/stt-whisper-1.2.0.zip",
-  "source_url":  "https://github.com/veyron-core/vynkor-plugins/releases/download/stt-whisper-1.2.0/stt-whisper-1.2.0-src.zip",
+  "archive_url": "https://github.com/vynkor-core/vynkor-plugins/releases/download/stt-whisper-1.2.0/stt-whisper-1.2.0.zip",
+  "source_url":  "https://github.com/vynkor-core/vynkor-plugins/releases/download/stt-whisper-1.2.0/stt-whisper-1.2.0-src.zip",
   "sha256": "<64-char lowercase hex>",
   "min_kernel_version": "0.3.0",
   "max_kernel_version": "1.0.0",
@@ -73,7 +73,7 @@ Top-level structure: a JSON array of plugin entries.
 ### Kernel-side registry cache (R10-03)
 
 The kernel mirrors the fetched document to `registry-cache.json` in the
-marketplace state dir (same directory as `installed.json`; `VEYRON_STATE_DIR`
+marketplace state dir (same directory as `installed.json`; `VYN_STATE_DIR` (legacy `VEYRON_STATE_DIR` still read)
 / `XDG_DATA_HOME` relocate it). The cache is a **versioned wrapper**, not a
 raw mirror:
 
@@ -93,7 +93,7 @@ refused by `install` even when the cache is stale.
 
 ### Registry v2 (planned — parser already tolerant)
 
-The veyron-plugins roadmap ("Infrastructure Evolution") plans to reshape
+The vynkor-plugins roadmap ("Infrastructure Evolution") plans to reshape
 `registry.json` into an object keyed by slug with a root `meta` and per-version
 delivery metadata:
 
@@ -274,7 +274,7 @@ unprivileged plugin launder the action through a permitted provider (T-19).
 downloading the archive (Step 2 of the install pipeline). Error message format:
 
 ```
-Plugin '<slug>' requires Veyron kernel >= <min>, <= <max>. You are running <current>. Upgrade Veyron first.
+Plugin '<slug>' requires Vynkor kernel >= <min>, <= <max>. You are running <current>. Upgrade Vynkor first.
 ```
 
 After extraction, `vyn install` re-validates using the local `plugin.json`
@@ -306,4 +306,4 @@ derived from the enum, so a permission added to the proto is installable without
 | `storage` | `PERMISSION_STORAGE` | Per-caller KV/SQL storage (database plugin) |
 
 This list is normative and derived from the `PermissionType` enum in
-`proto/veyron_protocol.proto` (see `known_permissions()` in `src/marketplace/installer.rs`).
+`../vynkor-wire/proto/vynkor_protocol.proto` (see `known_permissions()` in `src/marketplace/installer.rs`).

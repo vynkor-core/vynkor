@@ -3,7 +3,7 @@
 **Date:** 2026-08-16
 **Scope:** full kernel — `src/kernel`, `src/api`, `src/plugins`, `src/events`,
 `src/ipc`, `src/auth`, `src/marketplace`, `src/bridge`, `src/cli`, `src/utils`,
-plus the wire protocol (`../vynkor-wire/proto/veyron_protocol.proto`).
+plus the wire protocol (`../vynkor-wire/proto/vynkor_protocol.proto` — legacy `veyron_protocol.proto` still aliased).
 **Companion:** findings mirrored as DC-1…DC-5 in `AUDIT.md`.
 **Status:** all findings **OPEN**. This file is the working plan for the fixes.
 
@@ -160,14 +160,14 @@ move interpretation/UX outside; keep transport and auth tooling.
 
 **Where:**
 - Wire proto: `ActionSpec`/`ActionRisk` — comment: *"tool schema for the AI
-  (D-08)"* (`../vynkor-wire/proto/veyron_protocol.proto:159-173`).
+  (D-08)"* (`../vynkor-wire/proto/vynkor_protocol.proto:159-173` — legacy path still readable).
 - `src/kernel/commands.rs` `get_manifest` (`:79-127`) — comment: *"D-08:
   tool-calling surface — serve a plugin's manifest (incl. action_specs) to the
   AI"*.
 - `src/events/bus.rs` `plugin_lifecycle_payload` (`:223-259`) — `action_specs`
   embedded in `system.plugin_joined`/`system.plugin_left` *"so the AI can
   enumerate callable actions from the joined event alone"*.
-- README framing: Kairo = "AI agent, memory, voice" built on Veyron.
+- README framing: Kairo = "AI agent, memory, voice" built on Vynkor (formerly Veyron).
 
 **Why it violates dumb core:** the kernel is explicitly shaped for an AI-agent
 frontend. Tool-schema interpretation (risk levels, `requires_confirmation`,
@@ -253,12 +253,12 @@ manifesto, close S2 (private runtime dir, 0o700, ownership check) and PERF-2
 
 ## 5. What plugins already own (the correct boundary)
 
-Sibling repo `veyron-plugins` proves the ecosystem pattern works: **ai**
+Sibling repo `vynkor-plugins` (formerly `veyron-plugins`) proves the ecosystem pattern works: **ai**
 (chat_completion, agents, model discovery, usage db), **network**
 (`http_request` + SSRF guard), **stt/tts** (speech), **sync** (device KV sync,
 heartbeat liveness, `sync.delta` events), **database**, **secrets**,
 **gated-write**, **ping-pong-rs**. All real business logic (AI, networking,
-storage, speech) lives in plugins; `veyron-sdk-*` repos are pure client
+storage, speech) lives in plugins; `vynkor-sdk-*` (legacy `veyron-sdk-*` still aliased) repos are pure client
 libraries. The kernel's job is only to keep those processes alive and route
 their bytes.
 
@@ -380,7 +380,7 @@ files, steps and acceptance criteria.
   the data-driven v2 path is the single source of truth.
 - **Context:** `required_permission_for_action` (`permissions.rs:12-17`) is a
   *transitional safety net* — it gates `http_request` (the one sensitive
-  action in the ecosystem) before network-плагин adopted v2 per-action
+  action in the ecosystem) before the network plugin adopted v2 per-action
   permissions. Current semantics (R5-07): v2 `action_requirement` → gated;
   legacy string-form → fallback to the map; action not in the map → `None` =
   **unrestricted** (declaring the action is authorization enough).
@@ -390,7 +390,7 @@ files, steps and acceptance criteria.
   (`action_requirements` — stays, it is the v2 data path),
   `docs/PLUGIN_REGISTRY_SCHEMA.md:264,294`.
 - **Steps (order matters — step 1 is a hard dependency):**
-  1. **Migrate the data first (veyron-plugins):** network-плагин declares
+  1. **Migrate the data first (vynkor-plugins — legacy `veyron-plugins`):** the network plugin declares
      `action_requirement: http_request → network` in its v2 manifest. The map
      must NOT be removed before this lands — otherwise `http_request` becomes
      unrestricted and any plugin can trigger outbound HTTP via the network

@@ -1,6 +1,6 @@
-# Veyron ROADMAP — Remote Devices (Phase 12)
+# Vynkor ROADMAP — Remote Devices (Phase 12)
 
-**Baseline:** 2026-08-14 · Kernel `0.1.0` · Proto `v1.5`
+**Baseline:** 2026-08-14 · Kernel `0.1.0` · Proto `v1.5` → **now `v1.7` (E-01, vynkor-wire 0.0.2)** — historical baseline preserved below, current proto is v1.7
 **Branch:** `develop`
 **Source:** design + decisions in `docs/REMOTE_DEVICES_PLAN.md`; this file is the task breakdown.
 **Previous phases:** Phase 8–11 in `ROADMAP.md`.
@@ -43,7 +43,7 @@
     requires_confirmation }`); keep `actions[]` for the router.
   - New `DeviceInfo { device_id, os, arch, os_version, capabilities,
     last_seen, state }`.
-  - Files: `../vynkor-wire/proto/veyron_protocol.proto`, `veyron_wire::PROTOCOL_VERSION`,
+  - Files: `../vynkor-wire/proto/vynkor_protocol.proto`, `vynkor_wire::PROTOCOL_VERSION` (legacy `veyron_wire` shim still present),
     vendored copies, `tests/unit/test_proto_sync.rs`.
   - Acceptance: regen compiles; six copies byte-identical; drift test green;
     `PROTOCOL_VERSION`/header/`Cargo.toml` bumped in one commit.
@@ -143,7 +143,7 @@
   - Acceptance: an SDK plugin connects to the WS endpoint, registers, and
     round-trips actions; integration test against the kernel WS gateway.
   - **Status (2026-08-14): SHIPPED** — merged via PR veyron-core/vynkor-sdk-rust#4
-    (`d0a7695`, commit `22bd761`). `VeyronClient::connect_ws(url, jwt, secret)`
+    (`d0a7695`, commit `22bd761`). `VynkorClient::connect_ws(url, jwt, secret)` (legacy `VeyronClient` still aliased)
     mirrors the UDS semantics over the kernel's WS gateway: the `veyron`
     subprotocol is always offered and the JWT rides the
     `Sec-WebSocket-Protocol` header (never the URL — access-log hygiene);

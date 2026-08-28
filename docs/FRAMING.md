@@ -1,6 +1,6 @@
-# Veyron Frame Flag Bit Space
+# Vynkor Frame Flag Bit Space
 
-This document is the **single source of truth** for all flag bits in the Veyron wire protocol.
+This document is the **single source of truth** for all flag bits in the Vynkor wire protocol.
 No other file may define flag constants; all SDKs import the values defined here.
 
 ## Flag Bit Table
@@ -54,7 +54,7 @@ concurrent streams per connection, reassembled size ≤ 1 MiB (`MAX_PAYLOAD_SIZE
 incomplete sets discarded after 30 s. Violations drop the connection. Rejected on
 the WebSocket gateway (R5-03 ✓) — see below.
 
-> **SDK status:** Rust SDK implements both sides — `VeyronClient::send_fragmented`
+> **SDK status:** Rust SDK implements both sides — `VynkorClient::send_fragmented`
 > emits spec-conformant fragments (each individually MAC'd when secured), and
 > `recv`/`recv_frame` reassemble inbound fragments with the same bounds as the kernel.
 > C++ SDK now implements fragmentation too: `absorb_fragment`/bounded reassembly plus
@@ -84,9 +84,9 @@ does not call `write_frame_raw`).
 
 ## WebSocket JWT Delivery
 
-**WebSocket JWT delivery:** The Veyron manifesto originally specified `?token=<jwt>` as
+**WebSocket JWT delivery:** The Vynkor manifesto (renamed from Veyron 2026-08-22) originally specified `?token=<jwt>` as
 the URL query parameter for WebSocket auth. The implementation uses
-`Sec-WebSocket-Protocol: veyron, <jwt>` instead. This is intentional: tokens in URL
+`Sec-WebSocket-Protocol: vynkor, <jwt>` (legacy `veyron` still accepted) instead. This is intentional: tokens in URL
 query strings appear in server access logs, browser history, and proxy logs.
 The header approach is superior. The manifesto text is superseded by this document.
 Third-party clients must use the `Sec-WebSocket-Protocol` header.
