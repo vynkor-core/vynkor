@@ -1,7 +1,7 @@
 # ai: LLM chat_completion, no permissions of its own — calls out through the
 # `network` plugin above, so network must be running for ai to do anything.
 id: ai
-binary: /home/behzod/.local/lib/veyron/plugins/ai/ai
+binary: /home/behzod/.local/lib/vyn/plugins/ai/ai
 restart: on-failure
 max_restarts: 5
 sandbox: true

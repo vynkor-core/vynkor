@@ -1,6 +1,6 @@
 # ping-pong: minimal reference plugin — replies "pong" to a "ping" action.
 id: ping-pong
-binary: /home/behzod/.local/lib/veyron/plugins/ping-pong/ping-pong-rs
+binary: /home/behzod/.local/lib/vyn/plugins/ping-pong/ping-pong-rs
 restart: on-failure
 max_restarts: 5
 sandbox: true

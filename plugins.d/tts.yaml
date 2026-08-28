@@ -1,12 +1,12 @@
 id: tts
-binary: /home/behzod/projects/veyron-core/vynkor-plugins/plugins/tts/target/release/tts
+binary: /home/behzod/projects/vynkor-core/vynkor-plugins/plugins/tts/target/release/tts
 restart: on-failure
 max_restarts: 5
 sandbox: true
 env:
   # Cloud providers only; default-deny allowlist. No keys set on dev box.
   - TTS_PLUGIN_ALLOWED_KEY_ENVS=OPENAI_API_KEY,ELEVENLABS_API_KEY
-  - TTS_PLUGIN_LOCAL_MODEL_DIR=/home/behzod/projects/veyron-core/vynkor-plugins/models/tts/piper-ru_RU-denis-medium
+  - TTS_PLUGIN_LOCAL_MODEL_DIR=/home/behzod/projects/vynkor-core/vynkor-plugins/models/tts/piper-ru_RU-denis-medium
   - TTS_PLUGIN_LOCAL_MODEL_TYPE=piper
 grace_seconds: 10
 # RLIMIT_NPROC counts the uid's TOTAL threads at clone time — this

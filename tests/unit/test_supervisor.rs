@@ -293,7 +293,7 @@ async fn spawned_process_inherits_socket_path_env() {
         binary_path: PathBuf::from("/bin/sh"),
         args: vec![
             "-c".to_string(),
-            r#"test -n "$VYN_SOCKET_PATH" -a -n "$VEYRON_SOCKET_PATH""#.to_string(),
+            r#"test -n "$VYN_SOCKET_PATH" -a -n "$VYN_SOCKET_PATH""#.to_string(),
         ],
         env: vec![],
         restart_policy: RestartPolicy::Never,

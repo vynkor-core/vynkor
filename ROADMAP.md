@@ -1,4 +1,4 @@
-# Veyron ROADMAP — Phases 8–11
+# Vynkor ROADMAP — Phases 8–11
 
 **Baseline:** 2026-08-10 · Kernel `0.1.0`
 **Branch:** `develop`
@@ -72,27 +72,27 @@ generated enum, adds drift-detection tests, and lands the follow-ups the
   - Acceptance: mapping rows present; no schema restructuring.
 
 - [x] R8-05 — **Proto-copy byte-identity drift test:** test asserting the three
-  vendored `veyron_protocol.proto` copies (`wire/proto`, `sdk/python/proto`,
+  vendored `vynkor_protocol.proto` copies (`wire/proto`, `sdk/python/proto`,
   `sdk/cpp/proto`) stay byte-identical.
   - Files: `tests/unit/test_proto_sync.rs` (new), `tests/unit/mod.rs`.
   - Acceptance: test passes; editing one copy makes it fail.
 
-- [x] R8-06 — **(cross-repo) Land the `database` plugin in veyron-plugins:**
-  merge `worktree-database-plugin` into `veyron-plugins` `main`
+- [x] R8-06 — **(cross-repo) Land the `database` plugin in vynkor-plugins:**
+  merge `worktree-database-plugin` into `vynkor-plugins` `main`
   (`plugins/database/`), add the registry entry via `scripts/package.sh`
   (permissions normalized to `["storage"]`), build `dist/database-0.1.0.zip`,
-  move `database` from Planned to Shipped in `veyron-plugins/ROADMAP.md`.
-  - Tracked in: `veyron-plugins/ROADMAP.md`.
+  move `database` from Planned to Shipped in `vynkor-plugins/ROADMAP.md`.
+  - Tracked in: `vynkor-plugins/ROADMAP.md`.
   - Acceptance: `vyn plugin install database` against the fixed kernel succeeds
     and the plugin registers.
 
-- [x] R8-07 — **(cross-repo) Publish `veyron-wire` 0.2.0, drop patch override:**
-  `cargo publish` `veyron-wire` 0.2.0 (kernel already depends on it by
+- [x] R8-07 — **(cross-repo) Publish `vynkor-wire` 0.2.0, drop patch override:**
+  `cargo publish` `vynkor-wire` 0.2.0 (kernel already depends on it by
   path + `[patch.crates-io]` override whose comment says it is a no-op once
   0.2.0 is published); remove the override and verify the workspace still
   builds green.
-- Tracked in: `veyron-wire/`.
-- Acceptance: `cargo search veyron-wire` shows 0.2.0; no `patch.crates-io`
+- Tracked in: `vynkor-wire/`.
+- Acceptance: `cargo search vynkor-wire` shows 0.2.0; no `patch.crates-io`
   block in `Cargo.toml`; full test suite green without it.
 
 ---
@@ -164,7 +164,7 @@ permission-surface inconsistency; N1 is the largest single hot-path win.
   - Acceptance: readiness handshake — the child reports success (exit
     status or explicit ready line) before the parent confirms.
   - **Status (2026-08-11): FIXED** — `UnixStream::pair()` handshake via
-    `VEYRON_READY_FD` (CLOEXEC cleared in `pre_exec`): the child emits
+    `VYNKOR_READY_FD` (CLOEXEC cleared in `pre_exec`): the child emits
     `"{pid}\n"` only after flock + pid write; the parent publishes the pid
     file and reports success only after the matching line, else SIGKILLs +
     reaps + cleans up and errors out. Smoke-verified happy and failure paths.
@@ -230,13 +230,13 @@ duplicate registration.
     currently-registered entry.
   - **Status (2026-08-12): FIXED** — `spawn_internal` takes
     `replace_epoch: Option<u64>`; manual start (`None`) refuses with
-    `VeyronError::PluginAlreadyRunning` while an entry is registered;
+    `VynkorError::PluginAlreadyRunning` while an entry is registered;
     supervised restarts pass `Some(event.epoch)` and only replace the
     instance they were decided for. A stop landing during the backoff
     window (`stopped_during_backoff`) cancels the restart outright.
 
 - [x] B4 — **cgroup scope reap loops on `Device or resource busy`:** when a
-      new instance joins the same `veyron/<id>.scope` before the old one
+      new instance joins the same `vynkor/<id>.scope` before the old one
       exits, the rmdir keeps failing EBUSY and is retried indefinitely.
   - Files: `src/plugins/supervisor.rs`.
   - Acceptance: the old scope is always reaped once its last task exits; no
@@ -247,21 +247,21 @@ duplicate registration.
     longer interleave with the old instance's rmdir.
 
 > Environment artifacts (not kernel bugs, 2026-08-12): installed plugins in
-> `~/.local/lib/veyron/plugins/` are pre-wire-0.2.0 builds — their registered
+> `~/.local/lib/vyn/plugins/` are pre-wire-0.2.0 builds — their registered
 > manifest has empty `actions` (→ `ActionNotFound`) and the watchdog SIGKILLs
 > them as unresponsive (Ping proto drift) until `max_restarts` is exhausted.
-> Reinstall/rebuild them. Also: the local `veyron-sdk` (0.1.0) requires
-> `veyron-wire ^0.1.0`, which is yanked on crates.io, so path consumers cannot
-> resolve; the kernel itself uses the published `veyron-sdk 0.1.2` (wire
+> Reinstall/rebuild them. Also: the local `vynkor-sdk` (0.1.0) requires
+> `vynkor-wire ^0.1.0`, which is yanked on crates.io, so path consumers cannot
+> resolve; the kernel itself uses the published `vynkor-sdk 0.1.2` (wire
 > 0.2.0). Recorded here so the next session doesn't re-derive it.
 >
-> **RESOLVED (2026-08-12):** `veyron-sdk-rust` bumped to 0.1.2 + wire 0.2.0
+> **RESOLVED (2026-08-12):** `vynkor-sdk-rust` bumped to 0.1.2 + wire 0.2.0
 > (commit `0742bd2`); `ping-pong-rs` migrated off the stale git deps /
-> `veyron::` monolith imports to crates.io `veyron-sdk 0.1`; `ping-pong-rs`,
+> `vynkor::` monolith imports to crates.io `vynkor-sdk 0.1`; `ping-pong-rs`,
 > `network`, `ai` rebuilt against wire 0.2.0 and reinstalled into
-> `~/.local/lib/veyron/plugins/`. Live check: all three register with populated
+> `~/.local/lib/vyn/plugins/`. Live check: all three register with populated
 > `actions`, `ping → pong` returns `ACTION_OK`, zero watchdog SIGKILLs,
-> `restart_count=0`. (Veyron-plugins repo: `plugins/ping-pong-rs/{Cargo.toml,
+> `restart_count=0`. (Vynkor-plugins repo: `plugins/ping-pong-rs/{Cargo.toml,
 > src/main.rs}` fixed — commit pending there.)
 
 ---
@@ -320,10 +320,10 @@ backlog (polish).
     0.9.20 (PR #20, `0f5d65f`); `cargo audit` no longer reports
     RUSTSEC-2026-0204 (only the two S4 warnings remain).
 
-- [x] S2 — **`data_dir: /tmp/veyron` puts the events SQLite DB in
+- [x] S2 — **`data_dir: /tmp/vyn` puts the events SQLite DB in
       world-writable /tmp (Low-Med):** `EventStore::new` (`events/store.rs:13-16`)
       does `create_dir_all` + symlink-following `Connection::open`. On a
-      multi-user host a local user can pre-create `/tmp/veyron` and read or
+      multi-user host a local user can pre-create `/tmp/vyn` and read or
       forge the event store — fake pending events get redelivered to
       subscribers by the retry worker. Contradicts the config file's own
       M-09 claim ("never the shared /tmp").
@@ -331,7 +331,7 @@ backlog (polish).
   - Acceptance: `data_dir` defaults to the per-user private runtime dir; the
     store dir is created 0o700 with an ownership check.
   - **Status (2026-08-18): FIXED** — `default_data_dir()` uses
-    `veyron_wire::socket::default_private_dir()` (XDG_RUNTIME_DIR pattern);
+    `vynkor_wire::socket::default_private_dir()` (XDG_RUNTIME_DIR pattern);
     `EventStore::new` rejects world-writable dirs; shipped via PR #35.
 
 - [x] PERF-1 — **Router kernel replies block on `.send().await` — one slow
@@ -516,7 +516,7 @@ the audit's §E: **P0** before next release (monoliths + error-system unificatio
   - Files: `src/ipc/protocol.rs`, `src/bridge/mod.rs`, `src/events/bus.rs`,
     `src/plugins/supervisor.rs`, `src/api/websocket.rs`, `src/cli/device.rs`,
     `src/marketplace/registry.rs`.
-  - Acceptance: frame helpers live in `ipc/helpers.rs` or `veyron_wire`; URL
+  - Acceptance: frame helpers live in `ipc/helpers.rs` or `vynkor_wire`; URL
     helpers in `utils/url.rs`; zero duplicated copies remain.
   - **Status (2026-08-26): FIXED** — re-inventoried post-F1 (marketplace
     fetcher now lives in vynkor-manager, so only two URL sites remain here).
@@ -532,12 +532,12 @@ the audit's §E: **P0** before next release (monoliths + error-system unificatio
     inbound verification (MA-13 scope) and fragment reassembly (preserves
     original magic/flags/target).
 
-- [x] MA-03 — **Unify the error system on `VeyronError`:** three error types
-      coexist — `VeyronError`, `anyhow::Error`, and `Result<_, String>`
+- [x] MA-03 — **Unify the error system on `VynkorError`:** three error types
+      coexist — `VynkorError`, `anyhow::Error`, and `Result<_, String>`
       (`auth/jwt.rs:58,83`). `jwt::validate()` returns `String`, breaking
       uniformity; `main.rs` formats `e.to_string()` and loses the error chain.
   - Files: `src/auth/jwt.rs`, `src/main.rs`.
-  - Acceptance: `jwt::validate() -> Result<_, VeyronError>`; no `Result<_, String>`
+  - Acceptance: `jwt::validate() -> Result<_, VynkorError>`; no `Result<_, String>`
     in error paths; `main.rs` preserves the error chain (e.g. `{:?}` or
     `Error::source()`).
   - **Status (2026-08-24): FIXED** — new `VynkorError::Auth(String)` variant;
@@ -650,13 +650,13 @@ the audit's §E: **P0** before next release (monoliths + error-system unificatio
     `events/store.rs`, `api/websocket.rs`, `ipc/connection.rs`,
     `ipc/server.rs`, `bridge/mod.rs` now pass it to `unwrap_or_else`.
 
-- [ ] MA-13 — **Reuse `veyron_wire` framing in the WebSocket gateway:**
+- [ ] MA-13 — **Reuse `vynkor_wire` framing in the WebSocket gateway:**
       `api/websocket.rs:229` has a custom `parse_frame` without
       `COMPRESSED`/`FRAGMENTED` support — any framing fix must be applied in
       two places.
   - Files: `src/api/websocket.rs`.
-  - Acceptance: WS gateway reuses `veyron_wire::framing::read_frame` (or the
-    WS-specific framing moves into `veyron_wire`); no duplicated frame parser.
+  - Acceptance: WS gateway reuses `vynkor_wire::framing::read_frame` (or the
+    WS-specific framing moves into `vynkor_wire`); no duplicated frame parser.
 
 - [x] MA-14 — **Reduce `utils/logging.rs` duplication + use `try_init()`:**
       4 `if json { with otel } else` branches duplicate 80% of `fmt::layer()`;
@@ -672,16 +672,16 @@ the audit's §E: **P0** before next release (monoliths + error-system unificatio
     global subscriber is already installed instead of panicking); all five
     `main.rs` call sites updated. Builds with and without the `otel` feature.
 
-- [x] MA-15 — **Check `veyron-wire` for dead code:** `cargo clippy -- -D
-      warnings` on the `veyron-wire` workspace may flag `dead_code` (e.g.
+- [x] MA-15 — **Check `vynkor-wire` for dead code:** `cargo clippy -- -D
+      warnings` on the `vynkor-wire` workspace may flag `dead_code` (e.g.
       `BLOOM`).
   - Files: `../vynkor-wire/`.
   - Acceptance: `cargo clippy --all-targets -- -D warnings` clean on
-    `veyron-wire`.
+    `vynkor-wire`.
   - **Status (2026-08-21): FIXED** — no dead_code found (`BLOOM` doesn't
     exist in wire); the actual `-D warnings` blocker was
     `clippy::large_enum_variant` on the generated `envelope::Payload` oneof,
-    silenced via prost `type_attribute` in wire's build.rs (veyron-wire
+    silenced via prost `type_attribute` in wire's build.rs (vynkor-wire
     PR #5). clippy `--all-targets --all-features -- -D warnings` clean.
 
 - [x] MA-16 — **Separate tests from prod code in `registry.rs`:** `registry.rs`
@@ -754,13 +754,13 @@ rest) · **P1** = F3/F4/F5/F6 (this cycle).
 - [x] F1 (DC-1, P0) — **Extract the marketplace out of the kernel:**
   `src/marketplace/` no longer ships in the `vyn` binary.
   **SHIPPED 2026-08-22** — standalone repo
-  [`vynkor-manager`](https://github.com/veyron-core/vynkor-manager) (`vynm`),
-  manifest module in veyron-wire 0.2.4–0.2.6 behind the `manifest` feature,
-  kernel marketplace deleted in veyron PR #43; `vyn plugin install/search/…`
+  [`vynkor-manager`](https://github.com/vynkor-core/vynkor-manager) (`vynm`),
+  manifest module in vynkor-wire 0.2.4–0.2.6 behind the `manifest` feature,
+  kernel marketplace deleted in vynkor PR #43; `vyn plugin install/search/…`
   are delegation shims to `vynm`. Task breakdown: `docs/VYNM_ROADMAP.md`
   (V-01…V-07 done; V-08 closes stage 2).
   - **Authoritative plan: `docs/VYNM_PLAN.md`** (finalized 2026-08-21 —
-    separate repo `vynkor-manager`, manifest module in veyron-wire behind a
+    separate repo `vynkor-manager`, manifest module in vynkor-wire behind a
     feature, independent versioning, multi-source registries with optional
     keys). The decision below is kept for history; where it differs from
     VYNM_PLAN, VYNM_PLAN wins.
@@ -802,7 +802,7 @@ rest) · **P1** = F3/F4/F5/F6 (this cycle).
   manifest feature):** `action_specs`/`get_manifest` stay in the protocol as a
   generic per-action capability mechanism with the "for the AI" framing
   removed (comments/wording only — no wire break, no feature removal).
-  - Files: `../vynkor-wire/proto/veyron_protocol.proto:159-173`,
+  - Files: `../vynkor-wire/proto/vynkor_protocol.proto:159-173`,
     `src/kernel/commands.rs:79-127` (`get_manifest`),
     `src/events/bus.rs:223-259`.
   - Acceptance: no "for the AI"/"to the AI"/"AI" references in the protocol
@@ -856,7 +856,7 @@ visibility/file-system gaps.
       threads, so `max_procs` is a *shared* budget, not per-plugin
       isolation — a thread storm in one plugin or in the desktop starves
       the other). The cgroup v2 `pids` controller counts tasks *inside the
-      cgroup only*: supervisor creates a `veyron/<plugin_id>.scope` cgroup,
+      cgroup only*: supervisor creates a `vynkor/<plugin_id>.scope` cgroup,
       writes the child PID into `cgroup.procs` in `pre_exec`, and sets
       `pids.max = max_procs`. Requires cgroup v2 (systemd default) and
       either root or a delegated `user@1000.service` subtree.
@@ -899,7 +899,7 @@ visibility/file-system gaps.
     graceful shutdown are unchanged). A handler-less plugin — PID 1 of its
     namespace — silently drops unhandled signals (`SIGNAL_UNKILLABLE`), so
     the shim escalates a forwarded TERM/INT/HUP to SIGKILL once the grace
-    period elapses (`VEYRON_SHIM_GRACE_SECS`, default 5s, taken from the
+    period elapses (`VYNKOR_SHIM_GRACE_SECS`, default 5s, taken from the
     plugin's `grace_seconds`); the supervisor's `child.wait()` always
     returns and the pids scope is reaped. `pdeathsig=SIGKILL` is set on
     both shim and plugin. The supervisor's wait task runs the orphan-gap
@@ -909,7 +909,7 @@ visibility/file-system gaps.
     lifecycle signals target the shim (`PluginEntry::signal_target`);
     watchdog SIGKILL goes to the shim too, which dies and takes the
     namespace with it. The
-    shim binary is overridable via `VEYRON_SHIM_BIN` (tests). Covered by
+    shim binary is overridable via `VYNKOR_SHIM_BIN` (tests). Covered by
     `tests/integration/test_shim.rs`: `sandboxed_plugin_sees_only_its_own_pid_namespace`,
     `shim_forwards_sigterm_to_sandboxed_plugin`,
     `shim_reports_exit_status_for_supervision`.
@@ -1008,7 +1008,7 @@ visibility/file-system gaps.
       processes or restrict file access. Fold R9-01's cgroup migration in
       as the eventual correct accounting.
   - Files: `README.md` §5, `src/plugins/runner.rs` doc comments,
-    `config.yaml` (Veyron repo) `max_procs` comment.
+    `config.yaml` (Vynkor repo) `max_procs` comment.
   - Acceptance: no stale `AUDIT.md` pointers; README accurately states
     what the sandbox does and does not isolate today.
   - Done: README §5 rewritten — the `AUDIT.md` pointer is gone, the
@@ -1025,10 +1025,10 @@ visibility/file-system gaps.
 
 Deferred until the R8/N items ship. Today a plugin's runtime settings live
 inline in `config.yaml` (`plugins:` list), the installer edits that one shared
-file with marker-comment blocks (`# veyron install:` /
+file with marker-comment blocks (`# vynkor install:` /
 `append_config_example` / `remove_config_example`), and marketplace state is
 split between the TTL `registry.json` cache and whatever happens to exist on
-disk under `~/.local/lib/veyron/plugins/`. Fine for 5 plugins, the bottleneck
+disk under `~/.local/lib/vyn/plugins/`. Fine for 5 plugins, the bottleneck
 once the fleet grows: one shared file owned by nobody in particular, text-block
 surgery, and no record of what is installed, from where, or at what version.
 Phase 10 gives each plugin its own config file and gives the marketplace an
@@ -1044,7 +1044,7 @@ explicit state store. Independent of Phase 9 — can land before or after it.
       `vyn plugin remove` deletes it — the marker-block machinery
       (`append_config_example`/`remove_config_example`) is deleted with them.
   - Files: `src/utils/config.rs`, `src/marketplace/installer.rs`,
-    `src/cli/plugin.rs`, `config.yaml` (Veyron repo).
+    `src/cli/plugin.rs`, `config.yaml` (Vynkor repo).
   - Acceptance: install/remove never touch `config.yaml`; a hand-written
     entry in `plugins.d/` boots; duplicate ids across files fail loudly.
   - Done: `Config.plugins_dir` (default `<config dir>/plugins.d/`,
@@ -1072,8 +1072,8 @@ explicit state store. Independent of Phase 9 — can land before or after it.
     and they register.
 
 - [x] R10-02 — **Explicit installed-plugin state store:** replace
-      filesystem-sniffing `~/.local/lib/veyron/plugins/<slug>` with
-      `~/.local/share/veyron/installed.json` recording slug, version, sha256,
+      filesystem-sniffing `~/.local/lib/vyn/plugins/<slug>` with
+      `~/.local/share/vyn/installed.json` recording slug, version, sha256,
       install time, source registry URL. Enables `vyn plugin list --installed`
       offline (no registry fetch), upgrade detection (installed vs registry
       version), and a `remove` that works even when the plugin dir is missing
@@ -1084,7 +1084,7 @@ explicit state store. Independent of Phase 9 — can land before or after it.
     reinstalling the same version warns instead of re-extracting; remove
     tolerates a missing dir.
   - Done: `marketplace::state` — `installed.json` under the XDG data dir
-    (`VEYRON_STATE_DIR`/`XDG_DATA_HOME`/`$HOME/.local/share/veyron`, mirroring
+    (`VYNKOR_STATE_DIR`/`XDG_DATA_HOME`/`$HOME/.local/share/vyn`, mirroring
     `plugin_dir()`'s env-override pattern), written atomically (temp + rename),
     corrupt file tolerated (logs + starts empty). `install` records
     slug/version/archive-sha256/install-time/registry-source after a success
@@ -1099,7 +1099,7 @@ explicit state store. Independent of Phase 9 — can land before or after it.
     deleted by hand.
 
 - [x] R10-03 — **`registry.json` cache rework:** the TTL cache at
-      `~/.cache/veyron/registry.json` is a raw mirror of the remote registry
+      `~/.cache/vyn/registry.json` is a raw mirror of the remote registry
       document. Move it under the marketplace state dir, version the schema,
       persist per-plugin `installed_version`/`last_check`, and make
       signature/revocation handling explicit (stale entry policy decided and
@@ -1113,7 +1113,7 @@ explicit state store. Independent of Phase 9 — can land before or after it.
     atomic temp+rename writes; a foreign/missing `schema_version` or corrupt
     file reads as empty. Registry v2 readiness: the parser accepts both the
     flat array and the v2 map form (`{meta, revoked, "<slug>": {versions}}`,
-    see veyron-plugins ROADMAP "Infrastructure Evolution") via an untagged
+    see vynkor-plugins ROADMAP "Infrastructure Evolution") via an untagged
     shape, flattening `versions` into one entry per version and folding the
     root `revoked` list into each entry's `status` — so only
     `RegistryEntry::is_revoked()` exists downstream. **Stale policy
@@ -1128,7 +1128,7 @@ explicit state store. Independent of Phase 9 — can land before or after it.
     error; `vyn plugin list` marks them `[revoked]`. Per-plugin
     `installed_version`/`last_check` are snapshotted from `installed.json`
     at write for offline upgrade detection. The kernel-side change is
-    independent of when veyron-plugins ships the v2 document — absent
+    independent of when vynkor-plugins ships the v2 document — absent
     `status`/`meta` fields read as `stable`/`None`.
   - Covered by `src/marketplace/registry.rs` unit tests (versioned
     round-trip, v2 parse + revoked-list folding, unverified-not-cached,
@@ -1170,7 +1170,7 @@ explicit state store. Independent of Phase 9 — can land before or after it.
 
 The `secrets` plugin is the first that cannot ship without the new permission
 values, so P11 gates the whole next plugin batch. Tracked from the plugin side
-in `veyron-plugins/ROADMAP.md` ("Kernel-side changes needed"); this section is
+in `vynkor-plugins/ROADMAP.md` ("Kernel-side changes needed"); this section is
 the kernel's half of the same work. Purely an enum addition + regeneration +
 copy sync — no new Envelope payloads, no IPC/framing/orchestrator changes
 (the existing `ActionRequest`/`Event`/`EventPublish`/IPC/streaming/WS
@@ -1183,27 +1183,27 @@ surfaces cover every planned plugin).
   load-bearing: `known_permissions()` (`src/marketplace/installer.rs:23`)
   probes enum codes and stops after 4 consecutive misses, so a gap ≥4
   silently rejects plugins declaring later values. Regenerate the
-  `veyron-wire` prost types — `known_permissions()` (R8-01) and the JWT
+  `vynkor-wire` prost types — `known_permissions()` (R8-01) and the JWT
   `permissions` claims (free-form strings) adopt the new values with no
-  Rust source change. Bump `veyron-wire` to 0.3.0 and drop the crates-io
+  Rust source change. Bump `vynkor-wire` to 0.3.0 and drop the crates-io
   patch override if one is in effect, per the R8-07 precedent.
-  - Files: `wire/proto/veyron_protocol.proto`, `veyron-wire/` (regenerate
+  - Files: `wire/proto/vynkor_protocol.proto`, `vynkor-wire/` (regenerate
     + publish).
   - Acceptance: a plugin.json declaring `"secrets"` passes
     `validate_manifest`; R8-02's drift test stays green.
-  - **Status (2026-08-13): SHIPPED** — proto v1.4 landed in `veyron-wire`
+  - **Status (2026-08-13): SHIPPED** — proto v1.4 landed in `vynkor-wire`
     (`899bf8d`), regen'ed prost types consumed by the kernel
     (`0b98dac`, merged via PR #13 `31f2cd4`); R8-02's drift test stays
-    green. Note: `veyron-wire` published as **0.2.1** (not 0.3.0). The
+    green. Note: `vynkor-wire` published as **0.2.1** (not 0.3.0). The
     `[patch.crates-io]` override pinned wire **0.2.2**
     (`feat/wire-v1.5-status-renumber`, the P11-03 renumber below) and
-    `veyron-sdk 0.1.3` until both published (2026-08-13); the override was
+    `vynkor-sdk 0.1.3` until both published (2026-08-13); the override was
     then dropped — see P11-03.
 
 - [x] P11-02 — **Sync all six proto copies (fixes pre-existing v1.2
   drift):** the three in-repo copies (`wire/proto`,
   `sdk/python/proto`, `sdk/cpp/proto`) are R8-05-guarded and move
-  together; the standalone `veyron-sdk-python`/`veyron-sdk-cpp` repos are
+  together; the standalone `vynkor-sdk-python`/`vynkor-sdk-cpp` repos are
   **already behind on v1.2** — missing `PERMISSION_EVENT_PUBLISH`,
   `PERMISSION_STORAGE`, the R6 streaming messages
   (`ActionRequestChunk`/`ActionResponseChunk`/`ActionStreamAbort`/
@@ -1211,7 +1211,7 @@ surfaces cover every planned plugin).
   and have no drift guard. Sync all six to v1.4 in one pass; extend R8-05
   (or add a release-time check) to cover the standalone copies so they
   can't drift again.
-  - Files: all six `veyron_protocol.proto` copies,
+  - Files: all six `vynkor_protocol.proto` copies,
     `tests/unit/test_proto_sync.rs`.
   - Acceptance: Python/C++ SDK examples exercise `publish_event` and
     storage-permission manifests against a v1.4 kernel.
@@ -1242,7 +1242,7 @@ surfaces cover every planned plugin).
   instead of 0. Renumbering flips the default to "unknown", so a missed
   `set_status()` fails loudly downstream instead of faking success.
 
-  **Current → target** (in `../vynkor-wire/proto/veyron_protocol.proto`):
+  **Current → target** (in `../vynkor-wire/proto/vynkor_protocol.proto`):
 
   | `ActionStatus` | now | after | | `CommandStatus` | now | after |
   |---|---|---|---|---|---|---|
@@ -1261,39 +1261,39 @@ surfaces cover every planned plugin).
 
   **Where** (every location that must move in lockstep — one wire-breaking
   version, no partial landings):
-  - `../vynkor-wire/proto/veyron_protocol.proto` — the renumber itself;
+  - `../vynkor-wire/proto/vynkor_protocol.proto` — the renumber itself;
     header `// v 1.4` → `// v 1.5`.
   - `../vynkor-wire/src/lib.rs` — `PROTOCOL_VERSION` `"1.4"` → `"1.5"`,
     same commit as the header (they must stay in sync).
   - `../vynkor-wire/Cargo.toml` — `0.2.1` → `0.3.0`: breaking wire changes
     bump the **minor** (additive changes bump patch), per the wire README.
-  - `../vynkor-sdk-python/proto/veyron_protocol.proto`,
-    `../vynkor-sdk-cpp/proto/veyron_protocol.proto` — re-sync byte-identical
+  - `../vynkor-sdk-python/proto/vynkor_protocol.proto`,
+    `../vynkor-sdk-cpp/proto/vynkor_protocol.proto` — re-sync byte-identical
     (R8-05 reads these sibling paths directly and fails on drift).
-  - `../vynkor-sdk-python/veyron/veyron_protocol_pb2.py` — regenerate via
+  - `../vynkor-sdk-python/vynkor/vynkor_protocol_pb2.py` — regenerate via
     `../vynkor-sdk-python/scripts/gen_proto_python.py`. Caveat: the R8-05 staleness marker check
     asserts symbol **names**, not values, so a pure renumber with a skipped
     regen would NOT fail loudly — the regen must be done deliberately.
-  - `../vynkor-sdk-rust/Cargo.toml` — `veyron-wire = "0.2.1"` → `"0.3.0"`.
+  - `../vynkor-sdk-rust/Cargo.toml` — `vynkor-wire = "0.2.1"` → `"0.3.0"`.
   - `Cargo.toml` (this repo) — keep the `[patch.crates-io]` override until
-    wire 0.3.0 publishes, then drop the wire entry (the `veyron-sdk 0.1.3`
+    wire 0.3.0 publishes, then drop the wire entry (the `vynkor-sdk 0.1.3`
     entry stays until that crate publishes).
   - **No Rust/C++/Python source edits anywhere**: every construction and
     comparison site uses the named variant (`ActionStatus::ActionOk as i32`,
-    `r.status() == veyron::proto::ACTION_OK`, `ActionStatus.ACTION_OK`,
+    `r.status() == vynkor::proto::ACTION_OK`, `ActionStatus.ACTION_OK`,
     `set_status(ACTION_OK)`), so the new values arrive via the regenerated
     bindings. (Verified 2026-08-13: kernel `src/ipc/protocol.rs`,
     `src/kernel/commands.rs`, integration tests, and all three SDKs contain
     zero hardcoded status numbers.)
 
   **How (release order):**
-  1. `veyron-wire`: renumber the two enums, bump header + `PROTOCOL_VERSION`
+  1. `vynkor-wire`: renumber the two enums, bump header + `PROTOCOL_VERSION`
      + `Cargo.toml` to 0.3.0 in **one commit**; `cargo build` regenerates the
      prost types.
   2. Re-sync the two vendored proto copies (python/cpp) byte-identical and
-     regenerate `veyron_protocol_pb2.py` (step is deliberate — see caveat).
-  3. `veyron-sdk-rust`: bump the `veyron-wire` requirement to 0.3.0.
-  4. Publish `veyron-wire` 0.3.0 to crates.io.
+     regenerate `vynkor_protocol_pb2.py` (step is deliberate — see caveat).
+  3. `vynkor-sdk-rust`: bump the `vynkor-wire` requirement to 0.3.0.
+  4. Publish `vynkor-wire` 0.3.0 to crates.io.
   5. Kernel: full suite — R8-02/R8-05 and the T-16 interim lint must stay
      green; drop the wire patch entry once 0.3.0 is on crates.io.
   6. Grep the SDKs for residual numeric status comparisons (`== 0`, `== 1`
@@ -1311,9 +1311,9 @@ surfaces cover every planned plugin).
   (OK/ERROR/... shift to 1..7), `CommandStatus` moves `COMMAND_UNKNOWN` to 0
   (OK/ERROR → 1/2). Header + `PROTOCOL_VERSION` + `Cargo.toml` moved in one
   commit; the python/cpp proto copies were re-synced byte-identical and
-  `veyron_protocol_pb2.py` regenerated (deliberate — R8-05 asserts symbol
-  *names*, not values). **Deviation from the plan:** `veyron-wire` stayed at
-  **0.2.2** (not 0.3.0); `veyron-sdk-rust` needed no bump (its `0.2.1` req
+  `vynkor_protocol_pb2.py` regenerated (deliberate — R8-05 asserts symbol
+  *names*, not values). **Deviation from the plan:** `vynkor-wire` stayed at
+  **0.2.2** (not 0.3.0); `vynkor-sdk-rust` needed no bump (its `0.2.1` req
   was satisfied by the 0.2.2 patch). No source edits anywhere — every status
   construction and comparison site uses named variants (re-grepped across
   kernel + all three SDKs; the C++ `echo_plugin` was rebuilt against the
@@ -1325,20 +1325,20 @@ surfaces cover every planned plugin).
 
 ## Cross-repo coordination
 
-- **veyron-plugins** (`veyron-plugins/ROADMAP.md`): database plugin landing
+- **vynkor-plugins** (`vynkor-plugins/ROADMAP.md`): database plugin landing
   (R8-06) depends on R8-01/R8-02 landing here first — the kernel must accept
   `PERMISSION_STORAGE` before the registry entry is installable. The
   protocol v1.4 permission additions (Phase 11) are likewise tracked from
   the plugin side in its "Kernel-side changes needed" section — `secrets`
   was the first plugin blocked on P11; with P11-01/P11-02 shipped the kernel
   side is unblocked; P11-03 (M9) shipped on v1.5 and does not gate plugins.
-- **veyron-wire** (`veyron-wire/`): 0.2.0 publish (R8-07) shipped; the
+- **vynkor-wire** (`vynkor-wire/`): 0.2.0 publish (R8-07) shipped; the
   protocol v1.4 bump (P11-01) shipped as **0.2.1** on crates.io; the v1.5
   status-enum renumber (P11-03) shipped as **0.2.2** on crates.io
-  (2026-08-13). `veyron-sdk` **0.1.3** (wire req 0.2.2) published the same
+  (2026-08-13). `vynkor-sdk` **0.1.3** (wire req 0.2.2) published the same
   day; the kernel's `[patch.crates-io]` override was dropped — everything
   resolves from the registry.
-- **veyron-sdk-python / veyron-sdk-cpp** (standalone repos): proto copies
+- **vynkor-sdk-python / vynkor-sdk-cpp** (standalone repos): proto copies
   synced to v1.4 (P11-02) and guarded — the R8-05 drift test reads the
   sibling-repo paths directly and now also checks the generated Python
   binding for staleness.
@@ -1346,8 +1346,8 @@ surfaces cover every planned plugin).
   drift test, which reads them via sibling-repo paths (`../vynkor-sdk-python`,
   `../vynkor-sdk-cpp`) after the submodule removal below.
 - **Submodules removed (temporary decision, 2026-08-11):** `sdk/*` and `wire/`
-  are no longer git submodules of this repo. The kernel consumes `veyron-wire`
-  and `veyron-sdk` from crates.io; cross-SDK integration tests and the proto
+  are no longer git submodules of this repo. The kernel consumes `vynkor-wire`
+  and `vynkor-sdk` from crates.io; cross-SDK integration tests and the proto
   drift guard read sources from the sibling repos (`../vynkor-wire`,
   `../vynkor-sdk-cpp`, `../vynkor-sdk-python`), which CI checks out itself.
   **Revisit in the future:** decide between a true monorepo, restored
@@ -1363,8 +1363,8 @@ surfaces cover every planned plugin).
 | R8-03 | runtime `check_permission` normalization | none |
 | R8-04 | registry schema doc alignment | none |
 | R8-05 | proto-copy byte-identity test | none |
-| R8-06 | `database` plugin landing (veyron-plugins) | R8-01, R8-02 |
-| R8-07 | `veyron-wire` 0.2.0 publish — shipped; patch override re-added for the v1.4 housekeeping bump (see P11-01: wire entry droppable, `veyron-sdk 0.1.3` entry stays) | none |
+| R8-06 | `database` plugin landing (vynkor-plugins) | R8-01, R8-02 |
+| R8-07 | `vynkor-wire` 0.2.0 publish — shipped; patch override re-added for the v1.4 housekeeping bump (see P11-01: wire entry droppable, `vynkor-sdk 0.1.3` entry stays) | none |
 | N1 | router payload-sharing (`Arc<[u8]>`) in `forward`/`broadcast` — closed as non-issue; `Arc::ptr_eq` regression tests | none |
 | N2 | permission form normalization in clamp + config cross-check — shipped, tests for both forms | none |
 | N3 | config numeric bounds validation — shipped, zero-clamp + warn + tests | none |
@@ -1386,9 +1386,9 @@ surfaces cover every planned plugin).
 | R10-02 | installed-plugin state store (`installed.json`) — shipped: XDG data-dir ledger, atomic writes, reinstall-skip, missing-dir-tolerant remove, offline `list --installed` | none |
 | R10-03 | `registry.json` cache rework — shipped: versioned `registry-cache.json` in the state dir, verified-entries-only stale policy, `revoked` status blocks install, registry v2 map-form parsing | R10-02 |
 | R10-04 | `vyn plugin enable\|disable` toggle — shipped: drop-in rename to `<slug>.yaml.disabled` (skipped by the `*.yaml` glob at boot + SIGHUP), content preserved on re-enable, slug/path hardening, inline-`plugins:` note | R10-01 |
-| P11-01 | protocol v1.4 — `PermissionType` additions 15–19 (`SECRETS`/`CLIPBOARD`/`LAUNCH`/`SCREEN`/`HOME`), header bump, wire regeneration — shipped (`899bf8d` + `31f2cd4`); `veyron-wire` published as 0.2.1; `veyron-sdk 0.1.3` published 2026-08-13, `[patch.crates-io]` dropped | `secrets` plugin (veyron-plugins) needs it |
+| P11-01 | protocol v1.4 — `PermissionType` additions 15–19 (`SECRETS`/`CLIPBOARD`/`LAUNCH`/`SCREEN`/`HOME`), header bump, wire regeneration — shipped (`899bf8d` + `31f2cd4`); `vynkor-wire` published as 0.2.1; `vynkor-sdk 0.1.3` published 2026-08-13, `[patch.crates-io]` dropped | `secrets` plugin (vynkor-plugins) needs it |
 | P11-02 | proto-copy sync — all sibling copies byte-identical at v1.4 + Python-binding staleness check — shipped | P11-01 |
-| P11-03 | M9 zero-value enum renumber — SHIPPED on protocol v1.5 (2026-08-13): `*_UNKNOWN = 0` for ActionStatus/CommandStatus, header + `PROTOCOL_VERSION` 1.5, `veyron-wire` 0.2.2 consumed via patch branch (crates.io publish deferred), python/cpp copies synced + pb2 regenerated, no source edits anywhere | v1.5 wire bump |
+| P11-03 | M9 zero-value enum renumber — SHIPPED on protocol v1.5 (2026-08-13): `*_UNKNOWN = 0` for ActionStatus/CommandStatus, header + `PROTOCOL_VERSION` 1.5, `vynkor-wire` 0.2.2 consumed via patch branch (crates.io publish deferred), python/cpp copies synced + pb2 regenerated, no source edits anywhere | v1.5 wire bump |
 | S1 | registry signature must bind the full entry (`status`/`archive_url`/compat) — revocation bypass + download redirect — **FIXED** (2026-08-14): full-message signature, resolution moved to install (after verification), cache schema v2, tamper regression tests | none |
 | S3 | `crossbeam-epoch` 0.9.18 → 0.9.20 (RUSTSEC-2026-0204) — **FIXED** (2026-08-14, PR #20) | none |
 | S2 | `data_dir` off shared /tmp + 0o700 store dir — **FIXED** (2026-08-18, PR #35) | none |
@@ -1404,7 +1404,7 @@ surfaces cover every planned plugin).
 | S4 | dependency advisories (anyhow / number_prefix) — **FIXED** (2026-08-21): anyhow 1.0.104, h2 0.4.18, number_prefix dropped via indicatif 0.18 — cargo audit clean | none |
 | MA-01 | split `ipc/protocol.rs` + `marketplace/registry.rs` monoliths — **OPEN** (P0, 2026-08-20 audit) | MA-02 |
 | MA-02 | extract duplicated `target_bytes`/`build_frame` + `resolve_*_url` helpers — **FIXED** (2026-08-26): inline Frame builds → `ipc::framing::build_frame`, `utils/url.rs` owns `DEFAULT_WS_PATH` + ws-scheme map | none |
-| MA-03 | unify error system on `VeyronError`; `jwt::validate() -> VeyronError` — **FIXED** (2026-08-24): `VynkorError::Auth`, jwt paths unified, main.rs chain preserved (PR #64) | none |
+| MA-03 | unify error system on `VynkorError`; `jwt::validate() -> VynkorError` — **FIXED** (2026-08-24): `VynkorError::Auth`, jwt paths unified, main.rs chain preserved (PR #64) | none |
 | MA-04 | replace deprecated `rand::thread_rng()` — **FIXED** (2026-08-21): jti nonce from OsRng | none |
 | MA-05 | `docs/COMMENT_TAGS.md` + reduce comment duplication + consistent style — **OPEN** (P1) | none |
 | MA-06 | `create_router_full` → `RouterConfig` struct; move prune spawn out — **FIXED** (2026-08-24): `RouterConfig`/`BuiltRouter`, prune owned by `ApiServer::run` (PR #64) | none |
@@ -1414,18 +1414,18 @@ surfaces cover every planned plugin).
 | MA-10 | split `kernel/orchestrator.rs` (470 L) — **OPEN** (P1) | none |
 | MA-11 | move `drain_to_log`/`proc_resource_usage` → `plugins/metrics.rs` — **FIXED** (2026-08-21): helpers moved verbatim, supervisor imports them | none |
 | MA-12 | log mutex poison instead of silently swallowing — **FIXED** (2026-08-21): shared `utils::sync::recover_poison`, all 14 sites | none |
-| MA-13 | reuse `veyron_wire` framing in WS gateway; drop custom `parse_frame` — **OPEN** (P2) | none |
+| MA-13 | reuse `vynkor_wire` framing in WS gateway; drop custom `parse_frame` — **OPEN** (P2) | none |
 | MA-14 | `utils/logging.rs` dedup + `try_init()` — **FIXED** (2026-08-21): one boxed fmt layer, `try_init()` no longer panics on re-init | none |
-| MA-15 | `veyron-wire` dead-code clippy check — **FIXED** (2026-08-21): large_enum_variant allowed on generated payload oneof (wire PR #5) | none |
+| MA-15 | `vynkor-wire` dead-code clippy check — **FIXED** (2026-08-21): large_enum_variant allowed on generated payload oneof (wire PR #5) | none |
 | MA-16 | separate tests from prod code in `registry.rs` — **FIXED** (2026-08-21): tests moved verbatim to `registry_tests.rs`, wired via `#[path]`; registry.rs at 665 LOC prod | MA-01 |
 | MA-17 | unify `validate_slug`/`validate_plugin_id` regex — **FIXED** (2026-08-21): shared `utils::validate::validate_identifier`; `"."`/`".."` now rejected as plugin ids too | none |
 | MA-18 | `mint_device_token` length-checks `jwt_secret` — **FIXED** (2026-08-21): constant moved to `auth::jwt`, enforced at every mint site | none |
 | MA-19 | `debug_assert!` + SAFETY comment on `unsafe` in `main.rs:391` — **FIXED** (2026-08-21) | none |
-| F1 | marketplace out of the kernel → standalone `vynm` binary (DC-1) — **SHIPPED** 2026-08-22 (`vynkor-manager` + veyron PR #43) (P0, 2026-08-16 dumb-core audit) | none |
+| F1 | marketplace out of the kernel → standalone `vynm` binary (DC-1) — **SHIPPED** 2026-08-22 (`vynkor-manager` + vynkor PR #43) (P0, 2026-08-16 dumb-core audit) | none |
 | F2 | device surfaces as dumb pass-through; interpretation moves to a `discovery` plugin (DC-2) — **OPEN** (P0) | none |
 | F3 | bridge stays as transport; strip `device.<cap>` capability interpretation (DC-2) — **OPEN** (P1) | F2 |
 | F4 | neutralize AI tool-calling surface → generic manifest feature (DC-3) — kernel-side comments landed (PR #64, 2026-08-24); proto wording open (vynkor-wire) | none |
-| F5 | drop hardcoded action→permission fallback (DC-4) — **OPEN** (P1) | network plugin v2 manifest (veyron-plugins) |
+| F5 | drop hardcoded action→permission fallback (DC-4) — **OPEN** (P1) | network plugin v2 manifest (vynkor-plugins) |
 | F6 | manifesto wording + event-store hardening (DC-5) — **SHIPPED** 2026-08-26: wording (`2f47d5f`) + S2 (PR #35) + PERF-2 (PR #70); DC-5 closed | none |
 
 **Ship gate:** R8-01..R8-05 are kernel-local and land together on `develop`;
@@ -1442,9 +1442,9 @@ Linux-cgroup/mount-namespace work and require a delegated cgroup v2 subtree or
 root. Phase 10 (plugin config + marketplace state) is likewise deferred and
 independent of Phase 9 — it can land before or after hard isolation.
  Phase 11 shipped (2026-08-13): P11-01 (protocol v1.4 permission values 15–19,
- `veyron-wire` 0.2.1 published) and P11-02 (proto-copy sync + drift guard) are
+ `vynkor-wire` 0.2.1 published) and P11-02 (proto-copy sync + drift guard) are
  done; P11-03 (M9 zero-value enum renumber) shipped on protocol **v1.5** —
- `veyron-wire` **0.2.2** and `veyron-sdk` **0.1.3** published to crates.io the
+ `vynkor-wire` **0.2.2** and `vynkor-sdk` **0.1.3** published to crates.io the
  same day; the `[patch.crates-io]` override in `Cargo.toml` was dropped and the
  workspace resolves both from the registry.
 
@@ -1464,19 +1464,19 @@ D-04** (identity + versioning + discovery, one proto bump), then D-05 → D-07
   (semver), `user_id`; `PluginManifest` += `platforms[]` + `action_specs[]`
   (`ActionSpec { name, description, params_schema, risk,
   requires_confirmation }`); new `DeviceInfo`/`DeviceState`/`ActionRisk`.
-  `PROTOCOL_VERSION` 1.5 → 1.6, `veyron-wire` 0.2.2 → 0.2.3 (patch —
+  `PROTOCOL_VERSION` 1.5 → 1.6, `vynkor-wire` 0.2.2 → 0.2.3 (patch —
   additive), header + const + `Cargo.toml` in one commit.
-  - Files: `../vynkor-wire/proto/veyron_protocol.proto`,
+  - Files: `../vynkor-wire/proto/vynkor_protocol.proto`,
     `../vynkor-wire/src/lib.rs`, `../vynkor-wire/Cargo.toml`, vendored
     copies (`../vynkor-sdk-python`, `../vynkor-sdk-cpp`), regenerated
-    `veyron_protocol_pb2.py`, `tests/unit/test_proto_sync.rs`.
+    `vynkor_protocol_pb2.py`, `tests/unit/test_proto_sync.rs`.
   - Acceptance: regen compiles; copies byte-identical; drift test green;
     header/`PROTOCOL_VERSION`/`Cargo.toml` bumped in one commit.
   - **Status (2026-08-14): SHIPPED** — wire PR #4 (proto v1.6 + 0.2.3 +
     value-lock tests), sdk-python #3 (proto + regenerated pb2), sdk-cpp #3
     (proto), kernel PR #22 (R8-05 v1.6 markers + new header/const pairing
     test). All merged 2026-08-14; full kernel suite green (444 tests),
-    `clippy -D warnings` + `fmt --check` clean. `veyron-wire` **0.2.3
+    `clippy -D warnings` + `fmt --check` clean. `vynkor-wire` **0.2.3
     published to crates.io 2026-08-14**. Kernel still consumes published
     wire **0.2.2** — D-03 wires the fields up and bumps the dep to 0.2.3
     (registry resolve, no `[patch.crates-io]` needed).
@@ -1513,7 +1513,7 @@ UX-2/UX-4 (2026-08-24), UX-3 (PR #68); PERF-4 partial (PR #68).
 - C++: existing CMake test targets stay green; new tests follow the
   `sdk/cpp/tests/test_*.cpp` naming/registration pattern in `CMakeLists.txt`.
 - Python: new tests follow the `tests/test_*.py` pattern in the
-  `veyron-sdk-python` repo (unit tests live in the SDK, not the kernel;
+  `vynkor-sdk-python` repo (unit tests live in the SDK, not the kernel;
   kernel-side cross-SDK integration tests stay in `tests/integration/`).
 - Docs updated in the same PR (README for operator-visible changes; no
   `docs/FRAMING.md` changes expected since the wire format doesn't change).

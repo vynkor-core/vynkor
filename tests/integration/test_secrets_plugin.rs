@@ -69,7 +69,7 @@ async fn secrets_plugin_round_trip_with_permission() {
     let mut child = Command::new(&bin)
         .env("VYN_SOCKET_PATH", &socket)
         // legacy alias for pre-built plugins (stage 4/B drops it)
-        .env("VEYRON_SOCKET_PATH", &socket)
+        .env("VYN_SOCKET_PATH", &socket)
         .env("SECRETS_PLUGIN_DATA_DIR", vault_dir.path())
         .env(
             "SECRETS_PLUGIN_MASTER_KEY",
@@ -192,7 +192,7 @@ async fn secrets_plugin_denies_unprivileged_caller() {
     let mut child = Command::new(&bin)
         .env("VYN_SOCKET_PATH", &socket)
         // legacy alias for pre-built plugins (stage 4/B drops it)
-        .env("VEYRON_SOCKET_PATH", &socket)
+        .env("VYN_SOCKET_PATH", &socket)
         .env("SECRETS_PLUGIN_DATA_DIR", vault_dir.path())
         .env(
             "SECRETS_PLUGIN_MASTER_KEY",

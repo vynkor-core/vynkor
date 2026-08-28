@@ -1,7 +1,7 @@
 # network: outbound HTTP provider. sandbox MUST stay false — the private
 # netns has no route out, so a sandboxed network plugin cannot reach anything.
 id: network
-binary: /home/behzod/.local/lib/veyron/plugins/network/network
+binary: /home/behzod/.local/lib/vyn/plugins/network/network
 restart: on-failure
 max_restarts: 5
 sandbox: false

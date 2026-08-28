@@ -63,7 +63,7 @@ incl. MA-*), `docs/DUMB_CORE_AUDIT.md` (DC-* dumb-core findings + F1–F6 fixes)
 | UX-4 | CLI polish | AUDIT | `cli/` |
 | MA-01 | split `ipc/protocol.rs` + `marketplace/registry.rs` monoliths | ROADMAP | `ipc/protocol.rs`, `marketplace/registry.rs` |
 | MA-02 | extract duplicated `target_bytes`/`build_frame` + `resolve_*_url` helpers | ROADMAP | `ipc/`, `marketplace/` |
-| MA-03 | unify error system on `VynkorError` (legacy `VeyronError` still aliased) | ROADMAP | `utils/errors.rs` |
+| MA-03 | unify error system on `VynkorError` (legacy `VynkorError` still aliased) | ROADMAP | `utils/errors.rs` |
 | MA-04 | replace deprecated `rand::thread_rng()` | ROADMAP | `auth/jwt.rs` |
 | MA-05 | add this glossary + reduce comment duplication + consistent style | ROADMAP | `docs/COMMENT_TAGS.md` |
 | MA-06 | `create_router_full` → `RouterConfig` struct | ROADMAP | `ipc/` |
@@ -73,9 +73,9 @@ incl. MA-*), `docs/DUMB_CORE_AUDIT.md` (DC-* dumb-core findings + F1–F6 fixes)
 | MA-10 | split `kernel/orchestrator.rs` (470 L) | ROADMAP | `kernel/orchestrator.rs` |
 | MA-11 | move `drain_to_log`/`proc_resource_usage` → `plugins/metrics.rs` | ROADMAP | `plugins/` |
 | MA-12 | log mutex poison instead of silently swallowing | ROADMAP | `utils/` |
-| MA-13 | reuse `vynkor_wire` framing in WS gateway (legacy `veyron_wire` still aliased) | ROADMAP | `api/websocket.rs` |
+| MA-13 | reuse `vynkor_wire` framing in WS gateway (legacy `vynkor_wire` still aliased) | ROADMAP | `api/websocket.rs` |
 | MA-14 | `utils/logging.rs` dedup + `try_init()` | ROADMAP | `utils/logging.rs` |
-| MA-15 | `vynkor-wire` dead-code clippy check (legacy `veyron-wire` shim) | ROADMAP | `../vynkor-wire` |
+| MA-15 | `vynkor-wire` dead-code clippy check (legacy `vynkor-wire` shim) | ROADMAP | `../vynkor-wire` |
 | MA-16 | separate tests from prod code in `registry.rs` | ROADMAP | `plugins/registry.rs` |
 | MA-17 | unify `validate_slug`/`validate_plugin_id` regex | ROADMAP | `utils/` |
 | MA-18 | `mint_device_token` length-checks `jwt_secret` | ROADMAP | `auth/jwt.rs` |

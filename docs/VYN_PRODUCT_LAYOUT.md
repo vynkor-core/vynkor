@@ -11,10 +11,10 @@ the rename policy). Where this file and older docs disagree, this file wins.
 |---|---|---|
 | Product config | `./config.yaml` (cwd-relative dev habit), explicit `--config` | `~/.config/vyn/config.yaml` — ONE file, both tools |
 | Drop-ins | `<config dir>/plugins.d/*.yaml` | unchanged mechanism → `~/.config/vyn/plugins.d/` by derivation |
-| Plugin binaries | `~/.local/lib/veyron/plugins/<slug>/` | `~/.local/lib/vyn/plugins/<slug>/` |
-| State (ledger, registry cache) | `~/.local/share/veyron/` | `~/.local/share/vyn/` |
-| Runtime socket | `$XDG_RUNTIME_DIR/veyron.sock` | `$XDG_RUNTIME_DIR/vyn.sock` — **deferred**, see §6 |
-| PID / log files | `~/.veyron/run`, log under data dir | `~/.local/state/vyn/` (XDG state home) |
+| Plugin binaries | `~/.local/lib/vyn/plugins/<slug>/` | `~/.local/lib/vyn/plugins/<slug>/` |
+| State (ledger, registry cache) | `~/.local/share/vyn/` | `~/.local/share/vyn/` |
+| Runtime socket | `$XDG_RUNTIME_DIR/vynkor.sock` | `$XDG_RUNTIME_DIR/vyn.sock` — **deferred**, see §6 |
+| PID / log files | `~/.vynkor/run`, log under data dir | `~/.local/state/vyn/` (XDG state home) |
 
 Rationale for the split (canonical XDG): config = small human-edited files;
 lib = heavy executables; share = persistent state; runtime = tmpfs sockets;
@@ -78,7 +78,7 @@ each drop-in records, so the two trees never need to coincide.
 - `vyn init` — explicit, idempotent template generator (never overwrites an
   existing file; `--force` to reset).
 - `install.sh` (repo root installer) must generate the SAME location
-  (`~/.config/vyn/`) — its current draft targets `~/.config/veyron/` and
+  (`~/.config/vyn/`) — its current draft targets `~/.config/vyn/` and
   needs updating together with V-17.
 - `vyn status` gains "loaded config: <path>" output.
 
@@ -109,17 +109,17 @@ Filesystem moves (data, lib, config) are cheap and local:
   (or regenerate them from the ledger) — a plain directory move silently
   breaks spawning. Ship as part of the migration step (vynm-side helper +
   kernel-side acceptance test).
-- **Socket rename is NOT free:** the default lives in `veyron-wire/socket.rs`
+- **Socket rename is NOT free:** the default lives in `vynkor-wire/socket.rs`
   and is duplicated in every SDK's connection code — renaming means a
   coordinated wire + 3-SDK release. Recommendation: rename filesystem paths
-  now (§1 rows above except socket), keep `veyron.sock` until the full
+  now (§1 rows above except socket), keep `vynkor.sock` until the full
   rename milestone, then flip wire+SDKs together. Operators who care today
   can set `socket_path:` explicitly in config.
 
 ~~Socket/env renames were initially deferred to a future milestone~~
 **SUPERSEDED 2026-08-22: the vynkor 0.0.1 big-bang does the HARD CUTOVER
 now** (§8). Pre-production status means zero external users ⇒ no fallback
-windows, no `VEYRON_*` shims: everything flips to `vyn.sock`, `share/vyn`,
+windows, no `VYNKOR_*` shims: everything flips to `vyn.sock`, `share/vyn`,
 `lib/vyn/plugins`, `VYN_*`/`VYNM_*` env vars in one coordinated wave.
 
 ## 7. Task breakdown (amends stage-3 backlog)
@@ -148,17 +148,17 @@ paths.
 Full ecosystem rename + package reboot happens NOW, not at a future
 milestone. Uniquely cheap window: zero external users (hard cutover beats
 migration shims), the registry needs re-signing anyway (S1 fix, PR
-veyron-plugins#23 folds in), and `install.sh` is being born right now.
+vynkor-plugins#23 folds in), and `install.sh` is being born right now.
 
 | Layer | Now | Becomes |
 |---|---|---|
-| GitHub | org `veyron-core`, repos `veyron*` | org `vynkor`, repos `vynkor*` (renames last — redirects cover old clones) |
-| crates.io | `veyron-wire 0.2.6`, `veyron-sdk 0.1.3` | **new packages** `vynkor-wire 0.0.1`, `vynkor-sdk 0.0.1` (names verified free); old crates frozen forever + final deprecation notice patch each |
-| PyPI | `veyron-sdk` (module `veyron`) | `vynkor-sdk 0.0.1`, module `vynkor` |
-| Kernel crate | lib name `veyron` (unpublished) | `vynkor`; binary stays `vyn` |
+| GitHub | org `vynkor-core`, repos `vynkor*` | org `vynkor`, repos `vynkor*` (renames last — redirects cover old clones) |
+| crates.io | `vynkor-wire 0.2.6`, `vynkor-sdk 0.1.3` | **new packages** `vynkor-wire 0.0.1`, `vynkor-sdk 0.0.1` (names verified free); old crates frozen forever + final deprecation notice patch each |
+| PyPI | `vynkor-sdk` (module `vynkor`) | `vynkor-sdk 0.0.1`, module `vynkor` |
+| Kernel crate | lib name `vynkor` (unpublished) | `vynkor`; binary stays `vyn` |
 | Manager | already `vynkor-manager` ✓ | dep swap to `vynkor-wire` |
-| Env vars | `VEYRON_*` | `VYN_*` / `VYNM_*` hard cutover |
-| Paths/socket | `veyron.sock`, `share/veyron`, `lib/veyron/plugins` | `vyn.sock`, `share/vyn`, `lib/vyn/plugins` (§1) |
+| Env vars | `VYNKOR_*` | `VYN_*` / `VYNM_*` hard cutover |
+| Paths/socket | `vynkor.sock`, `share/vynkor`, `lib/vynkor/plugins` | `vyn.sock`, `share/vyn`, `lib/vyn/plugins` (§1) |
 | Registry artifacts | GitHub raw URLs | **Cloudflare R2** behind `cdn.vynkor.dev` |
 
 ### Phases (every phase leaves all repos green)
@@ -168,7 +168,7 @@ veyron-plugins#23 folds in), and `install.sh` is being born right now.
   LAST (redirects cover everything meanwhile).
 - **Phase B — registry on R2:** domain + bucket + `cdn.vynkor.dev`;
   `package.sh` gains upload step AND the S1 seven-field signature
-  (absorbs veyron-plugins Sequencing #4); all plugins re-signed as **0.0.1**
+  (absorbs vynkor-plugins Sequencing #4); all plugins re-signed as **0.0.1**
   against the new URLs (maintainer key required). `registry.json` STAYS IN
   GIT — PR review + revocation history; R2 hosts archives only.
 - **Phase C — installer & docs sweep:** `install.sh` targets
@@ -178,25 +178,25 @@ veyron-plugins#23 folds in), and `install.sh` is being born right now.
 ### Stage 4/A wave 1 — verified complete (2026-08-22, independent check)
 
 crates.io artifacts live (`vynkor-wire 0.0.1`, `vynkor-sdk 0.0.1`,
-deprecation `veyron-wire 0.2.7`); GitHub repos renamed (`vynkor-wire`,
+deprecation `vynkor-wire 0.2.7`); GitHub repos renamed (`vynkor-wire`,
 `vynkor-sdk`); all four PRs merged; gates re-run independently green in all
 four repos (kernel 430 / manager 92 / wire 26 / sdk 35).
 
 **Loose ends & resolutions:**
-1. `veyron-sdk` never got its deprecation notice patch (§8 said "each") →
+1. `vynkor-sdk` never got its deprecation notice patch (§8 said "each") →
    scheduled into **wave 2**: publish `0.1.7` from a short-lived branch with
    a renamed-to-vynkor-sdk banner; do NOT merge that banner into `vynkor-sdk`
    main (it is meaningless on the new crate). Same accepted pattern as the
    wire `0.2.7` banner, whose unmerged branch is closed as-is.
 2. Public API polish moved to wave 2: exactly one prefixed public type
-   exists — `VeyronClient` → becomes `VynkorClient`; tree-wide doc/comment
-   sweep of ~170 residual "veyron" mentions (EXCLUDING the generated
-   `proto::veyron` module path — protobuf package rename requires a
+   exists — `VynkorClient` → becomes `VynkorClient`; tree-wide doc/comment
+   sweep of ~170 residual "vynkor" mentions (EXCLUDING the generated
+   `proto::vynkor` module path — protobuf package rename requires a
    coordinated change across kernel/wire/cpp/python copies and stays a
    separate milestone).
 3. Republish: public types change vs the published `0.0.1` ⇒ wave 2 ships
    **`vynkor-sdk 0.0.2`** so crates.io matches main.
-4. Local checkout dir `veyron-sdk-rust` → `vynkor-sdk` (matches GitHub).
+4. Local checkout dir `vynkor-sdk-rust` → `vynkor-sdk` (matches GitHub).
 5. **C++/Python SDKs explicitly DEFERRED** to after Phase B's plugin
    re-release wave: they vendor the proto and read socket/JWT env strings;
    when touched, they flip to `VYN_SOCKET_PATH` / `VYN_JWT_*` in one pass.
@@ -204,6 +204,6 @@ four repos (kernel 430 / manager 92 / wire 26 / sdk 35).
 ### Prerequisites (owner-side)
 
 1. Buy `vynkor.dev` (~$10–15/yr; `.dev` is HSTS-preloaded — fine, served via
-   Cloudflare TLS). Short-term fallback: `vynkor.veyron.online`.
+   Cloudflare TLS). Short-term fallback: `vynkor.vynkor.online`.
 2. Cloudflare account + R2 bucket + custom-domain binding.
 3. Signing key (`VYN_SIGNING_KEY_HEX`) available for the re-sign pass.

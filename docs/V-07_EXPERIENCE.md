@@ -15,7 +15,7 @@ Implemented 2026-08-22.
 | `src/cli/devices.rs` | C3: `format_ts` inlined (sole remaining user after marketplace deletion); algorithm provenance documented at the site. |
 | `src/plugins/loader.rs` | stale coexistence-window comment removed (V-07 happened). |
 | `src/main.rs` | plugin dispatch updated to the slim signature; `resolve_plugins_dir` import gone. |
-| `Cargo.toml` | direct deps dropped: `zip`, `indicatif`, `ed25519-dalek`, `sha2`, plus bonus cleanup `hmac`/`hkdf` (verified unused — frame MAC arrives via `pub use veyron_wire::mac::*`). |
+| `Cargo.toml` | direct deps dropped: `zip`, `indicatif`, `ed25519-dalek`, `sha2`, plus bonus cleanup `hmac`/`hkdf` (verified unused — frame MAC arrives via `pub use vynkor_wire::mac::*`). |
 | `tests/unit/` | `test_installer.rs`, `test_state.rs` deleted (+ mod entries) — they live in vynkor-manager now. |
 
 ## One documented deviation from the roadmap text

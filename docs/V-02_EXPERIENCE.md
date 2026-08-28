@@ -7,8 +7,8 @@ Task: **V-02** from `docs/VYNM_ROADMAP.md` (kernel lane, stage 2). Branch
 
 | File | Change |
 |---|---|
-| `src/plugins/loader.rs` | Import swap: `crate::marketplace::installer::{validate_manifest, InstallManifest}` → `veyron_wire::manifest::*`. `validate_plugin_def` passes `crate::auth::permissions::resolve_permission` as the injected resolver (D1 seam — same fn the marketplace copy called inline). Config-permission cross-check via `normalize_permission` stays kernel-side untouched. |
-| `Cargo.toml` | `veyron-wire = "0.2.3"` → `{ version = "0.2.4", features = ["manifest"] }`. |
+| `src/plugins/loader.rs` | Import swap: `crate::marketplace::installer::{validate_manifest, InstallManifest}` → `vynkor_wire::manifest::*`. `validate_plugin_def` passes `crate::auth::permissions::resolve_permission` as the injected resolver (D1 seam — same fn the marketplace copy called inline). Config-permission cross-check via `normalize_permission` stays kernel-side untouched. |
+| `Cargo.toml` | `vynkor-wire = "0.2.3"` → `{ version = "0.2.4", features = ["manifest"] }`. |
 | `docs/V-02_EXPERIENCE.md` | this file |
 
 Marketplace module is untouched — its own manifest copy keeps compiling and
@@ -33,14 +33,14 @@ no type leakage before building:
   manifest type ✓
 - `tests/unit/test_manifest_enforcement.rs` + `test_installer.rs` — assert on
   error message text; wire's messages are byte-identical and arrive as
-  `VeyronError::Internal` via the existing `From<WireError>` impl, so
+  `VynkorError::Internal` via the existing `From<WireError>` impl, so
   `contains()` assertions hold unchanged ✓
 
 ## Gates (all green)
 
 | Gate | Result |
 |---|---|
-| `cargo build` | ✓ (pulls published veyron-wire 0.2.4 from crates.io) |
+| `cargo build` | ✓ (pulls published vynkor-wire 0.2.4 from crates.io) |
 | `cargo test --all --all-features` | ✓ 521 passed / 0 failed — incl. `test_installer::manifest_*` against the untouched marketplace copy |
 | `cargo clippy --all-targets --all-features -- -D warnings` | ✓ clean |
 | `cargo fmt --check` | ✓ |
@@ -51,4 +51,4 @@ no type leakage before building:
    marking the coexistence window goes away with it.
 2. Boot-time behavior verified identical by the existing suites (compat
    range, unknown permission, v2 per-action resolution) — no new tests needed;
-   the drift surface moved to veyron-wire's own suite in V-01.
+   the drift surface moved to vynkor-wire's own suite in V-01.

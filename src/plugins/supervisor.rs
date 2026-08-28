@@ -285,10 +285,6 @@ impl PluginSupervisor {
         };
         cmd.args(&config.args)
             .env("VYN_SOCKET_PATH", &self.socket_path)
-            // legacy alias: pre-built C++/Python plugins still read the old
-            // name until they are re-released on vynkor-sdk 0.0.1
-            // TODO(vynkor-plugins-0.0.1): drop after plugin re-release wave (stage 4/B)
-            .env("VEYRON_SOCKET_PATH", &self.socket_path)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         if let Some(dir) = &plugin_data_dir {
