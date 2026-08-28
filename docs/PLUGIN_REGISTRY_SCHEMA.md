@@ -73,7 +73,7 @@ Top-level structure: a JSON array of plugin entries.
 ### Kernel-side registry cache (R10-03)
 
 The kernel mirrors the fetched document to `registry-cache.json` in the
-marketplace state dir (same directory as `installed.json`; `VYN_STATE_DIR` (legacy `VEYRON_STATE_DIR` still read)
+marketplace state dir (same directory as `installed.json`; `VYN_STATE_DIR` (legacy `VYNKOR_STATE_DIR` still read)
 / `XDG_DATA_HOME` relocate it). The cache is a **versioned wrapper**, not a
 raw mirror:
 

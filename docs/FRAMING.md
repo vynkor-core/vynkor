@@ -84,9 +84,8 @@ does not call `write_frame_raw`).
 
 ## WebSocket JWT Delivery
 
-**WebSocket JWT delivery:** The Vynkor manifesto (renamed from Veyron 2026-08-22) originally specified `?token=<jwt>` as
-the URL query parameter for WebSocket auth. The implementation uses
-`Sec-WebSocket-Protocol: vynkor, <jwt>` (legacy `veyron` still accepted) instead. This is intentional: tokens in URL
+**WebSocket JWT delivery:** The implementation uses
+`Sec-WebSocket-Protocol: vynkor, <jwt>` for WebSocket auth. This is intentional: tokens in URL
 query strings appear in server access logs, browser history, and proxy logs.
 The header approach is superior. The manifesto text is superseded by this document.
 Third-party clients must use the `Sec-WebSocket-Protocol` header.

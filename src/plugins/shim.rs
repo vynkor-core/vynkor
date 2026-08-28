@@ -112,12 +112,7 @@ pub fn run(plugin_binary: &Path, args: &[String]) -> anyhow::Result<i32> {
     // `max_fs_access: full`). Read here, applied in the plugin's pre_exec so
     // only the plugin is restricted — the shim keeps unrestricted access.
     let fs_restriction = crate::plugins::fsaccess::from_env();
-    // legacy fallback pairs with the supervisor's transition alias (stage 4/A):
-    // shims spawned by a pre-cutover kernel still announce VEYRON_SOCKET_PATH
-    let socket_path = std::env::var("VYN_SOCKET_PATH")
-        .or_else(|_| std::env::var("VEYRON_SOCKET_PATH"))
-        .ok()
-        .map(PathBuf::from);
+    let socket_path = std::env::var("VYN_SOCKET_PATH").ok().map(PathBuf::from);
 
     // outer uid/gid must be captured before unshare — afterwards the process
     // is already root inside the new user namespace

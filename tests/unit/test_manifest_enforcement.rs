@@ -59,7 +59,7 @@ fn incompatible_min_kernel_refused() {
     let err = validate_plugin_def(&def).unwrap_err();
     let msg = err.to_string();
     assert!(
-        msg.contains("requires Veyron kernel >= 99.0.0"),
+        msg.contains("requires") && msg.contains("kernel >= 99.0.0") && msg.contains("99.0.0"),
         "expected compat error, got: {msg}"
     );
 }

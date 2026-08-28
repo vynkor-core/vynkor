@@ -1,14 +1,14 @@
-# Veyron ROADMAP — vynm marketplace extraction (F1 / DC-1)
+# Vynkor ROADMAP — vynm marketplace extraction (F1 / DC-1)
 
-> **Note (2026-08-28):** historical snapshot at wire `0.2.4–0.2.6` era — now `vynkor-wire 0.0.2` proto `v1.7` (legacy `veyron-wire` still readable).
+> **Note (2026-08-28):** historical snapshot at wire `0.2.4–0.2.6` era — now `vynkor-wire 0.0.2` proto `v1.7` (legacy `vynkor-wire` still readable).
 
-**Baseline:** 2026-08-21 · Kernel `0.1.0` · `veyron-wire` `0.2.3` (proto v1.6)
+**Baseline:** 2026-08-21 · Kernel `0.1.0` · `vynkor-wire` `0.2.3` (proto v1.6)
 **Branch:** `develop`
 **Source:** architecture + decisions in `docs/VYNM_PLAN.md` (authoritative);
 this file is the task breakdown. Mirrors `ROADMAP.md` F1 and
 `docs/DUMB_CORE_AUDIT.md` §6-F1 / §7-decision-1.
 **Status:** stages 1–2 DONE (V-01…V-08). **Stage-4 FINALE EXECUTED &
-VERIFIED 2026-08-22**: all repos/dirs → `vynkor*` (org `veyron-core` stays
+VERIFIED 2026-08-22**: all repos/dirs → `vynkor*` (org `vynkor-core` stays
 — `vynkor` handle is TAKEN on GitHub; owner to pick alternative), protocol
 identifiers cutover everywhere (`proto::vynkor`, subprotocol `vynkor`,
 `vynkor-frame-mac-v1`; PROTOCOL_VERSION stays 1.6), published:
@@ -35,9 +35,9 @@ org-name decision.
 - **Security boundaries port verbatim, never rewritten:** sha256 archive
   digest, zip-slip guard, Ed25519 signature verify, revocation gate,
   `create_new` (O_EXCL) drop-in write, slug/path traversal guards.
-- **Dependency direction acyclic:** `veyron-wire ← {kernel, vynm}`. The
+- **Dependency direction acyclic:** `vynkor-wire ← {kernel, vynm}`. The
   manager never depends on the kernel crate; the kernel never depends on the
-  manager. Manager CI asserts `cargo tree -i veyron` is empty.
+  manager. Manager CI asserts `cargo tree -i vynkor` is empty.
 - **Manifest module behind a cargo feature, default off** — SDK consumers
   compile neither serde_json nor semver of it.
 - **The kernel never calls vynm and has no runtime awareness of it** — drop-ins
@@ -56,14 +56,14 @@ Complexity: **S** ≤ half day · **M** ~1–2 days · **L** multi-session.
 
 | ID | Task | Pri | Size | Repo | Depends on |
 |---|---|---|---|---|---|
-| V-01 | wire: manifest module behind feature | P0 | L | veyron-wire | — |
-| V-02 | kernel: loader import switch | P0 | S | veyron | V-01 |
+| V-01 | wire: manifest module behind feature | P0 | L | vynkor-wire | — |
+| V-02 | kernel: loader import switch | P0 | S | vynkor | V-01 |
 | V-03 | manager scaffold + state + drop-in writer | P1 | M | vynkor-manager | V-01 |
 | V-04 | manager: registry client + RegistrySource seam | P1 | L | vynkor-manager | V-03 |
 | V-05 | manager: install pipeline port (+ D2/D3 deletions) | P1 | L | vynkor-manager | V-04 |
 | V-06 | manager: vynm CLI | P1 | M | vynkor-manager | V-05 |
-| V-07 | kernel: cut out src/marketplace | P1 | M | veyron | V-02, V-03…V-06 |
-| V-08 | docs & gates, close stage 2 | P2 | S | veyron | V-07 |
+| V-07 | kernel: cut out src/marketplace | P1 | M | vynkor | V-02, V-03…V-06 |
+| V-08 | docs & gates, close stage 2 | P2 | S | vynkor | V-07 |
 | V-09 | multi-source config + resolution engine | P3 | M | vynkor-manager | V-06 |
 | V-10 | permission preview on install | P3 | S | vynkor-manager | V-09 |
 | V-11 | version pinning `slug@ver` | P3 | S | vynkor-manager | V-09 |
@@ -73,8 +73,8 @@ Complexity: **S** ≤ half day · **M** ~1–2 days · **L** multi-session.
 | V-15 | install from local archive / direct URL | P3 | M | vynkor-manager | V-05 |
 | V-16 | CLI polish package | P3 | M | vynkor-manager | V-09…V-15 |
 | V-17 | **stage 4/A:** rename code+packages (`vynkor-wire/sdk 0.0.1`, kernel crate, env/paths hard cut, GitHub last) | P0 | L | all repos | wire publish; domain not required |
-| V-18 | **stage 4/B:** registry on Cloudflare R2 + S1 re-sign, plugins 0.0.1 | P0 | M | veyron-plugins + manager + kernel | ✅ shipped 2026-08-26, domain binding pending |
-| V-19 | **stage 4/C:** installer `install.sh` on `~/.config/vyn/` + docs sweep + AUR PKGBUILD | P1 | M | veyron + distro | ◐ partial — installer done; hosting/AUR pending |
+| V-18 | **stage 4/B:** registry on Cloudflare R2 + S1 re-sign, plugins 0.0.1 | P0 | M | vynkor-plugins + manager + kernel | ✅ shipped 2026-08-26, domain binding pending |
+| V-19 | **stage 4/C:** installer `install.sh` on `~/.config/vyn/` + docs sweep + AUR PKGBUILD | P1 | M | vynkor + distro | ◐ partial — installer done; hosting/AUR pending |
 
 Parallel lanes after V-01: kernel lane (V-02) and manager lane
 (V-03 → V-04 → V-05 → V-06) proceed independently; V-07 joins them.
@@ -94,7 +94,7 @@ V-13, V-14} → V-16; V-15 hangs off V-05 directly (needs only the pipeline).
 ## P0 — Stage 1: wire repo (`../vynkor-wire`)
 
 - [x] **V-01 — wire: manifest module behind the `manifest` feature.**
-  (shipped 2026-08-21: veyron-wire PR #6 merged; published to crates.io as
+  (shipped 2026-08-21: vynkor-wire PR #6 merged; published to crates.io as
   **0.2.4** — V-02 needs no `[patch.crates-io]` override, just bump the
   requirement + `features = ["manifest"]`)
   Single implementation of plugin-manifest parsing/validation, consumed by
@@ -102,7 +102,7 @@ V-13, V-14} → V-16; V-15 hangs off V-05 directly (needs only the pipeline).
   - New `src/manifest.rs`, entire module behind
     `#[cfg(feature = "manifest")]`; re-export from `src/lib.rs`.
   - Port verbatim from the kernel:
-    `InstallManifest` (`veyron/src/marketplace/installer.rs:59`),
+    `InstallManifest` (`vynkor/src/marketplace/installer.rs:59`),
     `KernelCompatRange`, `ActionSpec` (V1 string / V2 object enum),
     `known_permissions()` (`installer.rs:27`), `check_kernel_compatibility()`
     (`registry.rs:626`), `validate_manifest()` (`installer.rs:754`).
@@ -121,7 +121,7 @@ V-13, V-14} → V-16; V-15 hangs off V-05 directly (needs only the pipeline).
     so the manager needs no kernel auth code. F5 can later change kernel
     policy without a wire change.
   - Errors: descriptive messages mapped into `WireError` (new variant or
-    existing message variant); kernel wraps into `VeyronError` at the call
+    existing message variant); kernel wraps into `VynkorError` at the call
     site. Same fail-loud semantics as today.
   - `Cargo.toml`: `[features] manifest = ["dep:serde_json", "dep:semver"]`
     with optional deps, off by default.
@@ -148,7 +148,7 @@ V-13, V-14} → V-16; V-15 hangs off V-05 directly (needs only the pipeline).
   Marketplace still present and untouched → mergeable alone.
   - `src/plugins/loader.rs:3`:
     `use crate::marketplace::installer::{validate_manifest, InstallManifest};`
-    → `use veyron_wire::manifest::{validate_manifest, InstallManifest};`.
+    → `use vynkor_wire::manifest::{validate_manifest, InstallManifest};`.
     Pass `crate::auth::permissions::resolve_permission` as the injected
     resolver (same function the old code called inline at
     `installer.rs:800`).
@@ -169,7 +169,7 @@ V-13, V-14} → V-16; V-15 hangs off V-05 directly (needs only the pipeline).
   (shipped 2026-08-22: manager PR #1)
   - Repo init per rename policy (`vynkor-manager`, binary `vynm` + lib
     target); README vynkor naming throughout; CI mirrors kernel gates
-    (test/clippy/fmt) + the no-kernel-dep assertion (`cargo tree -i veyron`
+    (test/clippy/fmt) + the no-kernel-dep assertion (`cargo tree -i vynkor`
     empty).
   - Port `state.rs` (154 L) verbatim, then apply seams:
     - §6.6: `state_dir()`, cache/plugin-dir helpers become `pub` (stage-3
@@ -222,13 +222,13 @@ V-13, V-14} → V-16; V-15 hangs off V-05 directly (needs only the pipeline).
   - Port the 8-step atomic pipeline from `installer.rs` (812 L): download w/
     progress bar, sha256, zip-slip-guarded extraction, bak+rename atomic
     swap, manifest validation, ledger record, drop-in write.
-  - Manifest validation calls `veyron_wire::manifest::validate_manifest` with
+  - Manifest validation calls `vynkor_wire::manifest::validate_manifest` with
     `default_resolver` (or injected equivalent).
   - D3: delete the hardcoded `let sandbox = installed.plugin_id != "network"`
     (`installer.rs:637`). Sandbox preference comes from the plugin's own
     `plugin.json` optional `sandbox` hint field (default `true`); operator
     edits the drop-in for anything else. (Manifest-side field addition lands
-    in veyron-plugins separately.)
+    in vynkor-plugins separately.)
   - D2: drop hard install-time compat enforcement (`installer.rs:189` area) —
     the kernel re-validates authoritatively at boot (`loader.rs:277`). Keep
     integrity enforcement (sha256/signature/zip-slip/revocation). Optional
@@ -263,7 +263,7 @@ V-13, V-14} → V-16; V-15 hangs off V-05 directly (needs only the pipeline).
 ### Join
 
 - [x] **V-07 — kernel: cut the marketplace out.**
-  (shipped 2026-08-22: veyron PR #43; reqwest kept for the surviving REST client — documented deviation)
+  (shipped 2026-08-22: vynkor PR #43; reqwest kept for the surviving REST client — documented deviation)
   Requires V-02 (loader already on wire) + V-03…V-06 (manager functional).
   - Delete `src/marketplace/` entirely; `src/lib.rs` drops
     `pub mod marketplace` (C6).
@@ -279,7 +279,7 @@ V-13, V-14} → V-16; V-15 hangs off V-05 directly (needs only the pipeline).
   - `Cargo.toml` drops: `zip` (:70), `indicatif` (:71), `reqwest` (:66),
     `ed25519-dalek` (:47), `sha2` (:44). Bonus cleanup: verify `hmac` (:43)
     and `hkdf` (:45) have no users via `cargo tree -i` (frame MAC comes via
-    `pub use veyron_wire::mac::*`) and drop if confirmed. `semver` (:68)
+    `pub use vynkor_wire::mac::*`) and drop if confirmed. `semver` (:68)
     stays — loader compat check uses it.
   - Delete marketplace unit tests here (`test_installer.rs`,
     `test_state.rs`, `registry_tests.rs` live in the manager now).
@@ -399,7 +399,7 @@ lives in the manager repo and any format change is deliberate.
     calls `vynm sign`, then dies).
   - `keygen`: ed25519 pair via OS RNG (no heavy deps); public key printed
     hex for `marketplace_public_key:`; secret written as hex-seed file
-    `0600` (`VEYRON_SIGNING_KEY_HEX`-compatible format), refuses overwrite
+    `0600` (`VYNKOR_SIGNING_KEY_HEX`-compatible format), refuses overwrite
     without `--force`.
   - `sign`: ENTRY-level S1 signing —
     `vynm sign --key <file> --slug --version --sha256 --status
@@ -449,20 +449,20 @@ lives in the manager repo and any format change is deliberate.
   Wave 1 ✅ DONE & verified 2026-08-22 (wire/sdk/kernel/manager PRs merged,
   artifacts published, gates independently re-run green).
   Wave 2 ✅ DONE & verified 2026-08-22 (`vynkor-sdk 0.0.2` published with
-  `VynkorClient/VynkorError`; `veyron-sdk 0.1.7` deprecation patch live;
+  `VynkorClient/VynkorError`; `vynkor-sdk 0.1.7` deprecation patch live;
   CI workflow added; 9 residual mentions — all documented exclusions incl.
-  WS-subprotocol `veyron` kept paired with the kernel gateway). Scope in
-  `docs/VYN_PRODUCT_LAYOUT.md` §8 "wave 2": `VeyronClient → VynkorClient`
+  WS-subprotocol `vynkor` kept paired with the kernel gateway). Scope in
+  `docs/VYN_PRODUCT_LAYOUT.md` §8 "wave 2": `VynkorClient → VynkorClient`
   (sole prefixed public type), ~170 residual doc mentions, republish
-  **0.0.2**, `veyron-sdk 0.1.7` deprecation patch, dir rename to
+  **0.0.2**, `vynkor-sdk 0.1.7` deprecation patch, dir rename to
   `vynkor-sdk`. C++/Python SDKs deferred until after Phase B.
   Full design: `docs/VYN_PRODUCT_LAYOUT.md` §8. Zero external users ⇒ NO
   back-compat shims: old paths/envs die in this wave.
   1. `vynkor-wire 0.0.1`: crate rename + `vyn.sock`, `share/vyn`,
      `lib/vyn/plugins`, `VYN_*` env defaults → publish.
-  2. `vynkor-sdk` (Rust) + PyPI `vynkor-sdk` 0.0.1: module `veyron` →
+  2. `vynkor-sdk` (Rust) + PyPI `vynkor-sdk` 0.0.1: module `vynkor` →
      `vynkor`; C++ SDK follows the repo/proto paths.
-  3. Kernel: lib crate `veyron` → `vynkor`; imports tree-wide; env vars;
+  3. Kernel: lib crate `vynkor` → `vynkor`; imports tree-wide; env vars;
      data/lib/socket dirs; tests updated. Binary stays `vyn`.
   4. Manager: dep swap to `vynkor-wire 0.0.1`; config discovery lands here:
      precedence `--config`(alias `--kernel-config`) > `$VYN_CONFIG` >
@@ -470,10 +470,10 @@ lives in the manager repo and any format change is deliberate.
      template + idempotent `vyn init [--force]`; `vyn status` prints loaded
      path and warns on shadowing.
   5. Old crates get one final deprecation-notice patch each.
-  6. GitHub renames LAST (org `veyron-core` → `vynkor`, repos → `vynkor*`;
+  6. GitHub renames LAST (org `vynkor-core` → `vynkor`, repos → `vynkor*`;
      redirects cover old clones meanwhile).
   - Acceptance: every repo green on the new names end-to-end; fresh clone +
-    build + full suites pass with ZERO references to `veyron` identifiers in
+    build + full suites pass with ZERO references to `vynkor` identifiers in
     code (docs history excepted).
 
 - [x] **V-18 — stage 4/B: registry on Cloudflare R2 + re-sign.**

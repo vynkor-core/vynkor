@@ -2,7 +2,7 @@
 
 Status: **partially shipped** — D-01..D-14 shipped (2026-08-14..2026-08-16, proto v1.6), E-01 per-device credentials shipped as proto v1.7 (2026-08-22), D-15..D-23 deferred. Design decisions remain valid; kernel implementation lives in REMOTE_DEVICES_ROADMAP.md. Design decisions remain valid; kernel implementation lives in REMOTE_DEVICES_ROADMAP.md.
 
-Goal: let a single Vynkor kernel (renamed from Veyron 2026-08-22, running on the user's own machine) act as a
+Goal: let a single Vynkor kernel (renamed from Vynkor 2026-08-22, running on the user's own machine) act as a
 **hub** that additional "device" clients (phone, second PC, laptop) connect to
 over the network. Devices host their own capabilities, are addressed/routed
 through the kernel, and are permission-limited per device.
@@ -25,7 +25,7 @@ through the kernel, and are permission-limited per device.
 
 ## 2. Model
 
-- **Main kernel** (user's PC): full Vynkor (formerly Veyron), unchanged core. Hosts the AI agent
+- **Main kernel** (user's PC): full Vynkor (formerly Vynkor), unchanged core. Hosts the AI agent
   (Kairo), `database`, `secrets`, heavy compute.
 - **Device agents**: phone / second PC / laptop. Each connects over WS (JWT)
   and registers its capabilities as namespaced plugins:
@@ -160,7 +160,7 @@ for plugin state.
 
 | Step | Weeks |
 |---|---|
-| WS transport in `veyron-sdk-rust` | 1–2 |
+| WS transport in `vynkor-sdk-rust` | 1–2 |
 | `role: client` + bridge + local-first routing + per-plugin JWT | 2–3 |
 | TLS default + JWT (aud/nonce/exp, per-device mint) | 1 |
 | STT local + TTS host→Opus | 1–2 |
@@ -174,12 +174,12 @@ for plugin state.
 
 QUIC · ed25519 enrollment · CRDT/sync engine · full plugin host on Android/iOS
 · native Windows client · runtime placement scheduler · separate client repo
-(`veyron-client` stays empty; the client is a `role: client` config of `vyn`).
+(`vynkor-client` stays empty; the client is a `role: client` config of `vyn`).
 
 ## 17. Open questions — status
 
 1. **Host onboarding** — partially resolved: `curl -sSL
-   https://core.veyron.online/install.sh | bash` ships a prebuilt binary. Still
+   https://core.vynkor.online/install.sh | bash` ships a prebuilt binary. Still
    open: auto-start (systemd/launchd), self-update, and "persistent reachable
    host" is a deployment story, not just a binary install.
 2. **Host reachability** — decided (§19): free Tailscale now, headscale-as-
@@ -211,7 +211,7 @@ story (open question #1).
   (protocol-compatible with Tailscale clients) — still needs one reachable
   address, so a cheap VPS if the home is behind CGNAT. Direct WireGuard works
   only with a real/forwarded IP.
-- Zero kernel/protocol change — a deployment overlay under Vynkor (formerly Veyron).
+- Zero kernel/protocol change — a deployment overlay under Vynkor (formerly Vynkor).
 
 ## 20. Notification delivery (host → phone)
 

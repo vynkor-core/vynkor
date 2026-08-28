@@ -21,15 +21,15 @@ jobs:
       # proto drift check can reach their sources via ../vynkor-* paths.
       # Plain git clone: actions/checkout@v4 refuses `path: ../` (repo path
       # must stay under the workspace) since runner 2.319+.
-      - name: Clone veyron-wire (sibling)
+      - name: Clone vynkor-wire (sibling)
         run: git clone --depth 1 https://github.com/vynkor-core/vynkor-wire.git ../vynkor-wire
-      - name: Clone veyron-sdk-cpp (sibling)
+      - name: Clone vynkor-sdk-cpp (sibling)
         run: git clone --depth 1 https://github.com/vynkor-core/vynkor-sdk-cpp.git ../vynkor-sdk-cpp
-      - name: Clone veyron-sdk-python (sibling)
+      - name: Clone vynkor-sdk-python (sibling)
         run: git clone --depth 1 https://github.com/vynkor-core/vynkor-sdk-python.git ../vynkor-sdk-python
 
       # E-01: [patch.crates-io] also pins vynkor-sdk to a relative sibling path
-      - name: Clone veyron-sdk (sibling)
+      - name: Clone vynkor-sdk (sibling)
         run: git clone --depth 1 https://github.com/vynkor-core/vynkor-sdk.git ../vynkor-sdk
 
       - name: Proto drift check (T-17)

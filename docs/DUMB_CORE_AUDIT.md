@@ -3,7 +3,7 @@
 **Date:** 2026-08-16
 **Scope:** full kernel — `src/kernel`, `src/api`, `src/plugins`, `src/events`,
 `src/ipc`, `src/auth`, `src/marketplace`, `src/bridge`, `src/cli`, `src/utils`,
-plus the wire protocol (`../vynkor-wire/proto/vynkor_protocol.proto` — legacy `veyron_protocol.proto` still aliased).
+plus the wire protocol (`../vynkor-wire/proto/vynkor_protocol.proto` — legacy `vynkor_protocol.proto` still aliased).
 **Companion:** findings mirrored as DC-1…DC-5 in `AUDIT.md`.
 **Status:** all findings **OPEN**. This file is the working plan for the fixes.
 
@@ -85,7 +85,7 @@ admin), **`GET /devices` (:89 — domain, DC-2)**, `WS /ws` (:139-145).
 
 **Where:**
 - `src/marketplace/registry.rs` (1509 L) — registry client:
-  - `DEFAULT_REGISTRY_URL` hardcoded to the veyron-plugins GitHub raw URL
+  - `DEFAULT_REGISTRY_URL` hardcoded to the vynkor-plugins GitHub raw URL
     (`:15-16`);
   - maintainer Ed25519 public key pinned in kernel source (`:38-39`);
   - registry v2 parse/flatten, signature verification, versioned disk cache,
@@ -167,7 +167,7 @@ move interpretation/UX outside; keep transport and auth tooling.
 - `src/events/bus.rs` `plugin_lifecycle_payload` (`:223-259`) — `action_specs`
   embedded in `system.plugin_joined`/`system.plugin_left` *"so the AI can
   enumerate callable actions from the joined event alone"*.
-- README framing: Kairo = "AI agent, memory, voice" built on Vynkor (formerly Veyron).
+- README framing: Kairo = "AI agent, memory, voice" built on Vynkor (formerly Vynkor).
 
 **Why it violates dumb core:** the kernel is explicitly shaped for an AI-agent
 frontend. Tool-schema interpretation (risk levels, `requires_confirmation`,
@@ -253,12 +253,12 @@ manifesto, close S2 (private runtime dir, 0o700, ownership check) and PERF-2
 
 ## 5. What plugins already own (the correct boundary)
 
-Sibling repo `vynkor-plugins` (formerly `veyron-plugins`) proves the ecosystem pattern works: **ai**
+Sibling repo `vynkor-plugins` (formerly `vynkor-plugins`) proves the ecosystem pattern works: **ai**
 (chat_completion, agents, model discovery, usage db), **network**
 (`http_request` + SSRF guard), **stt/tts** (speech), **sync** (device KV sync,
 heartbeat liveness, `sync.delta` events), **database**, **secrets**,
 **gated-write**, **ping-pong-rs**. All real business logic (AI, networking,
-storage, speech) lives in plugins; `vynkor-sdk-*` (legacy `veyron-sdk-*` still aliased) repos are pure client
+storage, speech) lives in plugins; `vynkor-sdk-*` (legacy `vynkor-sdk-*` still aliased) repos are pure client
 libraries. The kernel's job is only to keep those processes alive and route
 their bytes.
 
@@ -327,7 +327,7 @@ files, steps and acceptance criteria.
 - **Acceptance:** `GET /devices` stays and returns raw pass-through data; no
   interpretation helpers in the kernel; a `discovery` plugin provides the
   friendly view; existing device integration tests pass unchanged (no API
-  break — consumers like veyron-web / the Android agent keep working).
+  break — consumers like vynkor-web / the Android agent keep working).
 
 ### F3 (DC-2, P1) — Keep the bridge as transport, strip capability interpretation
 
@@ -356,7 +356,7 @@ files, steps and acceptance criteria.
   per-action capability mechanism**, with the "for the AI" framing removed.
 - **Decision (§7):** generic manifest feature — no wire break, no feature
   removal; neutral wording everywhere.
-- **Files:** `../vynkor-wire/proto/veyron_protocol.proto:159-173`,
+- **Files:** `../vynkor-wire/proto/vynkor_protocol.proto:159-173`,
   `src/kernel/commands.rs:79-127` (`get_manifest`), `src/events/bus.rs:223-259`.
 - **Steps:**
   1. Reword the proto comments on `ActionSpec`/`ActionRisk` from "tool schema
@@ -390,7 +390,7 @@ files, steps and acceptance criteria.
   (`action_requirements` — stays, it is the v2 data path),
   `docs/PLUGIN_REGISTRY_SCHEMA.md:264,294`.
 - **Steps (order matters — step 1 is a hard dependency):**
-  1. **Migrate the data first (vynkor-plugins — legacy `veyron-plugins`):** the network plugin declares
+  1. **Migrate the data first (vynkor-plugins — legacy `vynkor-plugins`):** the network plugin declares
      `action_requirement: http_request → network` in its v2 manifest. The map
      must NOT be removed before this lands — otherwise `http_request` becomes
      unrestricted and any plugin can trigger outbound HTTP via the network
@@ -459,7 +459,7 @@ All four open decisions are settled — the fix plan in §6 is decision-complete
    the rename-in-progress policy (CLAUDE.md) applies — the binary is `vynm`,
    and all new code, comments, docs and its `--help` use **vynkor** naming
    ("vynm — vynkor plugin manager"); migrate the module as vynkor, not
-   veyron.**
+   vynkor.**
 2. **AI tool-calling boundary** (F4): **generic manifest feature**. `action_specs`
    become neutral per-action capability descriptors; `get_manifest` stays a
    generic manifest command. No wire break; the "for the AI" framing in proto

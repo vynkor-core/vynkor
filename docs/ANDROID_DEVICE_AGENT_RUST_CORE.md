@@ -1,7 +1,7 @@
 # vynkor Android Device-Agent — Rust core design
 
 The Rust core is the **protocol engine**; Kotlin is the **device-I/O layer**;
-UniFFI is the boundary between them. (Project renamed Veyron → vynkor.)
+UniFFI is the boundary between them. (Project renamed Vynkor → vynkor.)
 
 Scope: D-14, first release. See `docs/ANDROID_DEVICE_AGENT.md` for the
 product decisions (repo, stack, capabilities).
@@ -149,7 +149,7 @@ One WS connection per capability (v1; the registry is 1 plugin per connection
 
 Per capability `cap`:
 
-1. Connect WS to `host_url` with `Sec-WebSocket-Protocol: veyron, <jwt_token>`.
+1. Connect WS to `host_url` with `Sec-WebSocket-Protocol: vynkor, <jwt_token>`.
 2. Send `Envelope { PluginRegister { plugin_id: "<device_id>.<cap>",
    version, manifest, jwt_token, device_id, os: DEVICE_OS_ANDROID (4),
    arch, os_version, capabilities: [cap], protocol_version: "1.6",
@@ -164,9 +164,9 @@ Per capability `cap`:
 Reconnect + backoff mirrors the bridge (`BRIDGE_MAX_BACKOFF`); TLS pins the
 host's served certificate (same rule as the local `vyn` clients, D-07).
 
-Reused verbatim from `vynkor-wire 0.0.2` (proto v1.7 — legacy `veyron-wire` 0.2.3 shim still present): `write_frame_raw`,
+Reused verbatim from `vynkor-wire 0.0.2` (proto v1.7 — legacy `vynkor-wire` 0.2.3 shim still present): `write_frame_raw`,
 `read_frame`, `serialize_header`, `Frame`, the `FLAG_*` constants,
-`derive_session_key`/`compute_tag`/`verify_tag`, and `proto::veyron::{Envelope,
+`derive_session_key`/`compute_tag`/`verify_tag`, and `proto::vynkor::{Envelope,
 PluginRegister, PluginRegisterAck, AudioStreamChunk, ActionRequest, …}`.
 
 ## Naming — decided: `<device_id>.<cap>`
@@ -178,7 +178,7 @@ PluginRegister, PluginRegisterAck, AudioStreamChunk, ActionRequest, …}`.
 `target` string, so this was a naming/allowlist decision, not a protocol change.
 Follow-ups: D-09's confirm allowlist glob `device.*` must move to
 `<device_id>.*` (operator-set; see the gated-write task under D-14), and the
-`veyron-sdk-rust`/`tts` doc examples still show the old form.
+`vynkor-sdk-rust`/`tts` doc examples still show the old form.
 
 ## Audio (mic/speaker) detail
 

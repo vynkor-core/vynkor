@@ -1,10 +1,10 @@
 port: 8000 # binary default (UX-3: keep in sync with config.rs default_port)
 log_level: debug
 # pid_file / log_file / data_dir default to a per-user private dir
-# (XDG_RUNTIME_DIR, /run/user/<uid>, or ~/.veyron/run) — never the shared
+# (XDG_RUNTIME_DIR, /run/user/<uid>, or ~/.local/state/vyn/run) — never the shared
 # /tmp (AUDIT M-09, S2). Uncomment to override:
-pid_file: /run/user/1000/veyron.pid
-log_file: /run/user/1000/veyron.log
+pid_file: /run/user/1000/vyn.pid
+log_file: /run/user/1000/vyn.log
 # data_dir: /path/to/events
 
 # Authentication is required to start. For production, set a JWT secret:
@@ -43,8 +43,8 @@ allow_no_auth: true
 # under the private runtime dir; `vyn` pins it explicitly). Set `tls: false`
 # to serve plain HTTP (insecure). To use your own certificate:
 # tls: true
-# tls_cert_path: /etc/veyron/tls/cert.pem
-# tls_key_path:  /etc/veyron/tls/key.pem
+# tls_cert_path: /etc/vyn/tls/cert.pem
+# tls_key_path:  /etc/vyn/tls/key.pem
 #
 # Audience required in every accepted JWT (D-07). When set, tokens without a
 # matching `aud` claim are rejected — remint existing tokens with
@@ -63,9 +63,9 @@ allow_no_auth: true
 #   vyn token mint --device phone-1 [--permissions PERMISSION_IPC_SEND] [--ttl-seconds 86400]
 
 # Base dir for scratch/cache files: marketplace registry cache
-# (~/.cache/veyron/registry.json when $HOME is set) and plugin-install
+# (~/.cache/vyn/registry.json when $HOME is set) and plugin-install
 # staging. Defaults to the same per-user private dir as pid_file/log_file
-# (XDG_RUNTIME_DIR, /run/user/<uid>, or ~/.veyron/run) — never the shared,
+# (XDG_RUNTIME_DIR, /run/user/<uid>, or ~/.local/state/vyn/run) — never the shared,
 # world-writable /tmp (AUDIT M-09).
 # tmp_dir: /run/user/1000
 
@@ -134,11 +134,11 @@ allow_no_auth: true
 #   max_restarts: 5                  # max auto-restarts (default: 5)
 #   args:                            # argv[1..] passed to the binary
 #     - --socket
-#     - /run/user/1000/veyron.sock  # use XDG_RUNTIME_DIR/veyron.sock (fallback: ~/.veyron/run/veyron.sock)
+#   - /run/user/1000/vyn.sock  # use $XDG_RUNTIME_DIR/vyn.sock (fallback: ~/.local/state/vyn/run/vyn.sock)
 #   env:                             # extra environment variables
 #     - LOG_LEVEL=info
-#   (Every plugin also gets VEYRON_SOCKET_PATH and — when the kernel grants
-#   it — VEYRON_DATA_DIR: a writable per-plugin dir <data_dir>/plugins/<id>
+#   (Every plugin also gets VYN_SOCKET_PATH and — when the kernel grants
+#   it — VYN_DATA_DIR: a writable per-plugin dir <data_dir>/plugins/<id>
 #   for the plugin's own persistent state, e.g. a database.)
 #   sandbox: false                   # true: isolate in private user+net+PID+mount namespace (Linux) via a shim process (R9-02). Plugins run as PID 1 of their own namespace with a private /proc.
 #   grace_seconds: 10                # optional, default 5 — seconds to wait after SIGTERM before SIGKILL
@@ -148,7 +148,7 @@ allow_no_auth: true
 #   readonly_paths:                  # optional — dirs/files the plugin may read (granted read+execute on dirs). Honored when max_fs_access: read-only.
 #     - /usr/share/example
 #   writable_paths:                  # optional — dirs/files the plugin may write/create. Honored when max_fs_access is read-only or none.
-#     - /var/lib/veyron/plugins/my-plugin
+#     - /var/lib/vyn/plugins/my-plugin
 #
 # Duplicate plugin ids across drop-ins (or clashing with a legacy inline
 # `plugins:` entry) fail the boot loudly. The legacy inline `plugins:` list

@@ -43,22 +43,22 @@
     requires_confirmation }`); keep `actions[]` for the router.
   - New `DeviceInfo { device_id, os, arch, os_version, capabilities,
     last_seen, state }`.
-  - Files: `../vynkor-wire/proto/vynkor_protocol.proto`, `vynkor_wire::PROTOCOL_VERSION` (legacy `veyron_wire` shim still present),
+  - Files: `../vynkor-wire/proto/vynkor_protocol.proto`, `vynkor_wire::PROTOCOL_VERSION` (legacy `vynkor_wire` shim still present),
     vendored copies, `tests/unit/test_proto_sync.rs`.
   - Acceptance: regen compiles; six copies byte-identical; drift test green;
     `PROTOCOL_VERSION`/header/`Cargo.toml` bumped in one commit.
-  - **Status (2026-08-14): SHIPPED** — proto v1.6 landed in `veyron-wire`
-    (`657b528`, merged via PR veyron-core/vynkor-wire#4) as **0.2.3** (patch —
+  - **Status (2026-08-14): SHIPPED** — proto v1.6 landed in `vynkor-wire`
+    (`657b528`, merged via PR vynkor-core/vynkor-wire#4) as **0.2.3** (patch —
     additive per the release rule); **published to crates.io 2026-08-14**.
     `PROTOCOL_VERSION` 1.6 + header + `Cargo.toml` in **one commit**. Vendored
-    copies re-synced byte-identical in `veyron-sdk-python#3` (+ regenerated
-    `veyron_protocol_pb2.py`) and `veyron-sdk-cpp#3`; both SDK READMEs bumped
+    copies re-synced byte-identical in `vynkor-sdk-python#3` (+ regenerated
+    `vynkor_protocol_pb2.py`) and `vynkor-sdk-cpp#3`; both SDK READMEs bumped
     to v1.6. Kernel drift guard extended and shipped in **PR #22**: R8-05
     staleness check now asserts the v1.6 symbols (verbatim + escaped-tail
     markers) and a new `proto_header_matches_wire_protocol_version` pairing
     test enforces the one-commit bump convention. Full kernel suite green
     (444 tests, `clippy -D warnings`, `fmt --check`). Kernel still consumes
-    published `veyron-wire 0.2.2` — D-01 is proto-only; D-03 wires the new
+    published `vynkor-wire 0.2.2` — D-01 is proto-only; D-03 wires the new
     fields up and bumps the dependency to 0.2.3 (resolves from crates.io, no
     `[patch.crates-io]` needed — 0.2.3 is published).
 
@@ -69,14 +69,14 @@
   - Files: `src/plugins/registry.rs`.
   - Acceptance: registration stores device/user; `devices` populated;
     `last_seen` advances on ping/pong.
-  - **Status (2026-08-14): SHIPPED** — merged via PR veyron-core/vynkor#23
+  - **Status (2026-08-14): SHIPPED** — merged via PR vynkor-core/vynkor#23
     (`543c758`). `PluginEntry` gains `device_id`/`user_id` (empty →
     `"local"`/`"default"`); `devices: DashMap<device_id, DeviceInfo>` is
     populated at registration and `last_seen` advances on ping/pong (reuses
     `pong_times`); a device flips `Offline` once its last plugin
     unregisters; `get_device`/`list_devices` exposed for D-04. `DeviceInfo`
     is a kernel-local record shape-compatible with proto v1.6 — the kernel
-    still runs `veyron-wire` 0.2.2 (proto v1.5), so **D-03** bumps the dep
+    still runs `vynkor-wire` 0.2.2 (proto v1.5), so **D-03** bumps the dep
     to 0.2.3 and swaps in the wire type (mechanical). The router currently
     passes `""`/`""` (host plugins → default device); D-03 parses
     `device_id`/`user_id`/`os`/`capabilities`/`protocol_version` off the
@@ -95,7 +95,7 @@
   - Acceptance: v1.x registers with device metadata; major mismatch rejected
     with both versions in the message; cross-user IPC denied, same-user allowed.
   - **Status (2026-08-14): SHIPPED** — this PR (`feat/d-03-registration-device-fields`).
-    Kernel bumps to `veyron-wire 0.2.3` (proto v1.6, crates.io); registry now
+    Kernel bumps to `vynkor-wire 0.2.3` (proto v1.6, crates.io); registry now
     stores the wire `DeviceInfo`/`DeviceState`/`DeviceOs` and gains
     `DeviceMeta` + `register_with_device` (empty identity → `"local"`/
     `"default"`, device metadata refreshes on re-register). Router parses
@@ -135,26 +135,26 @@
 
 ## P1 — Client kernel + transport
 
-- [x] **D-05 — WS transport in `veyron-sdk-rust`.**
+- [x] **D-05 — WS transport in `vynkor-sdk-rust`.**
   Mirror the UDS client semantics (register, MAC enable, reconnect) over a WS
   backend. Respect the WS-gateway limits (no `FLAG_COMPRESSED`/`FLAG_FRAGMENTED`
   inbound; `FLAG_RAW_BINARY` passes).
   - Files: `../vynkor-sdk-rust/`.
   - Acceptance: an SDK plugin connects to the WS endpoint, registers, and
     round-trips actions; integration test against the kernel WS gateway.
-  - **Status (2026-08-14): SHIPPED** — merged via PR veyron-core/vynkor-sdk-rust#4
-    (`d0a7695`, commit `22bd761`). `VynkorClient::connect_ws(url, jwt, secret)` (legacy `VeyronClient` still aliased)
-    mirrors the UDS semantics over the kernel's WS gateway: the `veyron`
+  - **Status (2026-08-14): SHIPPED** — merged via PR vynkor-core/vynkor-sdk-rust#4
+    (`d0a7695`, commit `22bd761`). `VynkorClient::connect_ws(url, jwt, secret)` (legacy `VynkorClient` still aliased)
+    mirrors the UDS semantics over the kernel's WS gateway: the `vynkor`
     subprotocol is always offered and the JWT rides the
     `Sec-WebSocket-Protocol` header (never the URL — access-log hygiene);
     frame-MAC enables after a secured registration exactly like
     `connect_with_secret`. `Plugin::run_ws(url)` is the WS mirror of
-    `Plugin::run` (credentials from `VEYRON_JWT_TOKEN`/`VEYRON_JWT_SECRET`).
+    `Plugin::run` (credentials from `VYNKOR_JWT_TOKEN`/`VYNKOR_JWT_SECRET`).
     The client's transport is an internal enum, so the whole protocol surface
     (register, ping, actions, streaming, events, raw audio) is shared
     unchanged. R5-03 gateway limits respected: outbound frames are never
     zstd-compressed or fragmented over WS (`send_fragmented` errors),
-    `FLAG_RAW_BINARY` passes. SDK bumps to `veyron-wire 0.2.3` (proto v1.6,
+    `FLAG_RAW_BINARY` passes. SDK bumps to `vynkor-wire 0.2.3` (proto v1.6,
     crates.io) and releases as **0.1.5**. Full suite green (31 tests — 6
     fake-kernel WS protocol tests + 2 integration tests against the real
     kernel WS gateway incl. a hand-minted HS256 JWT path, `clippy -D
@@ -175,7 +175,7 @@
     `role: client` + `bridge:` config (host_url/token/secret/mirror) plus
     `--role/--bridge-*` CLI overrides; `src/bridge` runs one WS client per
     mirrored capability, registers as `device.<cap>` (JWT via
-    `Sec-WebSocket-Protocol: veyron, <token>`, per-session frame MAC derived
+    `Sec-WebSocket-Protocol: vynkor, <token>`, per-session frame MAC derived
     from the host's `jwt_secret` + ack nonce), and shuttles frames both ways
     with target rewriting (`client → kernel` outbound; inbound re-addressed
     to `"kernel"` or `"<cap>"` by payload class). Router's `forward()` miss
@@ -208,7 +208,7 @@
     [--ttl-seconds …] [--aud …]` mints offline from the config's `jwt_secret`.
     TLS is on by default (`tls: true`): the kernel serves the configured
     cert/key or auto-generates a self-signed pair into `<private dir>/
-    veyron-tls/` (`rcgen`, reused across restarts) — `tls: false` is the
+    vynkor-tls/` (`rcgen`, reused across restarts) — `tls: false` is the
     explicit insecure opt-out; a half-configured `tls_cert_path`/`tls_key_path`
     fails boot rather than downgrading. The gateway binds `0.0.0.0` when
     `role: host` + auth is configured (loopback otherwise, `bind:` overrides);
@@ -252,7 +252,7 @@
   one-liner + a reference high-risk plugin demonstrating `requires_confirmation`.
   - Files: `../vynkor-sdk-rust/`, `../vynkor-plugins/`.
   - Acceptance: the AI cannot call `confirm_*`; the user confirm path works.
-  - **Status (2026-08-15): SHIPPED** — veyron-sdk-rust#5
+  - **Status (2026-08-15): SHIPPED** — vynkor-sdk-rust#5
     (`feat/d-09-confirmation-gate`): new `ConfirmationGate` SDK helper splits
     one risky operation into `request_<op>` (any caller; action spec marked
     `requires_confirmation`; params stored as pending, nothing executes) and
@@ -265,7 +265,7 @@
     `send_confirmation_request`/`send_confirmation`. SDK bumps to **0.1.6**
     (additive); the D-05-era WS integration tests also pin `tls: false` in
     the spawned kernel config, which D-07's TLS-default had broken.
-    veyron-plugins#11 (`feat/d-09-confirmation-gate`) ships the reference
+    vynkor-plugins#11 (`feat/d-09-confirmation-gate`) ships the reference
     `gated-write` plugin demonstrating the gate on a risky file write
     (`request_write`/`confirm_write`, writes confined to `GATED_WRITE_DATA_DIR`,
     absolute-path/`..`/symlink-escape guards; the SDK dep is patched from the
@@ -280,7 +280,7 @@
   - Files: `src/ipc/protocol.rs`, `src/events/bus.rs`.
   - Acceptance: one action is traceable device → bridge → kernel → plugin via
     `message_id`.
-  - **Status (2026-08-15): SHIPPED** — merged via PR veyron-core/vynkor#30
+  - **Status (2026-08-15): SHIPPED** — merged via PR vynkor-core/vynkor#30
     (`68da36a`, commit `5b663a6`). `build_outbound` keeps a caller-set
     `message_id` (fresh `k-{ts}-{seq}` only when absent) and shares the id
     sequence with the event bus via `kernel_message_id()` so the two stamping
@@ -304,7 +304,7 @@
   overlay, confirmation gate, least-privilege AI) — consolidating §10/§19/§21.
   - Files: `docs/THREAT_MODEL.md` (new).
   - Acceptance: doc exists and covers the four actors.
-  - **Status (2026-08-15): SHIPPED** — merged via PR veyron-core/vynkor#31
+  - **Status (2026-08-15): SHIPPED** — merged via PR vynkor-core/vynkor#31
     (`3c111bb`, commit `2926b51`). `docs/THREAT_MODEL.md` (new, 176 lines)
     documents assets and the four actors (external attacker, compromised
     plugin, compromised device, malicious prompt) with per-actor threat
@@ -319,7 +319,7 @@
   - Files: `../vynkor-plugins/`.
   - Acceptance: local STT → text event; host TTS → Opus → client speaker.
   - **Status (2026-08-15): SHIPPED** — merged via PR
-    veyron-core/vynkor-plugins#13 (`daae966`). Both legs of the pipeline
+    vynkor-core/vynkor-plugins#13 (`daae966`). Both legs of the pipeline
     landed in the plugins repo. Host-TTS → client-speaker: `tts` gains
     `tts_speak` — synthesize locally (sherpa), encode PCM as Opus (new
     `provider/opus.rs`, 20 ms frames), and stream `AudioStreamChunk`
@@ -333,8 +333,8 @@
     the transcript as an `stt_text` event (namespaced `plugin.stt.stt_text`),
     and return it in the response; adds `PERMISSION_AUDIO_STREAM` +
     `PERMISSION_EVENT_PUBLISH`. Audio never leaves the device — only the
-    text crosses the wire. Both plugins bumped `veyron-sdk` 0.1.2→0.1.6 /
-    `veyron-wire` 0.2.0→0.2.3 (the pinned 0.2.0 predated the M9 status
+    text crosses the wire. Both plugins bumped `vynkor-sdk` 0.1.2→0.1.6 /
+    `vynkor-wire` 0.2.0→0.2.3 (the pinned 0.2.0 predated the M9 status
     renumber, so action responses were numerically incompatible with the
     kernel's proto v1.6). Unit tests: tts 50→64, stt 57→69 (`clippy -D
     warnings`, `fmt` clean). E2E against a live kernel + real piper/zipformer
@@ -350,7 +350,7 @@
   - Files: `../vynkor-plugins/` (sync/database plugin), client scheduler.
   - Acceptance: offline client catches up on reconnect; state push works.
   - **Status (2026-08-15): SHIPPED** — merged via PR
-    veyron-core/vynkor-plugins#14 (`7ab76ba`, commit message `feat(d-13)`).
+    vynkor-core/vynkor-plugins#14 (`7ab76ba`, commit message `feat(d-13)`).
     `sync` (host-side versioned SQLite KV store): `sync_get_snapshot` /
     `sync_get` / `sync_set` / `sync_del`; every mutation bumps a monotonic
     persisted version and publishes `plugin.sync.sync.delta` (op/key/value/
@@ -370,7 +370,7 @@
     heartbeat emission). **Known v1 limitation** (documented in the sync-client
     README): the kernel bridge does not yet relay host→client event
     subscriptions, so cross-kernel delta delivery needs a kernel follow-up;
-    single-kernel deployments work fully. `veyron-plugins/ROADMAP.md` shipped
+    single-kernel deployments work fully. `vynkor-plugins/ROADMAP.md` shipped
     table gains sync + sync-client rows.
 
 - [x] **D-14 — Android device-agent app.**
@@ -382,7 +382,7 @@
   - Acceptance: phone appears on the host; `<device_id>.geo`/`<device_id>.battery`
     callable.
   - **Design (2026-08-15):** repo `vynkor-client-android` created in
-    `veyron-core` (org rename pending — new names used from day one). Stack:
+    `vynkor-core` (org rename pending — new names used from day one). Stack:
     Kotlin (Android surface only) + Rust core via **UniFFI**; the Rust core
     is `vynkor-wire`-only (framing/MAC/proto), **no SDK** — the agent is a
     device bridge, not a `Plugin`. Capabilities Tier 1 (MVP): geo, battery,
@@ -398,13 +398,13 @@
     `{device_id}.{cap}` (`src/bridge/mod.rs`, `device_id` from config →
     `$HOSTNAME` → `unknown`); the design docs (`ANDROID_DEVICE_AGENT*.md`)
     use the new form. Cross-repo follow-ups still open:
-    - [ ] `veyron-plugins/plugins/gated-write` — `DEFAULT_CONFIRM_CALLERS =
+    - [ ] `vynkor-plugins/plugins/gated-write` — `DEFAULT_CONFIRM_CALLERS =
       "device.*"` matches nothing now; the confirm allowlist for "any device
       mirror" needs a decision (glob extension vs operator-set `<device_id>.*`
       vs matching on the kernel-stamped caller device_id).
-    - [ ] `veyron-sdk-rust/src/confirmation_gate.rs` — `device.*` doc-comment
+    - [ ] `vynkor-sdk-rust/src/confirmation_gate.rs` — `device.*` doc-comment
       examples/tests → `<device_id>.*` form (mechanism is generic, docs only).
-    - [ ] `veyron-plugins/plugins/tts` — `device.phone.speaker` examples
+    - [ ] `vynkor-plugins/plugins/tts` — `device.phone.speaker` examples
       (README/USAGE/plugin.json/request.rs) → `<device_id>.speaker`
       (operator-configured `TTS_PLUGIN_IPC_TARGETS`, examples only).
   - **Status (2026-08-16): IMPLEMENTED + E2E-verified against a live kernel

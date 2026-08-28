@@ -1,6 +1,6 @@
 # VYNM — marketplace extraction plan (F1 / DC-1)
 
-> **Note (2026-08-28):** historical snapshot at wire `0.2.4–0.2.6` era — now `vynkor-wire 0.0.2` proto `v1.7` (legacy `veyron-wire` still readable).
+> **Note (2026-08-28):** historical snapshot at wire `0.2.4–0.2.6` era — now `vynkor-wire 0.0.2` proto `v1.7` (legacy `vynkor-wire` still readable).
 
 Working plan for extracting the marketplace out of the kernel into a standalone
 `vynm` binary ("vynkor plugin manager"). Covers the verified coupling map, the
@@ -9,11 +9,11 @@ design. Mirrors `docs/DUMB_CORE_AUDIT.md` §6-F1 / §7-decision-1 and the
 `ROADMAP.md` F1 entry.
 
 **Status:** **implementation shipped 2026-08-22 (stage 2 complete).**
-Stage 1: manifest module shipped in veyron-wire 0.2.4–0.2.6 behind the
+Stage 1: manifest module shipped in vynkor-wire 0.2.4–0.2.6 behind the
 `manifest` feature (V-01). Stage 2: `vynkor-manager` repo born and functional
 (V-03…V-06, PRs #1–#4); loader switched to the wire manifest (V-02);
 kernel `src/marketplace/` deleted, CLI commands are delegation shims to vynm
-(V-07, veyron PR #43). Stage-3 productization backlog (V-09…V-16) tracked in
+(V-07, vynkor PR #43). Stage-3 productization backlog (V-09…V-16) tracked in
 `docs/VYNM_ROADMAP.md`. Per-task implementation notes live in each repo's
 `docs/V-0*_EXPERIENCE.md`.
 **Strategy:** two stages inside this repo, optional third outside.
@@ -87,7 +87,7 @@ Move to vynm's Cargo.toml, drop from the kernel's:
 - `sha2` — archive integrity digest
 
 Bonus cleanup while touching Cargo.toml: `hmac` and `hkdf` have **no users in
-src/** either — the frame MAC comes via `pub use veyron_wire::mac::*`
+src/** either — the frame MAC comes via `pub use vynkor_wire::mac::*`
 (`src/auth/frame_mac.rs:1`). Verify with `cargo tree -i` before removing.
 
 Stays in the kernel: `semver` (used by `loader.rs` compat check), `serde_json`,
@@ -120,9 +120,9 @@ Revised 2026-08-21 — supersedes the earlier workspace-first plan. Decision:
 **`vynkor-manager` is born as its own repository right away**, named per the
 rename-in-progress policy (like `vynkor-client-android` was). The blocker
 that originally forced a same-repo workspace (shared manifest code) dissolves
-by putting the manifest module into **veyron-wire** behind a cargo feature:
+by putting the manifest module into **vynkor-wire** behind a cargo feature:
 wire is already the ecosystem's shared foundation crate consumed cross-repo
-from crates.io (precedent: `veyron_wire::socket::default_private_dir`, S2).
+from crates.io (precedent: `vynkor_wire::socket::default_private_dir`, S2).
 
 ```
 Stage 1 (wire repo)        Stage 2 (kernel + manager)    Stage 3 (manager only)
@@ -147,7 +147,7 @@ anyway.
 ## 4. Target architecture
 
 ```
-veyron-wire/ (existing repo)        vynkor-manager/ (NEW repo)
+vynkor-wire/ (existing repo)        vynkor-manager/ (NEW repo)
 ├── proto/, framing, mac …          ├── Cargo.toml       bin vynm (+ lib target)
 ├── src/manifest.rs  ← NEW          ├── src/main.rs      clap CLI: install/search/
 │   #[cfg(feature = "manifest")]    │                    list/remove/enable/disable
@@ -160,7 +160,7 @@ veyron-wire/ (existing repo)        vynkor-manager/ (NEW repo)
 │   consumers compile neither)
 └── …
 
-kernel (this repo): loader imports veyron_wire::manifest::*; src/marketplace/
+kernel (this repo): loader imports vynkor_wire::manifest::*; src/marketplace/
 GONE; lib.rs drops pub mod marketplace; Cargo.toml drops zip, indicatif,
 reqwest, ed25519-dalek, sha2 (+ hmac/hkdf if confirmed unused); wire dep
 gains features = ["manifest"].
@@ -179,7 +179,7 @@ Why this shape:
   the rename policy trivial (born as vynkor-manager). A later move INTO a
   repo would have been cheap too — but born-here avoids the temporary
   workspace architecture entirely.
-- dependency direction stays acyclic: `veyron-wire ← {kernel, vynm}`. The
+- dependency direction stays acyclic: `vynkor-wire ← {kernel, vynm}`. The
   manager never depends on the kernel crate (it would drag axum/tokio-full
   along); the kernel never depends on the manager.
 
@@ -189,10 +189,10 @@ Why this shape:
 
 ### D1 — who validates manifests at boot
 
-The manifest module in **veyron-wire** behind the `manifest` feature (§4).
+The manifest module in **vynkor-wire** behind the `manifest` feature (§4).
 Kernel loader switches import from
 `crate::marketplace::installer::{validate_manifest, InstallManifest}` to
-`veyron_wire::manifest::*`. Same checks, same fail-loud semantics, single
+`vynkor_wire::manifest::*`. Same checks, same fail-loud semantics, single
 implementation consumed by both repos from crates.io.
 
 Note: `validate_manifest` resolves v2 per-action permissions via
@@ -218,7 +218,7 @@ No guessing from vynm's own `CARGO_PKG_VERSION`.
 Deleted. Sandbox preference comes from the plugin's own `plugin.json`
 (optional `sandbox` hint field, default `true`), operator edits the drop-in
 for anything else. The generated drop-in template comment already invites
-editing. (Manifest-side field addition lands in veyron-plugins separately.)
+editing. (Manifest-side field addition lands in vynkor-plugins separately.)
 
 ### D4 — `vyn plugin ...` surface after extraction
 
@@ -329,7 +329,7 @@ explicit consent is not.
 # single-entry back-compat form, mapped to name "official")
 registries:
   - name: official                 # default source when omitted entirely
-    url: https://raw.githubusercontent.com/veyron-core/vynkor-plugins/main/registry.json
+    url: https://raw.githubusercontent.com/vynkor-core/vynkor-plugins/main/registry.json
     # public_key omitted → built-in pinned key applies by default;
     # relaxing official to unsigned needs allow_unsigned like any source
     cache_ttl_secs: 3600
@@ -392,7 +392,7 @@ requires the same explicit `allow_unsigned: true` as any other source.
 ### 7.4 Cache and ledger layout (per source)
 
 ```
-~/.local/share/veyron/           (state dir, XDG)
+~/.local/share/vyn/           (state dir, XDG)
 ├── installed.json               ← gains "source" per entry
 └── registry-cache/
     ├── official.json            ← existing RegistryCache schema, per source
@@ -469,7 +469,7 @@ Stages map to §3. Order chosen so each repo is green after every PR.
 **Stage 2 — kernel + manager repos (2 and 3 interleave; 4 needs both):**
 
 2. **kernel: switch loader import** — `loader.rs` uses
-   `veyron_wire::manifest::*`; wire dep gains `features = ["manifest"]`.
+   `vynkor_wire::manifest::*`; wire dep gains `features = ["manifest"]`.
    Marketplace still present and untouched → mergeable alone.
 3. **create vynkor-manager** — port registry/installer/state + CLI; apply
    the seams during the port (§6): `RegistrySource`, ledger `source` field,
@@ -511,7 +511,7 @@ releases per D7.
 | Risk | Mitigation |
 |---|---|
 | duplicated validation logic rots again (R8 lesson) | single implementation in wire's manifest module; R8-02 drift test (every proto enum variant passes both name forms) moves with it |
-| accidental kernel ↔ manager dependency | direction is one-way through published wire; manager CI asserts no kernel dep (`cargo tree -i veyron` empty), kernel CI drops the 5 marketplace deps and stays green without the manager checked out |
+| accidental kernel ↔ manager dependency | direction is one-way through published wire; manager CI asserts no kernel dep (`cargo tree -i vynkor` empty), kernel CI drops the 5 marketplace deps and stays green without the manager checked out |
 | wire scope creep / SDK weight from the manifest module | cargo feature `manifest`, default off — SDK consumers compile neither serde_json nor semver of it; CI asserts default-feature build unaffected |
 | wire publish friction slows manifest iteration | module is additive-only by design; policy changes ride the injected resolver (F5 never touches wire); git-dep `[patch]` escape hatch exists for pre-publish iterations (R8-07 precedent) |
 | user scripts break on removed `vyn plugin install` | delegation shims with actionable message (D4); shim removal deferred to stage 3 |

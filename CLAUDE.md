@@ -4,7 +4,7 @@ A high-performance plugin kernel written in Rust with C++ interop and multi-SDK 
 
 > **Rename COMPLETE (2026-08-22):** the project IS **vynkor** — org
 > `vynkor-core`, repos `vynkor*`, crates `vynkor-wire` / `vynkor-sdk`
-> (published), binary **`vyn`**, manager **`vynm`**. Old `veyron*` names
+> (published), binary **`vyn`**, manager **`vynm`**. Old names
 > exist only in history; do not reintroduce them. Authoritative layout:
 > `docs/VYN_PRODUCT_LAYOUT.md`.
 
@@ -139,6 +139,6 @@ cargo fmt --check
 ## Reference
 
 - **Protocol:** `../vynkor-wire/proto/vynkor_protocol.proto`
-- **Architecture:** `docs/archive/VEYRON_ARCHITECTURE.md` (historical) · `README.md` (current)
+- **Architecture:** `docs/archive/VYNKOR_ARCHITECTURE.md` (historical) · `README.md` (current)
 - **Roadmap:** `ROADMAP.md`
 - **Config:** `config.yaml`

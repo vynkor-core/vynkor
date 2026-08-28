@@ -1,4 +1,4 @@
-# Veyron Codebase Audit
+# Vynkor Codebase Audit
 
 Date: 2026-07-07 (initial) · **Reconciled: 2026-08-11** (full re-audit on `develop` @ `c93342b`) · **Delta audit: 2026-08-14** (`develop` @ `2d16ebf` — post-reconciliation code + previously un-audited performance/UX surfaces) · **Architecture (dumb-core) audit: 2026-08-16** (manifesto compliance — domain logic in the kernel; see "Architecture audit — dumb-core" below; fix plan in `docs/DUMB_CORE_AUDIT.md`) · **Full src audit (maintainability & comments): 2026-08-20** (manual read of all `src/` — 49 files, 14251 LOC, no agents)
 Scope: full repo — kernel/IPC/events/api (`src/kernel`, `src/ipc`, `src/events`, `src/api`, `src/utils`), auth/plugin-lifecycle/marketplace (`src/auth`, `src/plugins`, `src/cli`, `src/marketplace`), and cross-SDK/protocol (`sdk/rust`, `sdk/cpp`, `sdk/python`, `proto/`, `wire/`, `tests/`, `fuzz/`).
@@ -80,8 +80,8 @@ UX: **UX-1** (Medium, P2 — body-less REST errors, 200-on-failure; OPEN),
 - **Fix:** call `validate_plugin_def` inside `start_plugin` before spawning; return 422/403 on failure.
 
 ### H4. C++ and Python SDKs never send `EventAck` — every event to a stock plugin is silently dropped after retry budget
-- **STATUS (2026-08-11): FIXED** — C++ (`sdk/cpp/include/veyron/plugin.hpp`) and Python (`sdk/python/veyron/plugin.py` + `client.ack_event`, `client.py:144`) SDKs route events to `on_event` and auto-ack on success, mirroring Rust.
-- **Files:** `sdk/cpp/include/veyron/plugin.hpp:38-74`, `sdk/cpp/include/veyron/client.hpp`/`client.cpp` (no `ack_event`), `sdk/python/veyron/plugin.py:67-83`, `sdk/python/veyron/client.py`, vs. `sdk/rust/src/plugin.rs:134-143` (auto-acks). Kernel side: `src/events/store.rs:120-128`.
+- **STATUS (2026-08-11): FIXED** — C++ (`sdk/cpp/include/vynkor/plugin.hpp`) and Python (`sdk/python/vynkor/plugin.py` + `client.ack_event`, `client.py:144`) SDKs route events to `on_event` and auto-ack on success, mirroring Rust.
+- **Files:** `sdk/cpp/include/vynkor/plugin.hpp:38-74`, `sdk/cpp/include/vynkor/client.hpp`/`client.cpp` (no `ack_event`), `sdk/python/vynkor/plugin.py:67-83`, `sdk/python/vynkor/client.py`, vs. `sdk/rust/src/plugin.rs:134-143` (auto-acks). Kernel side: `src/events/store.rs:120-128`.
 - **Issue:** Rust auto-calls `client.ack_event()` on successful `on_event`. C++ has no dedicated event path or `ack_event()` method at all — events fall through to generic `on_message`. Python similarly routes `Event` to `on_message` with no ack helper. Kernel marks un-acked events `dead` after `max_retries`.
 - **Impact:** every event delivered to a stock C++/Python plugin is retried then permanently dropped unless the author hand-builds an `EventAck` Envelope — undocumented, unsupported by either SDK's public API.
 - **Fix:** add `on_event`/auto-ack machinery + `ack_event()` client method to C++ and Python SDKs, mirroring Rust.
@@ -138,18 +138,18 @@ UX: **UX-1** (Medium, P2 — body-less REST errors, 200-on-failure; OPEN),
 ### M7. No fuzz coverage for C++/Python framing/decompression
 - **STATUS (2026-08-11): DEFERRED** — still open; Rust `cargo-fuzz` targets only. This is the single remaining substantive coverage gap (see Priority Recommendation). Tracked in `ROADMAP.md`.
 - **File:** `fuzz/fuzz_targets/*` (Rust `wire` crate only)
-- **Issue:** C++ (`sdk/cpp/src/framing.cpp`) and Python (`sdk/python/veyron/framing.py`) reimplement CRC32/header packing/bounded-decompress with no fuzz harness, despite C++ doing manual buffer arithmetic.
+- **Issue:** C++ (`sdk/cpp/src/framing.cpp`) and Python (`sdk/python/vynkor/framing.py`) reimplement CRC32/header packing/bounded-decompress with no fuzz harness, despite C++ doing manual buffer arithmetic.
 - **Fix:** add a libFuzzer harness for `framing.cpp`.
 
 ### M8. `FRAME_READ_TIMEOUT` slow-loris protection missing in C++/Python SDKs
-- **STATUS (2026-08-11): FIXED** — per-frame read timeout in both SDKs: `read_frame_full_with_timeout` + `FRAME_READ_TIMEOUT_MS` (`sdk/cpp/include/veyron/framing.hpp:113-119`), `FRAME_READ_TIMEOUT = 10.0` (`sdk/python/veyron/framing.py:25`), both mirroring `wire/src/framing.rs`.
-- **Files:** `wire/src/framing.rs:66,179-196` (10s timeout, Rust only) vs. `sdk/cpp/src/framing.cpp:110-120` (`recv_exact`, plain blocking read) and `sdk/python/veyron/framing.py:127-150` (plain `readexactly`)
+- **STATUS (2026-08-11): FIXED** — per-frame read timeout in both SDKs: `read_frame_full_with_timeout` + `FRAME_READ_TIMEOUT_MS` (`sdk/cpp/include/vynkor/framing.hpp:113-119`), `FRAME_READ_TIMEOUT = 10.0` (`sdk/python/vynkor/framing.py:25`), both mirroring `wire/src/framing.rs`.
+- **Files:** `wire/src/framing.rs:66,179-196` (10s timeout, Rust only) vs. `sdk/cpp/src/framing.cpp:110-120` (`recv_exact`, plain blocking read) and `sdk/python/vynkor/framing.py:127-150` (plain `readexactly`)
 - **Impact:** a peer that sends a valid header declaring a large payload then stalls hangs the C++/Python receive loop indefinitely (per-connection DoS).
 - **Fix:** wrap payload/MAC read phase in a per-frame timeout in both SDKs.
 
 ### M9. `ActionStatus`/`CommandStatus` proto enums default to OK (zero-value footgun)
 - **STATUS (2026-08-13): FIXED** — shipped with the protocol v1.5 bump (P11-03): `ActionStatus` gains `ACTION_UNKNOWN = 0` (OK/ERROR/... → 1..7), `CommandStatus` moves `COMMAND_UNKNOWN` to 0 (OK/ERROR → 1/2). The interim T-16 lint remains as a construction-site guard. See `ROADMAP.md` P11-03.
-- **File:** `proto/veyron_protocol.proto:138-144,165-170`
+- **File:** `proto/vynkor_protocol.proto:138-144,165-170`
 - **Issue:** `ACTION_OK = 0`, `COMMAND_OK = 0` — unlike every other status enum in the file (`*_UNKNOWN = 0` pattern). A missed `set_status()` call anywhere silently reports success.
 - **Fix:** wire-breaking to renumber now; at minimum add a lint/test asserting every construction site sets `status` explicitly. Track for next protocol version bump.
 
@@ -160,7 +160,7 @@ UX: **UX-1** (Medium, P2 — body-less REST errors, 200-on-failure; OPEN),
 
 ### M11. C++ SDK has no fragmentation support — silently mis-parses fragmented frames
 - **STATUS (2026-08-11): FIXED** — C++ fragmentation implemented: `absorb_fragment`/bounded reassembly + `send_fragmented` (`sdk/cpp/src/client.cpp:103-157,198-…`), gated by `MAX_REASSEMBLY_STREAMS`/`MAX_PAYLOAD_SIZE`.
-- **Files:** `sdk/cpp/src/framing.cpp`/`client.cpp` (no `send_fragmented`/reassembly) vs. `sdk/rust/src/client.rs:355-420` and `sdk/python/veyron/client.py:164-197` (both implement bounded reassembly)
+- **Files:** `sdk/cpp/src/framing.cpp`/`client.cpp` (no `send_fragmented`/reassembly) vs. `sdk/rust/src/client.rs:355-420` and `sdk/python/vynkor/client.py:164-197` (both implement bounded reassembly)
 - **Impact:** a C++ plugin receiving a fragmented frame hands raw bytes straight to `Envelope::ParseFromArray`, which fails or silently misparses.
 - **Fix:** port fragmentation to C++, or make `read_frame_full` explicitly reject `FLAG_FRAGMENTED` with a clear error.
 
@@ -208,7 +208,7 @@ UX: **UX-1** (Medium, P2 — body-less REST errors, 200-on-failure; OPEN),
 - **Tracked:** ROADMAP N3.
 
 ### N4. Daemon start reports success before the child holds the pid-file lock (Low, TOCTOU)
-- **STATUS (2026-08-11): FIXED** — readiness handshake via `UnixStream::pair()`: `daemonize_and_run` passes the write end to the re-exec'd child (`VEYRON_READY_FD`, `FD_CLOEXEC` cleared in `pre_exec`) and blocks (10s timeout) for a `"{pid}\n"` line; `run_foreground` emits it only after the exclusive flock + pid write. The parent publishes the pid file and reports success only after the line (which must match the child pid); a child that dies or times out is SIGKILLed, reaped, its pid file removed, and the start errors out (smoke-verified: happy path `start → status → stop`; failure path exits 1 with "kernel child exited before signaling readiness", no stray child, no pid file).
+- **STATUS (2026-08-11): FIXED** — readiness handshake via `UnixStream::pair()`: `daemonize_and_run` passes the write end to the re-exec'd child (`VYNKOR_READY_FD`, `FD_CLOEXEC` cleared in `pre_exec`) and blocks (10s timeout) for a `"{pid}\n"` line; `run_foreground` emits it only after the exclusive flock + pid write. The parent publishes the pid file and reports success only after the line (which must match the child pid); a child that dies or times out is SIGKILLed, reaped, its pid file removed, and the start errors out (smoke-verified: happy path `start → status → stop`; failure path exits 1 with "kernel child exited before signaling readiness", no stray child, no pid file).
 - **Files:** `src/main.rs:213-236` (`daemonize_and_run`), `src/main.rs:238-264` (`run_foreground`)
 - **Issue:** `daemonize_and_run` spawns the re-exec'd child, writes its pid, and returns success. The child then acquires the exclusive flock in `run_foreground` — if a competing instance wins the lock first, the child aborts with "already running" while the parent already told the operator "started".
 - **Fix:** readiness handshake — the child reports success (exit status or explicit ready line) before the parent confirms.
@@ -270,7 +270,7 @@ audit findings", priorities P0–P3).
   `fetch_keeps_relative_archive_url_as_served`,
   `install_rejects_{unverified,archive_url_tamper}_before_download`.
 
-### S2. `data_dir: /tmp/veyron` puts the events SQLite DB in world-writable /tmp (Low-Med, P1)
+### S2. `data_dir: /tmp/vyn` puts the events SQLite DB in world-writable /tmp (Low-Med, P1)
 
 - **Files:** `config.yaml:8`, `src/events/store.rs:13-16` (`EventStore::new`:
   `create_dir_all` + symlink-following `Connection::open`), `src/utils/config.rs`
@@ -278,14 +278,14 @@ audit findings", priorities P0–P3).
   state/cache) was hardened to a per-user private dir (M-09); `data_dir` is
   the one exception and contradicts the config file's own comment ("never the
   shared /tmp").
-- **Impact:** on a multi-user host, a local user can pre-create `/tmp/veyron`
+- **Impact:** on a multi-user host, a local user can pre-create `/tmp/vyn`
   before the kernel starts, then read or modify the event store — including
   forging `pending` events that the retry worker (`bus.rs:160-180`)
   redelivers to subscribers — or symlink `events.db` elsewhere.
 - **Fix:** default `data_dir` to the per-user private runtime dir; create the
   store dir 0o700 with an ownership check.
 - **Status (2026-08-18): FIXED** — `default_data_dir()` uses
-  `veyron_wire::socket::default_private_dir()` (XDG_RUNTIME_DIR pattern,
+  `vynkor_wire::socket::default_private_dir()` (XDG_RUNTIME_DIR pattern,
   same as M-09); `EventStore::new` rejects world-writable dirs (`mode &
   0o002`); shipped via PR #35.
 
@@ -358,7 +358,7 @@ audit findings", priorities P0–P3).
 
 ### PERF-4. Hot-path constant-factor costs (Low, P3)
 
-- **Files:** `../veyron-wire/src/framing.rs:137-152,240` (synchronous zstd in
+- **Files:** `../vynkor-wire/src/framing.rs:137-152,240` (synchronous zstd in
   async tasks; double CRC32 per outbound frame), `src/plugins/supervisor.rs:852,864`
   (sync `/proc` reads in the watchdog loop), `src/api/websocket.rs:220,246-258`
   (double payload copy per WS frame)
@@ -439,19 +439,19 @@ findings below are **OPEN** (2026-08-16); fix plan in `docs/DUMB_CORE_AUDIT.md`.
 
 ### DC-1. Marketplace / plugin app-store client embedded in the kernel (Medium)
 
-- **Files:** `src/marketplace/registry.rs` (1509 L: `DEFAULT_REGISTRY_URL` → veyron-plugins GitHub, `:15-16`; maintainer Ed25519 key pinned in kernel source, `:38-39`; kernel-compat policy, `:626-661`), `src/marketplace/installer.rs` (822 L: download→sha256→zip→atomic-rename pipeline, installed.json ledger, drop-in config write; **hardcoded business rule `sandbox = plugin_id != "network"`, `:647`**), `src/marketplace/state.rs` (154 L), `src/cli/plugin.rs` (`vyn plugin list/search/install/remove/enable/disable`)
+- **Files:** `src/marketplace/registry.rs` (1509 L: `DEFAULT_REGISTRY_URL` → vynkor-plugins GitHub, `:15-16`; maintainer Ed25519 key pinned in kernel source, `:38-39`; kernel-compat policy, `:626-661`), `src/marketplace/installer.rs` (822 L: download→sha256→zip→atomic-rename pipeline, installed.json ledger, drop-in config write; **hardcoded business rule `sandbox = plugin_id != "network"`, `:647`**), `src/marketplace/state.rs` (154 L), `src/cli/plugin.rs` (`vyn plugin list/search/install/remove/enable/disable`)
 - **Issue:** a full plugin distribution/app-store client (catalog fetch, signature verification, revocation governance, install/uninstall, upgrade detection, package-state ledger) is compiled into the kernel. Package management and marketplace governance are product features, not byte-routing.
 - **Impact:** kernel grows product-specific policy (which registry, which maintainer key, which plugin is exempt from sandboxing); every marketplace change ships a kernel release.
 - **Fix:** extract to a `marketplace` plugin (or separate binary) that drives the kernel only through the existing plugin-lifecycle surface (`plugins.d/` drop-ins). The kernel may keep signed-archive verification only if it stays a security boundary.
 - **Status (2026-08-22): CLOSED (F1 shipped).** Extracted to the standalone
-  [`vynkor-manager`](https://github.com/veyron-core/vynkor-manager) repo
+  [`vynkor-manager`](https://github.com/vynkor-core/vynkor-manager) repo
   (binary `vynm`): `src/marketplace/` deleted from the kernel
-  (veyron PR #43); registry client, installer pipeline, ledger and drop-in
+  (vynkor PR #43); registry client, installer pipeline, ledger and drop-in
   writer live there now. The hardcoded sandbox rule (`plugin_id != "network"`)
   died in the port — sandbox preference comes from each plugin's own manifest
   hint. Signed-archive verification moved with it; the kernel keeps only
   boot-time manifest validation as a security boundary (loader via
-  veyron-wire's shared manifest module). CLI commands remain as delegation
+  vynkor-wire's shared manifest module). CLI commands remain as delegation
   shims to `vynm`, removal deferred to stage 3.
 
 ### DC-2. Device-fleet domain model in the kernel (D-01…D-14) (Medium)
@@ -549,7 +549,7 @@ Delta (2026-08-14) ordering (priorities P0–P3, tracked in `ROADMAP.md`):
 ## Full src Audit — 2026-08-20 (maintainability & comments)
 
 **Date:** 2026-08-20
-**Scope:** `src/` — 49 файлов, 14251 LOC (kernel, api, auth, bridge, cli, events, ipc, plugins, marketplace, utils). Proto — single source of truth в `veyron-wire`, здесь только `proto.rs` реэкспорт.
+**Scope:** `src/` — 49 файлов, 14251 LOC (kernel, api, auth, bridge, cli, events, ipc, plugins, marketplace, utils). Proto — single source of truth в `vynkor-wire`, здесь только `proto.rs` реэкспорт.
 **Method:** ручное line-by-line чтение каждого файла, без делегатов/агентов, как запрошено. Проверены: стиль комментов, размер файлов, DRY, error-handling, консистентность.
 **Overall verdict:** кодбейз дисциплинированный, manifesto-compliant, security-first. Главная проблема — перерост: 6 файлов превышают лимит 250 LOC в 3–6 раз, комментарии дублируются и мешают чтению.
 
@@ -598,7 +598,7 @@ Delta (2026-08-14) ordering (priorities P0–P3, tracked in `ROADMAP.md`):
 - `plugins/supervisor.rs` (933) — `spawn_internal` 200 LOC + `monitor_loop` + `watchdog_loop` + `graceful_shutdown`. Вынести `supervisor/spawn.rs`, `supervisor/watchdog.rs`.
 
 **B2. Дублирование хелперов (Medium).**
-- `target_bytes` / `frame_target` / `build_frame` скопированы в 5 местах: `ipc/protocol.rs:503,2400`, `bridge/mod.rs:506,501`, `events/bus.rs:202`, `plugins/supervisor.rs:383`, `api/websocket.rs:283`. Вынести в `ipc/helpers.rs` или `veyron_wire`.
+- `target_bytes` / `frame_target` / `build_frame` скопированы в 5 местах: `ipc/protocol.rs:503,2400`, `bridge/mod.rs:506,501`, `events/bus.rs:202`, `plugins/supervisor.rs:383`, `api/websocket.rs:283`. Вынести в `ipc/helpers.rs` или `vynkor_wire`.
 - `resolve_ws_url` / `resolve_advertise_url` / `resolve_relative_archive_urls` — 3 копии URL-резолва (`bridge/mod.rs:356`, `cli/device.rs:160`, `marketplace/registry.rs:534`). Вынести в `utils/url.rs`.
 
 **B3. `utils/config.rs` — God struct (Medium).**
@@ -614,7 +614,7 @@ Delta (2026-08-14) ordering (priorities P0–P3, tracked in `ROADMAP.md`):
 ### C. Код-качество
 
 **C1. Error handling — 3 системы (Low).**
-- `VeyronError` + `anyhow::Error` + `Result<_, String>` (`auth/jwt.rs:58,83`). `validate()` возвращает `String` — ломает единообразие. Унифицировать на `VeyronError`.
+- `VynkorError` + `anyhow::Error` + `Result<_, String>` (`auth/jwt.rs:58,83`). `validate()` возвращает `String` — ломает единообразие. Унифицировать на `VynkorError`.
 - `main.rs` форматирует `e.to_string()` и теряет chain.
 
 **C2. Глобальные Atomics (Low).**
@@ -624,8 +624,8 @@ Delta (2026-08-14) ordering (priorities P0–P3, tracked in `ROADMAP.md`):
 - Синхронный `rusqlite` под `std::sync::Mutex` блокирует tokio worker на каждом `publish`/`ack`. Нужно `spawn_blocking` или `sqlx`/dedicated writer task. `unwrap_or_else(|p| p.into_inner())` глушит poison — логируй.
 - **Закрыто 2026-08-26:** PERF-2 (PR #70) — async-обёртки через `spawn_blocking`; poison уже логируется через общий `recover_poison` (MA-12).
 
-**C4. `api/websocket.rs:229` дублирует `veyron_wire` фрейминг (Low-Med).**
-- Кастомный `parse_frame` без `COMPRESSED/FRAGMENTED` — любой фикс фрейминга правится в 2 местах. Реюзать `veyron_wire::framing::read_frame` или вынести WS-фрейминг в wire.
+**C4. `api/websocket.rs:229` дублирует `vynkor_wire` фрейминг (Low-Med).**
+- Кастомный `parse_frame` без `COMPRESSED/FRAGMENTED` — любой фикс фрейминга правится в 2 местах. Реюзать `vynkor_wire::framing::read_frame` или вынести WS-фрейминг в wire.
 
 **C5. `utils/logging.rs` — дублирование (Low).**
 - 4 ветки `if json { with otel } else` дублируют 80% `fmt::layer()`. Вынести в `let fmt = fmt::layer()...`. `Registry::init()` паникует при втором вызове — в тестах упадет, сделай `try_init()`.
@@ -634,7 +634,7 @@ Delta (2026-08-14) ordering (priorities P0–P3, tracked in `ROADMAP.md`):
 - `rand::thread_rng()` в `auth/jwt.rs:96` deprecated — заменить на `rand::rng()` / `OsRng`.
 
 **C7. Неиспользуемый `BLOOM` / dead code (Info).**
-- `workspace` `veyron-wire` — проверить `cargo clippy -- -D warnings` на `dead_code`.
+- `workspace` `vynkor-wire` — проверить `cargo clippy -- -D warnings` на `dead_code`.
 
 ### D. Безопасность — подтверждено sound, мелкие nits
 
@@ -651,7 +651,7 @@ Nits этого аудита:
 1. Разбить `ipc/protocol.rs` и `marketplace/registry.rs` — review невозможен.
 2. Вынести `target_bytes/frame_target/build_frame` и `resolve_*_url` в `ipc/helpers` / `utils/url`.
 3. ~~Пофиксить `events/store.rs` — `spawn_blocking` для sqlite (дубль PERF-2).~~ **Готово 2026-08-26 (PR #70).**
-4. Унифицировать `auth/jwt::validate() -> VeyronError`, заменить `thread_rng`.
+4. Унифицировать `auth/jwt::validate() -> VynkorError`, заменить `thread_rng`.
 
 **P1 (гигиена):**
 5. Ввести `docs/COMMENT_TAGS.md`, сократить дублирующие комменты, привести `//` к lowercase.

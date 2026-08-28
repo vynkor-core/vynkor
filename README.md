@@ -4,7 +4,7 @@
 
 > A tiny Rust daemon that turns a laptop into a private cloud. Plugins — AI, storage, automations — run as isolated processes and talk through Vynkor. Your phone becomes a remote device. No vendor, no cloud account.
 
-[![Kernel 0.1.0](https://img.shields.io/badge/kernel-0.1.0-blue)](ROADMAP.md) [![Proto v1.7](https://img.shields.io/badge/proto-v1.7-green)](../vynkor-wire/proto/vynkor_protocol.proto) [![License MIT/Apache](https://img.shields.io/badge/license-MIT%2FApache--2.0-orange)](LICENSE-MIT) [![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-red)](Cargo.toml)
+[![Kernel 0.1.0](https://img.shields.io/badge/kernel-0.1.0-blue)](https://github.com/vynkor-core/vynkor/blob/main/ROADMAP.md) [![Proto v1.7](https://img.shields.io/badge/proto-v1.7-green)](https://github.com/vynkor-core/vynkor-wire/blob/main/proto/vynkor_protocol.proto) [![License MIT/Apache](https://img.shields.io/badge/license-MIT%2FApache--2.0-orange)](https://github.com/vynkor-core/vynkor/blob/main/LICENSE-MIT) [![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-red)](https://github.com/vynkor-core/vynkor/blob/main/Cargo.toml)
 
 ---
 
@@ -27,7 +27,7 @@
 ```
 Browser ──┐
 Phone ────┼─ wss (TLS + per-device JWT) ──→  Vynkor (vyn)  ── UDS (0o600) ──→  Plugins
-Laptop ───┘                                  routing + auth     44-byte frame: Magic|Flags|Target|CRC
+Laptop ───┘                                  routing + auth     44-byte frame: Magic|Flags|Length|Target|CRC
                                                                   ai · network · stt/tts · database · secrets · …
 ```
 
@@ -41,19 +41,19 @@ The kernel never inspects the payload — it reads 32 bytes of `target` and rout
 
 ## Ecosystem — one org, many repos
 
-All repos live in `vynkor-core`. The wire protocol in `vynkor-wire` is the single source of truth.
+All repos live in `vynkor-core`. The wire protocol in [`vynkor-wire`](https://github.com/vynkor-core/vynkor-wire) is the single source of truth.
 
 | Repo | You need it when… |
 |---|---|
-| **`vynkor`** — kernel `vyn` | You run a host. `vyn start / status / logs`, `vyn device connect` (QR). |
-| **`vynkor-wire`** `0.0.2` | You build anything — framing, MAC, protobuf types. Everyone depends on it. |
-| **`vynkor-manager`** — `vynm` | You install plugins. `vynm search/install/remove/update`, signed registry at `~/.local/lib/vyn/plugins/`. |
-| **`vynkor-sdk`** (Rust) · **`vynkor-sdk-cpp`** · **`vynkor-sdk-python`** | You write a plugin. `impl Plugin { on_init, on_message, on_shutdown }`, `VynkorClient::send_action / publish_event`. |
-| **`vynkor-plugins`** | You want ready-made power. 30+ plugins: `ai` (multi-provider chat), `network` (guarded HTTP), `stt`/`tts`, `database` (KV/SQL), `secrets`, `scheduler`, `media`… |
-| **`vynkor-web`** | You want a UI. Marketplace + device list + plugin control (Vite + Tailwind). |
-| **`vynkor-client-android`** | You want your phone as a device. Pairs by QR, streams mic/speaker, exposes phone capabilities. |
+| [**`vynkor`**](https://github.com/vynkor-core/vynkor) — kernel `vyn` | You run a host. `vyn start / status / logs`, `vyn device connect` (QR). |
+| [**`vynkor-wire`**](https://github.com/vynkor-core/vynkor-wire) `0.0.3` | You build anything — framing, MAC, protobuf types. Everyone depends on it. |
+| [**`vynkor-manager`**](https://github.com/vynkor-core/vynkor-manager) — `vynm` | You install plugins. `vynm search/install/remove/update`, signed registry at `~/.local/lib/vyn/plugins/`. |
+| [**`vynkor-sdk`**](https://github.com/vynkor-core/vynkor-sdk) (Rust) · [**`vynkor-sdk-cpp`**](https://github.com/vynkor-core/vynkor-sdk-cpp) · [**`vynkor-sdk-python`**](https://github.com/vynkor-core/vynkor-sdk-python) | You write a plugin. `impl Plugin { on_init, on_message, on_shutdown }`, `VynkorClient::send_action / publish_event`. |
+| [**`vynkor-plugins`**](https://github.com/vynkor-core/vynkor-plugins) | You want ready-made power. `ai` (multi-provider chat), `network` (guarded HTTP), `stt`/`tts`, `database` (KV/SQL), `secrets`, `scheduler`, `media`… |
+| [**`vynkor-web`**](https://github.com/vynkor-core/vynkor-web) | You want a UI. Marketplace + device list + plugin control (Vite + Tailwind). |
+| [**`vynkor-client-android`**](https://github.com/vynkor-core/vynkor-client-android) | You want your phone as a device. Pairs by QR, streams mic/speaker, exposes phone capabilities. |
 
-> One config `~/.config/vyn/config.yaml` for both `vyn` and `vynm`. Plugins live in `~/.local/lib/vyn/plugins/`, state in `~/.local/share/vyn/`, socket at `$XDG_RUNTIME_DIR/vyn.sock`. Legacy `~/.local/lib/veyron` and `VEYRON_*` env vars still read via shims (see `docs/VYN_PRODUCT_LAYOUT.md`).
+> One config `~/.config/vyn/config.yaml` for both `vyn` and `vynm`. Plugins live in `~/.local/lib/vyn/plugins/`, state in `~/.local/share/vyn/`, socket at `$XDG_RUNTIME_DIR/vyn.sock`. No legacy paths — fresh install uses only `vyn` paths (see [`docs/VYN_PRODUCT_LAYOUT.md`](https://github.com/vynkor-core/vynkor/blob/main/docs/VYN_PRODUCT_LAYOUT.md)).
 
 ---
 
@@ -72,17 +72,18 @@ All repos live in `vynkor-core`. The wire protocol in `vynkor-wire` is the singl
 ```bash
 git clone https://github.com/vynkor-core/vynkor && cd vynkor
 cargo build --release                 # → target/release/vyn
-./target/release/vyn start --foreground --debug
-# in another shell
-vyn status
+./target/release/vyn start --foreground --debug  # foreground blocks; use another shell for next commands
+# in another shell:
+./target/release/vyn status
 # vynm is the plugin manager (separate repo):
-# git clone https://github.com/vynkor-core/vynkor-manager && cargo build --release # → target/release/vynm
-vynm search ai
-vynm install ai network database
-vyn device connect --name my-phone    # → QR, scan with Android app
+git clone https://github.com/vynkor-core/vynkor-manager && cd vynkor-manager
+cargo build --release                 # → target/release/vynm
+./target/release/vynm search ai
+./target/release/vynm install ai network database
+./target/release/vyn device connect --name my-phone    # → QR, scan with Android app
 ```
 
-**Next:** open `vynkor-web` or `vyn device list`, then from any plugin:
+**Next:** open [`vynkor-web`](https://github.com/vynkor-core/vynkor-web) or `vyn device list`, then from any plugin:
 
 ```rust
 client.send_action("ai", "chat_completion", json!({ "prompt": "hello" })).await
@@ -94,7 +95,7 @@ client.send_action("ai", "chat_completion", json!({ "prompt": "hello" })).await
 
 ```rust
 use vynkor_sdk::{Plugin, VynkorClient, VynkorError};
-use vynkor::proto::vynkor::{Envelope, PluginManifest};
+use vynkor_wire::proto::vynkor::{Envelope, PluginManifest};
 
 struct MyPlugin;
 
@@ -116,15 +117,15 @@ SDKs: [`vynkor-sdk`](https://github.com/vynkor-core/vynkor-sdk) · [`vynkor-sdk-
 
 | Package | Registry |
 |---|---|
-| `vynkor-sdk` | crates.io (Rust) |
-| `vynkor-wire` | crates.io (wire types) |
-| `vynkor-sdk` | PyPI (Python) |
+| `vynkor-sdk` | [crates.io](https://crates.io/crates/vynkor-sdk) (Rust) |
+| `vynkor-wire` | [crates.io](https://crates.io/crates/vynkor-wire) (wire types) |
+| `vynkor-sdk` (Python, module `vynkor`) | [PyPI](https://pypi.org/project/vynkor-sdk/) |
 
 ---
 
 ## Security in one paragraph
 
-TLS on by default (auto self-signed `vyn-tls/`), `Sec-WebSocket-Protocol: vynkor, <jwt>` auth, per-device credentials instead of sharing the master `jwt_secret`, HMAC-SHA256 per frame after registration, default-deny `ipc_targets`, same-user IPC, sandboxed processes. Details: `docs/THREAT_MODEL.md`, `docs/FRAMING.md` (flag table), `AUDIT.md`.
+TLS on by default (auto self-signed `vyn-tls/`), `Sec-WebSocket-Protocol: vynkor, <jwt>` auth, per-device credentials instead of sharing the master `jwt_secret`, HMAC-SHA256 per frame after registration, default-deny `ipc_targets`, same-user IPC, sandboxed processes. Details: [`docs/THREAT_MODEL.md`](https://github.com/vynkor-core/vynkor/blob/main/docs/THREAT_MODEL.md), [`docs/FRAMING.md`](https://github.com/vynkor-core/vynkor/blob/main/docs/FRAMING.md) (flag table), [`AUDIT.md`](https://github.com/vynkor-core/vynkor/blob/main/AUDIT.md).
 
 ---
 
@@ -139,7 +140,7 @@ Built for humans, not CLIs — the next wave is **zero-terminal onboarding and r
 - **Trust you can see.** `capability_used {cap, ts, origin}` back to your phone.
 - **Hygiene.** Version negotiation, honest `device offline`, cert fingerprint in QR, per-device quota on `ai.chat`.
 
-Details and repo split per task: `docs/CLIENT_DRIVEN_SPLIT.md` + `docs/tasks/CD-00..CD-09`.
+Details and repo split per task: [`docs/CLIENT_DRIVEN_SPLIT.md`](https://github.com/vynkor-core/vynkor/blob/main/docs/CLIENT_DRIVEN_SPLIT.md) + `docs/tasks/CD-00..CD-09`.
 
 ---
 
@@ -153,8 +154,9 @@ src/
   ipc/     UDS framing + routing
   plugins/ loader + registry + supervisor + sandbox
   events/  bus + at-least-once store
+  bridge/  role: client WS bridge
   cli/     vyn
-  utils/   config, logging
+  utils/   config, logging, tls
 docs/
   VYN_PRODUCT_LAYOUT.md  paths & config discovery (authoritative)
   FRAMING.md             flag bits + MAC interaction
@@ -166,14 +168,14 @@ docs/
 
 ## References
 
-- Frame format: `docs/FRAMING.md`
-- Registry schema: `docs/PLUGIN_REGISTRY_SCHEMA.md`
-- Product layout: `docs/VYN_PRODUCT_LAYOUT.md`
-- Protocol: `../vynkor-wire/proto/vynkor_protocol.proto` (vendored, single source of truth)
+- Frame format: [`docs/FRAMING.md`](https://github.com/vynkor-core/vynkor/blob/main/docs/FRAMING.md)
+- Registry schema: [`docs/PLUGIN_REGISTRY_SCHEMA.md`](https://github.com/vynkor-core/vynkor/blob/main/docs/PLUGIN_REGISTRY_SCHEMA.md)
+- Product layout: [`docs/VYN_PRODUCT_LAYOUT.md`](https://github.com/vynkor-core/vynkor/blob/main/docs/VYN_PRODUCT_LAYOUT.md)
+- Protocol: [`vynkor-wire/proto/vynkor_protocol.proto`](https://github.com/vynkor-core/vynkor-wire/blob/main/proto/vynkor_protocol.proto) (single source of truth)
 
 ### Unpublished crates
 
-Between releases `Cargo.toml` may carry a `patch.crates-io` override to pull `vynkor-wire`/`vynkor-sdk` from git. The version requirement stays; the patch just swaps the source. Drop it once published.
+Between releases `Cargo.toml` may carry a `patch.crates-io` override to pull `vynkor-wire`/`vynkor-sdk` from a local path (`../vynkor-wire`, `../vynkor-sdk`). The version requirement stays; the patch just swaps the source. Drop it once published.
 
 ---
 
