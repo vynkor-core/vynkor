@@ -27,7 +27,7 @@ jobs:
           - fuzz_router_pipeline
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # [patch.crates-io] resolves vynkor-wire + vynkor-sdk from sibling paths;
       # without these checkouts cargo fuzz can't resolve the dep graph at all
