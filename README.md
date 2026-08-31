@@ -50,7 +50,6 @@ All repos live in `vynkor-core`. The wire protocol in [`vynkor-wire`](https://gi
 | [**`vynkor-manager`**](https://github.com/vynkor-core/vynkor-manager) — `vynm` | You install plugins. `vynm search/install/remove/update`, signed registry at `~/.local/lib/vyn/plugins/`. |
 | [**`vynkor-sdk`**](https://github.com/vynkor-core/vynkor-sdk) (Rust) · [**`vynkor-sdk-cpp`**](https://github.com/vynkor-core/vynkor-sdk-cpp) · [**`vynkor-sdk-python`**](https://github.com/vynkor-core/vynkor-sdk-python) | You write a plugin. `impl Plugin { on_init, on_message, on_shutdown }`, `VynkorClient::send_action / publish_event`. |
 | [**`vynkor-plugins`**](https://github.com/vynkor-core/vynkor-plugins) | You want ready-made power. `ai` (multi-provider chat), `network` (guarded HTTP), `stt`/`tts`, `database` (KV/SQL), `secrets`, `scheduler`, `media`… |
-| [**`vynkor-web`**](https://github.com/vynkor-core/vynkor-web) | You want a UI. Marketplace + device list + plugin control (Vite + Tailwind). |
 | [**`vynkor-client-android`**](https://github.com/vynkor-core/vynkor-client-android) | You want your phone as a device. Pairs by QR, streams mic/speaker, exposes phone capabilities. |
 
 > One config `~/.config/vyn/config.yaml` for both `vyn` and `vynm`. Plugins live in `~/.local/lib/vyn/plugins/`, state in `~/.local/share/vyn/`, socket at `$XDG_RUNTIME_DIR/vyn.sock`. No legacy paths — fresh install uses only `vyn` paths (see [`docs/VYN_PRODUCT_LAYOUT.md`](https://github.com/vynkor-core/vynkor/blob/main/docs/VYN_PRODUCT_LAYOUT.md)).
@@ -83,7 +82,7 @@ cargo build --release                 # → target/release/vynm
 ./target/release/vyn device connect --name my-phone    # → QR, scan with Android app
 ```
 
-**Next:** open [`vynkor-web`](https://github.com/vynkor-core/vynkor-web) or `vyn device list`, then from any plugin:
+**Next:** open `vyn device list`, then from any plugin:
 
 ```rust
 client.send_action("ai", "chat_completion", json!({ "prompt": "hello" })).await
