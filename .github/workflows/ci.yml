@@ -14,7 +14,7 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # SDKs/wire live in sibling repos (not submodules — temporary decision,
       # see ROADMAP). Clone them beside the workspace so tests and the
