@@ -100,7 +100,10 @@ async fn run_kernel(cli: Cli) -> Result<()> {
         Commands::Stop { config } => {
             let cfg = load_config(&config)?;
             utils::logging::try_init(&cfg.log_level);
-            stop_kernel(&cfg.pid_file)?;
+            stop_kernel(
+                &cfg.pid_file,
+                std::time::Duration::from_secs(cfg.default_grace_seconds as u64),
+            )?;
         }
         Commands::Restart { config, debug } => {
             let cfg = load_config(&config)?;
@@ -109,7 +112,10 @@ async fn run_kernel(cli: Cli) -> Result<()> {
             // Capture the PID before stop_kernel removes the pid file, so we can
             // confirm the actual process is gone rather than guessing with a sleep.
             let old_pid = read_pid(&cfg.pid_file).ok();
-            stop_kernel(&cfg.pid_file)?;
+            stop_kernel(
+                &cfg.pid_file,
+                std::time::Duration::from_secs(cfg.default_grace_seconds as u64),
+            )?;
             if let Some(pid) = old_pid {
                 if !wait_pid_gone(pid, std::time::Duration::from_secs(5)) {
                     anyhow::bail!(
@@ -312,7 +318,13 @@ fn write_pid(pid_file: &std::path::Path, pid: i32) -> Result<()> {
     Ok(())
 }
 
-fn stop_kernel(pid_file: &std::path::Path) -> Result<()> {
+// margin added on top of the daemon's own grace budget to absorb signal
+// dispatch, wake-up, and pid-file cleanup latency — not part of the kernel's
+// graceful-shutdown accounting.
+const STOP_WAIT_MARGIN: std::time::Duration = std::time::Duration::from_secs(2);
+const STOP_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
+
+fn stop_kernel(pid_file: &std::path::Path, grace: std::time::Duration) -> Result<()> {
     if !is_running(pid_file)? {
         warn!("kernel is not running");
         return Ok(());
@@ -323,16 +335,16 @@ fn stop_kernel(pid_file: &std::path::Path) -> Result<()> {
     use nix::unistd::Pid;
     kill(Pid::from_raw(pid), Signal::SIGTERM)?;
     // Must comfortably exceed the kernel's own plugin-shutdown budget
-    // (`default_grace_seconds`, 5s by default — see utils/config.rs) plus
-    // wake-up/cleanup overhead. At 10*500ms == 5s this raced the kernel's
-    // own SIGTERM->SIGKILL deadline for the slowest plugin, so the CLI
-    // routinely force-killed the kernel mid-shutdown instead of waiting for
-    // its graceful path to finish.
-    for _ in 0..20 {
+    // (`default_grace_seconds`, operator-configured in config.yaml — see
+    // utils/config.rs) or the CLI force-kills the kernel mid-graceful-shutdown
+    // instead of waiting for its own SIGTERM->SIGKILL deadline to elapse.
+    let wait = grace + STOP_WAIT_MARGIN;
+    let deadline = std::time::Instant::now() + wait;
+    while std::time::Instant::now() < deadline {
         if !is_running(pid_file)? {
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(500));
+        std::thread::sleep(STOP_POLL_INTERVAL);
     }
     if is_running(pid_file)? {
         warn!("force killing...");
@@ -529,4 +541,73 @@ fn show_logs(log_file: &std::path::Path, lines: usize) -> Result<()> {
         println!("{}", line);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write as _;
+    use std::time::{Duration, Instant};
+
+    // K-01: a configured `default_grace_seconds: 15` must make the CLI wait
+    // past the old hardcoded 10s window before escalating to SIGKILL.
+    // Regression for stop_kernel ignoring the daemon's actual grace budget.
+    #[test]
+    fn stop_kernel_honors_configured_grace_past_old_hardcoded_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("vyn.pid");
+        let marker = dir.path().join("graceful.marker");
+
+        // child traps SIGTERM, sleeps 12s (> old 10s hardcoded cap), then
+        // writes the marker and exits cleanly — proof it wasn't SIGKILLed.
+        // `sleep 60 & wait` (not a bare foreground `sleep`) so the shell
+        // actually delivers the trap while waiting instead of deferring it
+        // until the foreground command exits on its own.
+        let child = Command::new("sh")
+            .arg("-c")
+            .arg(format!(
+                "trap 'sleep 12; touch {}; exit 0' TERM; sleep 60 & wait",
+                marker.display()
+            ))
+            .spawn()
+            .expect("spawn test child");
+        let pid = child.id();
+        // reap promptly on exit — otherwise the child lingers as a zombie
+        // and `kill(pid, 0)` (is_running's existence probe) keeps reporting
+        // it alive even after it has already exited gracefully.
+        let mut child = child;
+        std::thread::spawn(move || {
+            let _ = child.wait();
+        });
+
+        let mut f = fs::File::create(&pid_file).unwrap();
+        write!(f, "{pid}").unwrap();
+        drop(f);
+
+        // let the child actually install its `trap` before we signal it —
+        // otherwise SIGTERM can hit it during shell startup, before the trap
+        // is registered, and it dies on the default (untrapped) action.
+        std::thread::sleep(Duration::from_millis(700));
+
+        let start = Instant::now();
+        stop_kernel(&pid_file, Duration::from_secs(15)).expect("stop_kernel");
+        let elapsed = start.elapsed();
+
+        assert!(
+            marker.exists(),
+            "child was SIGKILLed before its graceful SIGTERM handler finished — \
+             stop_kernel did not honor the configured grace period"
+        );
+        assert!(
+            elapsed >= Duration::from_secs(12),
+            "stop_kernel returned after {elapsed:?}, before the child's graceful \
+             12s shutdown completed — old hardcoded 10s cap would have forced this"
+        );
+
+        // best-effort cleanup: the child already exited on its own above.
+        let _ = std::process::Command::new("kill")
+            .arg("-9")
+            .arg(pid.to_string())
+            .status();
+    }
 }
