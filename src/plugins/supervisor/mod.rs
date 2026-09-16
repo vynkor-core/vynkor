@@ -316,9 +316,23 @@ impl PluginSupervisor {
     fn backoff_delay(&self, restart_count: u32) -> Duration {
         let ms = self
             .backoff_base_ms
-            .saturating_mul(1u64 << restart_count.min(8));
-        Duration::from_millis(ms.min(self.backoff_max_ms))
+            .saturating_mul(1u64 << restart_count.min(8))
+            .min(self.backoff_max_ms);
+        Duration::from_millis(jitter_ms(ms))
     }
+}
+
+/// Applies +/-20% jitter to a backoff value so N plugins crashing together
+/// (shared dependency breaks, kernel restart under load) don't all restart
+/// at identical wall-clock offsets and spike the OS with simultaneous spawns.
+fn jitter_ms(ms: u64) -> u64 {
+    use rand::Rng;
+    let band = (ms as f64 * 0.2) as u64;
+    if band == 0 {
+        return ms;
+    }
+    let delta = rand::thread_rng().gen_range(0..=(2 * band));
+    ms - band + delta
 }
 
 /// Binary the supervisor re-execs as the sandbox shim: our own executable
@@ -356,5 +370,78 @@ mod tests {
         assert!(logs_contain(
             "sandbox=true has no effect on this OS (Linux required for namespace isolation)"
         ));
+    }
+
+    #[test]
+    fn backoff_delay_jitters_within_20_percent_band() {
+        use super::PluginSupervisor;
+
+        let base_ms = 1000u64;
+        let sup = PluginSupervisor::with_events(
+            "/tmp/does-not-matter.sock",
+            10,
+            None,
+            None,
+            base_ms,
+            30_000,
+        );
+
+        // restart_count = 2 -> unjittered exponential value is base * 2^2 = 4000ms
+        let expected = base_ms * 4;
+        let band = (expected as f64 * 0.2) as u64;
+        let lo = expected - band;
+        let hi = expected + band;
+
+        let samples: Vec<u64> = (0..50)
+            .map(|_| sup.backoff_delay(2).as_millis() as u64)
+            .collect();
+
+        // (a) values vary across repeated calls at the same attempt count.
+        assert!(
+            samples
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+                > 1,
+            "expected jittered backoff to vary across calls, got constant {:?}",
+            samples[0]
+        );
+
+        // (b) every sample stays within the documented +/-20% band.
+        for &ms in &samples {
+            assert!(
+                (lo..=hi).contains(&ms),
+                "backoff {ms} outside +/-20% band [{lo}, {hi}]"
+            );
+        }
+    }
+
+    #[test]
+    fn backoff_delay_respects_cap_plus_jitter_band() {
+        use super::PluginSupervisor;
+
+        // base_ms picked so base * 2^restart_count vastly exceeds max_ms; the
+        // capped value (max_ms) is what jitter should be applied to.
+        let base_ms = 10_000u64;
+        let max_ms = 5_000u64;
+        let sup = PluginSupervisor::with_events(
+            "/tmp/does-not-matter.sock",
+            10,
+            None,
+            None,
+            base_ms,
+            max_ms,
+        );
+
+        let band = (max_ms as f64 * 0.2) as u64;
+        let hi = max_ms + band;
+
+        for _ in 0..50 {
+            let ms = sup.backoff_delay(5).as_millis() as u64;
+            assert!(
+                ms <= hi,
+                "jittered backoff {ms} exceeded cap+band {hi} (cap {max_ms})"
+            );
+        }
     }
 }
