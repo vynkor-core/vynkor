@@ -1,13 +1,17 @@
 //! `vyn device connect` — pair a remote device agent (the vynkor Android app)
-//! by rendering a QR code and a `vynkor://pair` link that carry everything the
-//! agent needs to join the host: host URL, device id, per-device JWT, the
-//! device's OWN frame-MAC secret, and (when TLS is on) the served cert for
-//! pinning.
+//! by printing a `vynkor://pair` link that carries everything the agent needs
+//! to join the host: host URL, device id, per-device JWT, the device's OWN
+//! frame-MAC secret, and (when TLS is on) the served cert for pinning.
 //!
 //! E-01: the host issues a unique per-device secret at pair time and stores it
 //! encrypted in `<data_dir>/devices.json`; the master jwt_secret never leaves
-//! the host. The QR is a physical, unidirectional trusted channel — good
-//! enough to carry the device secret once and the self-signed cert.
+//! the host.
+//!
+//! K-05: QR-code rendering (terminal + SVG) used to live here too, but it's
+//! pure onboarding UX, not pairing-protocol logic — moved to the standalone
+//! `vyn-pair` binary (`src/bin/vyn-pair.rs`), which reads the printed link
+//! from here and renders it. This binary just prints the link/token; it never
+//! links the `qrcode` crate.
 //!
 //! Lifecycle companions: `vyn device list`, `vyn device revoke`, `vyn device
 //! remove`. Revocation takes effect on a running kernel immediately — the
@@ -20,8 +24,6 @@ use std::net::{IpAddr, UdpSocket};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use clap::Subcommand;
-use qrcode::render::unicode::Dense1x2;
-use qrcode::QrCode;
 use serde::Serialize;
 
 use crate::auth::device_store::{DeviceStatus, DeviceStore};
@@ -47,9 +49,10 @@ struct PairPayload {
 
 #[derive(Subcommand)]
 pub enum DeviceCmd {
-    /// Issue a per-device credential and print a QR code + `vynkor://pair`
-    /// link the vynkor Android app scans to configure itself and connect.
-    /// Requires `jwt_secret`.
+    /// Issue a per-device credential and print the `vynkor://pair` link the
+    /// vynkor Android app scans (via QR) to configure itself and connect.
+    /// Requires `jwt_secret`. Pipe the printed link to `vyn-pair` to render
+    /// it as a QR code (terminal or SVG) — this command only prints text.
     Connect {
         /// Device id (the JWT `sub`). Default: auto-generated.
         #[arg(long)]
@@ -74,9 +77,6 @@ pub enum DeviceCmd {
         /// Audience claim. Default: config `jwt_audience`, else "vynkor".
         #[arg(long)]
         aud: Option<String>,
-        /// Also write the QR to this path (SVG, opens in a browser).
-        #[arg(long)]
-        qr_out: Option<String>,
     },
     /// List paired device credentials (from the local store), merged with live
     /// state from the running kernel when reachable.
@@ -110,7 +110,6 @@ pub async fn handle(cmd: DeviceCmd, config_path: &str) -> anyhow::Result<()> {
             ipc_targets,
             ttl_seconds,
             aud,
-            qr_out,
         } => {
             connect(
                 ConnectOpts {
@@ -121,7 +120,6 @@ pub async fn handle(cmd: DeviceCmd, config_path: &str) -> anyhow::Result<()> {
                     ipc_targets,
                     ttl_seconds,
                     aud,
-                    qr_out,
                 },
                 config_path,
             )?;
@@ -150,7 +148,6 @@ struct ConnectOpts {
     ipc_targets: Option<String>,
     ttl_seconds: u64,
     aud: Option<String>,
-    qr_out: Option<String>,
 }
 
 fn connect(opts: ConnectOpts, config_path: &str) -> anyhow::Result<String> {
@@ -162,7 +159,6 @@ fn connect(opts: ConnectOpts, config_path: &str) -> anyhow::Result<String> {
         ipc_targets,
         ttl_seconds,
         aud,
-        qr_out,
     } = opts;
     let cfg = load_config(config_path)?;
     let secret = cfg.jwt_secret.clone().ok_or_else(|| {
@@ -229,20 +225,12 @@ fn connect(opts: ConnectOpts, config_path: &str) -> anyhow::Result<String> {
     let compressed = encoder.finish()?;
     let link = format!("vynkor://pair?z=1&d={}", URL_SAFE_NO_PAD.encode(compressed));
 
-    println!("Scan with the vynkor Android app (or open the link):\n");
-    print_qr(&link)?;
-    println!("\n{link}\n");
-    println!(
-        "paired device '{device_id}' — link {} chars (QR v{})",
-        link.len(),
-        qr_version(&link)
-    );
+    println!("Pairing link (open on the phone, or render as a QR with `vyn-pair`):\n");
+    println!("{link}\n");
+    println!("paired device '{device_id}' — link {} chars", link.len());
+    println!("render a scannable QR code: vyn device connect ... | vyn-pair");
     println!("credential expires in {ttl_seconds}s; revoke anytime: vyn device revoke {device_id}");
 
-    if let Some(path) = qr_out {
-        write_svg(&link, &path)?;
-        eprintln!("QR written to {path}");
-    }
     Ok(link)
 }
 
@@ -418,23 +406,6 @@ fn format_ts(epoch_secs: u64) -> String {
     )
 }
 
-/// Approximate QR version for the printed size hint (byte capacity of
-/// versions 1..=40 at ECC level L, numeric/alphanumeric ignored — we're
-/// byte-mode).
-fn qr_version(link: &str) -> usize {
-    // byte capacities, ECC L, versions 1..40 (ISO/IEC 18004 tables)
-    const CAPS: [usize; 40] = [
-        17, 32, 53, 78, 106, 134, 154, 192, 230, 271, 321, 367, 425, 458, 520, 586, 644, 718, 792,
-        858, 929, 1003, 1091, 1171, 1273, 1367, 1465, 1528, 1628, 1732, 1840, 1952, 2068, 2188,
-        2303, 2431, 2563, 2699, 2809, 2953,
-    ];
-    let n = link.len();
-    CAPS.iter()
-        .position(|&cap| cap >= n)
-        .map(|i| i + 1)
-        .unwrap_or(41)
-}
-
 /// Resolve the advertise URL the phone should dial. Never loopback — the QR is
 /// scanned by a phone whose `localhost` is itself. A bare `--host` (no port)
 /// gains the config port; a full URL keeps its host/port/path but is
@@ -500,25 +471,6 @@ fn random_device_id() -> String {
     use rand::Rng;
     let n: u32 = rand::thread_rng().gen();
     format!("dev-{:06x}", n & 0xFF_FFFF)
-}
-
-fn print_qr(link: &str) -> anyhow::Result<()> {
-    let code = QrCode::new(link.as_bytes()).map_err(anyhow::Error::new)?;
-    let image = code.render::<Dense1x2>().quiet_zone(true).build();
-    println!("{image}");
-    Ok(())
-}
-
-fn write_svg(link: &str, path: &str) -> anyhow::Result<()> {
-    use qrcode::render::svg;
-    let code = QrCode::new(link.as_bytes()).map_err(anyhow::Error::new)?;
-    let svg = code
-        .render::<svg::Color>()
-        .quiet_zone(true)
-        .min_dimensions(512, 512)
-        .build();
-    std::fs::write(path, svg)?;
-    Ok(())
 }
 
 fn parse_csv(s: String) -> Vec<String> {
@@ -625,7 +577,6 @@ mod tests {
                 ipc_targets: None,
                 ttl_seconds: 3600,
                 aud: None,
-                qr_out: None,
             },
             &cfg_path,
         )
@@ -669,7 +620,6 @@ mod tests {
                 ipc_targets: None,
                 ttl_seconds: 3600,
                 aud: None,
-                qr_out: None,
             },
             &cfg_path,
         )
@@ -684,13 +634,6 @@ mod tests {
 
         remove("dev-r", &cfg_path).unwrap();
         assert!(store.get("dev-r").unwrap().is_none());
-    }
-
-    #[test]
-    fn qr_version_estimates_byte_capacity() {
-        assert_eq!(qr_version(&"a".repeat(10)), 1);
-        assert_eq!(qr_version(&"a".repeat(100)), 5);
-        assert_eq!(qr_version(&"a".repeat(3000)), 41);
     }
 
     #[test]

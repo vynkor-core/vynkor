@@ -8,6 +8,18 @@ license = "MIT OR Apache-2.0"
 name = "vyn"
 path = "src/main.rs"
 
+# K-05: standalone QR-rendering companion for `vyn device connect` (kernel CLI
+# prints the plain pairing link/token only — see src/cli/device.rs). Lives in
+# this crate (not a separate repo/plugin) for lowest blast radius. `qrcode` is
+# referenced only from src/bin/vyn-pair.rs, not from the `vynkor` lib crate
+# that `vyn` links, so it never ends up in the `vyn` binary despite being one
+# shared [dependencies] table (single-crate project, no workspace split
+# needed) — cargo only links crates a target's compiled code actually
+# reaches, regardless of Cargo.toml being shared.
+[[bin]]
+name = "vyn-pair"
+path = "src/bin/vyn-pair.rs"
+
 [lib]
 name = "vynkor"
 path = "src/lib.rs"
@@ -85,9 +97,10 @@ futures-util = "0.3"
 # provided no tls_cert_path/tls_key_path
 rcgen = "0.13"
 
-# D-14 companion: `vyn device connect` renders the pairing QR (terminal UTF-8 /
-# SVG) and base64url-encodes the payload for the vynkor://pair link
+# D-14/K-05: `vyn-pair` (src/bin/vyn-pair.rs) renders the pairing QR (terminal
+# UTF-8 / SVG) — not used by the `vyn` lib/bin, see the vyn-pair [[bin]] above
 qrcode = "0.14"
+# base64url-encodes the pair payload for the vynkor://pair link (used by `vyn`)
 base64 = "0.22"
 
 # E-01: device credential store — AES-256-GCM at rest under a key derived from

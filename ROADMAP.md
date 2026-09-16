@@ -1610,6 +1610,35 @@ UX-2/UX-4 (2026-08-24), UX-3 (PR #68); PERF-4 partial (PR #68).
     URL/token only.
   - Needs a boundary decision (see DC-2), not a quick patch — raise before
     scheduling.
+  - **Status (2026-09-16): SHIPPED.** Boundary decision: a new `[[bin]]`
+    target in this same crate (`src/bin/vyn-pair.rs`), not a new repo and not
+    a plugin — lowest blast radius, no new CI/publish surface. Moved
+    `print_qr`/`write_svg`/`qr_version` (the ISO 18004 capacity table + QR
+    terminal/SVG rendering) out of `src/cli/device.rs` verbatim into
+    `vyn-pair`, which takes a link as an argument or scrapes it off stdin
+    (so `vyn device connect ... | vyn-pair` works against the full command
+    output, not just a bare link). `vyn device connect` keeps 100% of its
+    pairing-protocol logic unchanged — it just prints the plain
+    `vynkor://pair` link/token now (dropped the `--qr_out` flag; the
+    connect-command help text and its "credential expires" footer point to
+    `vyn-pair` for QR rendering). Dependency scoping: this is a single-crate
+    project (no workspace), so `[dependencies]` is nominally shared across
+    every `[[bin]]` target — but Cargo/rustc only link a target with the
+    crates its own compiled code actually references, not everything listed
+    in Cargo.toml. Since `qrcode` is now used only from
+    `src/bin/vyn-pair.rs` and never from the `vynkor` lib crate that `vyn`
+    links, no workspace split or feature-gating was needed to get a clean
+    result: confirmed with `nm target/debug/vyn | grep -c qrcode` → 0 vs.
+    `nm target/debug/vyn-pair | grep -c qrcode` → 202. Tests: the
+    `qr_version` unit test moved to `src/bin/vyn-pair.rs` alongside the code
+    (plus two new tests for the stdin link-extraction helper); the
+    `device.rs` pairing tests (`connect_end_to_end_...`,
+    `revoke_and_remove_flow_...`, etc.) needed only their `qr_out: None`
+    field dropped. `cargo build --all-targets`, `cargo clippy --all-targets
+    --all-features -- -D warnings`, and `cargo fmt --check` all clean;
+    `cargo test --all --all-features` green (only the 4 pre-existing,
+    environment-caused `test_sdk_cpp::*` failures, unrelated to this
+    change).
 
 ## Definition of Done
 
