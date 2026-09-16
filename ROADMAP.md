@@ -1563,14 +1563,43 @@ UX-2/UX-4 (2026-08-24), UX-3 (PR #68); PERF-4 partial (PR #68).
     denied even if it would otherwise match an `ipc_targets` allowlist entry.
   - **Status (2026-09-16): SHIPPED.**
 
-- [ ] **K-04 (deferred) — Orchestrator shutdown doesn't close API/WS/UDS listeners or flush EventStore.**
+- [x] **K-04 — Orchestrator shutdown doesn't close API/WS/UDS listeners or flush EventStore.**
   `graceful_shutdown` only stops plugins; Axum server, UDS listener, and
   retry-worker tasks die via process-exit rather than clean close.
   - Files: `src/kernel/orchestrator/mod.rs`.
   - Not scheduled — lower priority than K-01..K-03, needs a tracked
     `JoinHandle` set design, not a quick patch.
+  - **Status (2026-09-16): SHIPPED.** Added a `ShutdownHandles` bundle
+    (`src/kernel/orchestrator/mod.rs`) tracking the UDS accept-loop
+    `JoinHandle`, an `axum_server::Handle` + task handle for the API server,
+    and a `Vec<JoinHandle>` for the background loops (message router,
+    UDS/WS disconnect handlers, retry worker, watchdog, monitor, bridge) that
+    were previously fire-and-forget `tokio::spawn`s with no tracked handle at
+    all. `graceful_shutdown` (`src/kernel/orchestrator/shutdown.rs`) now runs
+    an explicit ordered sequence: (1) abort the UDS accept loop first so no
+    new plugin refuses mid-teardown, (2) notify + wait out existing plugins'
+    grace window (unchanged logic), (3) trigger `axum-server`'s built-in
+    graceful shutdown (`Handle::graceful_shutdown`) with a
+    `default_grace_seconds` drain window — plugins go down before the API
+    layer so in-flight HTTP/WS responses aren't racing plugin teardown, and
+    WS clients get a real close frame — bounded by a `default_grace_seconds +
+    5s` `tokio::time::timeout` so a stuck connection can't hang shutdown
+    forever, (4) abort the remaining background loops, which by then have
+    nothing left to receive from. EventStore: no explicit flush was added —
+    every write (`persist`/`mark_delivered`/`prune`/...) is its own
+    auto-committed `rusqlite` statement, so there's never an open transaction
+    to lose; dropping the connection is already a clean close. New test
+    `kernel_shutdown_closes_api_listener_within_bound`
+    (`tests/unit/test_kernel.rs`) asserts the API port both accepts
+    connections before shutdown and is refused after `graceful_shutdown`
+    completes (not just that the future resolved), and that the whole
+    shutdown finishes within the bounded timeout. Ambiguity resolved with a
+    default: the API drain window reuses `default_grace_seconds` (same
+    5s-default budget plugins get) rather than a separate config knob — a
+    human may want a distinct `api_grace_seconds` if HTTP responses turn out
+    to need a different budget than plugin shutdown in practice.
 
-- [ ] **K-05 (deferred) — CLI device/pairing scope creep.**
+- [x] **K-05 — CLI device/pairing scope creep.**
   `src/cli/device.rs` (702 lines) bundles QR-code generation (ISO 18004
   capacity table, SVG rendering — pure onboarding UX) and device
   fleet pairing/list/revoke into the kernel CLI binary. This is the

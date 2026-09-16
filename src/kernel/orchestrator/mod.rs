@@ -20,6 +20,19 @@ use crate::utils::config::{resolve_device_id, Config, Role};
 
 mod shutdown;
 
+/// K-04: everything `graceful_shutdown` needs to close cleanly instead of
+/// relying on process-exit to tear these down. `background` covers loops
+/// with no cooperative stop signal (disconnect handlers, retry worker,
+/// watchdog, monitor, router, bridge) — they hold no state that needs
+/// flushing, so `abort()` is sufficient once upstream sources (plugins, UDS)
+/// are already shut off.
+pub(super) struct ShutdownHandles {
+    pub(super) uds_accept: tokio::task::JoinHandle<()>,
+    pub(super) api_shutdown_handle: axum_server::Handle<std::net::SocketAddr>,
+    pub(super) api_task: tokio::task::JoinHandle<()>,
+    pub(super) background: Vec<tokio::task::JoinHandle<()>>,
+}
+
 pub struct Kernel;
 
 impl Kernel {
@@ -62,7 +75,7 @@ impl Kernel {
 
         let (router_tx, router_rx) = mpsc::channel(config.router_channel_capacity);
         let ws_router_tx = router_tx.clone();
-        let (_server_handle, disconnect_rx) = UdsServer::start(
+        let (uds_accept_handle, disconnect_rx) = UdsServer::start(
             Path::new(&config.socket_path),
             router_tx,
             config.max_connections,
@@ -155,6 +168,7 @@ impl Kernel {
         // D-06: in client role, mirror the configured capabilities to the host
         // and hand the router the relay handle (frames whose target is not in
         // the local registry fall through to the host).
+        let mut background_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
         let bridge_handle = if config.role == Role::Client {
             if let Some(bridge_cfg) = &config.bridge {
                 let handle = BridgeHandle::new();
@@ -165,7 +179,7 @@ impl Kernel {
                     ws_router_tx.clone(),
                     handle.clone(),
                 );
-                tokio::spawn(bridge.run());
+                background_handles.push(tokio::spawn(bridge.run()));
                 Some(handle)
             } else {
                 warn!("role: client without a bridge block — running host-local only");
@@ -174,7 +188,7 @@ impl Kernel {
         } else {
             None
         };
-        tokio::spawn(MessageRouter::run_with_context(
+        background_handles.push(tokio::spawn(MessageRouter::run_with_context(
             router_rx,
             Arc::clone(&registry),
             Arc::clone(&event_bus),
@@ -194,37 +208,37 @@ impl Kernel {
             config.prune_interval_secs,
             device_store.clone(),
             bridge_handle,
-        ));
+        )));
 
         // disconnect handler: unregister plugin + publish system.plugin_left
         let disc_registry = Arc::clone(&registry);
         let disc_bus = Arc::clone(&event_bus);
-        tokio::spawn(Self::disconnect_loop(
+        background_handles.push(tokio::spawn(Self::disconnect_loop(
             disconnect_rx,
             disc_registry,
             disc_bus,
-        ));
+        )));
 
         // WS disconnect handler (same logic, separate channel)
         let ws_disc_registry = Arc::clone(&registry);
         let ws_disc_bus = Arc::clone(&event_bus);
-        tokio::spawn(Self::disconnect_loop(
+        background_handles.push(tokio::spawn(Self::disconnect_loop(
             ws_disconnect_rx,
             ws_disc_registry,
             ws_disc_bus,
-        ));
+        )));
 
         // at-least-once delivery retry worker
         if let Some(store) = event_store {
             let retry_bus = Arc::clone(&event_bus);
             let retry_reg = Arc::clone(&registry);
-            tokio::spawn(run_retry_worker(
+            background_handles.push(tokio::spawn(run_retry_worker(
                 store,
                 retry_bus,
                 retry_reg,
                 config.event_max_retries,
                 config.event_retention_secs,
-            ));
+            )));
         }
 
         let mut supervisor = PluginSupervisor::with_events(
@@ -238,17 +252,17 @@ impl Kernel {
         supervisor.set_data_dir(config.data_dir.clone());
         let supervisor = Arc::new(supervisor);
         let sup_loop = Arc::clone(&supervisor);
-        tokio::spawn(async move { sup_loop.monitor_loop().await });
+        background_handles.push(tokio::spawn(async move { sup_loop.monitor_loop().await }));
 
         let watchdog_sup = Arc::clone(&supervisor);
         let watchdog_reg = Arc::clone(&registry);
         let watchdog_interval = std::time::Duration::from_secs(config.watchdog_interval_secs);
         let watchdog_timeout = std::time::Duration::from_secs(config.watchdog_timeout_secs);
-        tokio::spawn(async move {
+        background_handles.push(tokio::spawn(async move {
             watchdog_sup
                 .watchdog_loop(watchdog_reg, watchdog_interval, watchdog_timeout)
                 .await
-        });
+        }));
 
         let shutdown_supervisor = Arc::clone(&supervisor);
         let manager = Arc::new(PluginManager::new(supervisor, Arc::clone(&registry)));
@@ -271,8 +285,12 @@ impl Kernel {
             config.max_ws_connections,
             config.ws_register_timeout_secs,
         );
-        tokio::spawn(async move {
-            if let Err(e) = api.run().await {
+        // K-04: kept outside the spawned task so graceful_shutdown can signal
+        // it (axum-server's Handle is the drain/stop switch for the listener).
+        let api_shutdown_handle = axum_server::Handle::new();
+        let api_task_handle = api_shutdown_handle.clone();
+        let api_task = tokio::spawn(async move {
+            if let Err(e) = api.run(api_task_handle).await {
                 error!("HTTP API error: {e}");
             }
         });
@@ -285,6 +303,12 @@ impl Kernel {
             &registry,
             &shutdown_supervisor,
             config.default_grace_seconds,
+            ShutdownHandles {
+                uds_accept: uds_accept_handle,
+                api_shutdown_handle,
+                api_task,
+                background: background_handles,
+            },
         )
         .await;
         Ok(())

@@ -4,7 +4,7 @@ use crate::ipc::connection::out_frame;
 use crate::ipc::framing::build_frame;
 use crate::proto::vynkor::{envelope, Envelope, Event, PluginShutdown};
 use prost::Message;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::signal::unix::{signal, SignalKind};
 
 /// Reload config from `config_file` (if set) and apply its log level.
@@ -78,41 +78,79 @@ impl Kernel {
         }
     }
 
+    /// K-04 ordering: (1) stop accepting *new* plugin connections so nothing
+    /// joins mid-teardown with no shutdown notice, (2) tell live plugins to
+    /// stop and wait out their grace window, (3) only then drain the API/WS
+    /// layer — plugins are the source of most API-visible state (registration,
+    /// events), so downing them first means the API server's final in-flight
+    /// responses aren't racing plugin teardown, and WS clients get a clean
+    /// close frame instead of the app-level errors a mid-teardown plugin call
+    /// would otherwise produce, (4) abort background loops, which by now have
+    /// nothing left to receive from.
     pub(super) async fn graceful_shutdown(
         registry: &PluginRegistry,
         supervisor: &PluginSupervisor,
         default_grace_seconds: u32,
+        handles: ShutdownHandles,
     ) {
+        // (1) refuse new plugin connections immediately.
+        handles.uds_accept.abort();
+
+        // (2) notify + wait out existing plugins' grace window.
         let entries = registry.list();
-        if entries.is_empty() {
-            return;
-        }
-
-        // Advertise each plugin's real grace window: its supervised config value
-        // when set, else the kernel default — matching what the supervisor will
-        // actually enforce before SIGKILL.
-        for entry in entries {
-            let grace = supervisor
-                .grace_seconds_for(&entry.plugin_id)
-                .unwrap_or(default_grace_seconds);
-            let mut payload = Vec::new();
-            let env = Envelope {
-                payload: Some(envelope::Payload::PluginShutdown(PluginShutdown {
-                    reason: "kernel shutdown".to_string(),
-                    grace_seconds: grace,
-                })),
-                ..Default::default()
-            };
-            if env.encode(&mut payload).is_err() {
-                continue;
+        if !entries.is_empty() {
+            // Advertise each plugin's real grace window: its supervised config
+            // value when set, else the kernel default — matching what the
+            // supervisor will actually enforce before SIGKILL.
+            for entry in entries {
+                let grace = supervisor
+                    .grace_seconds_for(&entry.plugin_id)
+                    .unwrap_or(default_grace_seconds);
+                let mut payload = Vec::new();
+                let env = Envelope {
+                    payload: Some(envelope::Payload::PluginShutdown(PluginShutdown {
+                        reason: "kernel shutdown".to_string(),
+                        grace_seconds: grace,
+                    })),
+                    ..Default::default()
+                };
+                if env.encode(&mut payload).is_err() {
+                    continue;
+                }
+                let _ = entry
+                    .write_tx
+                    .send(out_frame(build_frame("self", 0, payload)))
+                    .await;
             }
-            let _ = entry
-                .write_tx
-                .send(out_frame(build_frame("self", 0, payload)))
-                .await;
+
+            supervisor.graceful_shutdown(default_grace_seconds).await;
         }
 
-        supervisor.graceful_shutdown(default_grace_seconds).await;
+        // (3) drain the API/WS server: stop accepting new connections, give
+        // in-flight requests/WS sessions `default_grace_seconds` to finish
+        // (same budget plugins get — no principled reason for a different
+        // default), then bound the wait so a stuck connection can't hang
+        // shutdown forever.
+        let drain = Duration::from_secs(default_grace_seconds as u64);
+        handles.api_shutdown_handle.graceful_shutdown(Some(drain));
+        let bound = drain + Duration::from_secs(5); // K-01-style fixed margin over the drain budget
+        if tokio::time::timeout(bound, handles.api_task).await.is_err() {
+            warn!("API server did not stop within {bound:?} of graceful_shutdown; abandoning wait");
+        }
+
+        // (4) remaining loops (router, disconnect handlers, retry worker,
+        // watchdog, monitor, bridge) have no cooperative shutdown signal and
+        // hold no state that needs flushing — plugins are gone and the UDS/API
+        // listeners are closed, so they're idle by now. Abort rather than
+        // leaving them to die with the process.
+        for h in handles.background {
+            h.abort();
+        }
+
+        // EventStore: every write (persist/mark_delivered/prune/...) is its
+        // own auto-committed rusqlite statement — no batched transaction is
+        // ever left open — so dropping the connection (via the Arc going out
+        // of scope) is already a clean close. No explicit flush needed.
     }
 }
 

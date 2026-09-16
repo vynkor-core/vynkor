@@ -232,7 +232,13 @@ impl ApiServer {
         }
     }
 
-    pub async fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
+    /// `shutdown_handle` lets the orchestrator stop accepting new
+    /// connections and drain in-flight ones (K-04) instead of the server
+    /// dying with the process on kernel exit.
+    pub async fn run(
+        &self,
+        shutdown_handle: axum_server::Handle<SocketAddr>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let built = create_router_full(RouterConfig {
             manager: Arc::clone(&self.manager),
             jwt_validator: self.jwt_validator.clone(),
@@ -258,11 +264,13 @@ impl ApiServer {
             let tls_config =
                 axum_server::tls_rustls::RustlsConfig::from_pem_file(cert, key).await?;
             axum_server::bind_rustls(addr, tls_config)
+                .handle(shutdown_handle)
                 .serve(app.into_make_service())
                 .await?;
         } else {
             info!("HTTP API: http://{}", addr);
             axum_server::bind(addr)
+                .handle(shutdown_handle)
                 .serve(app.into_make_service())
                 .await?;
         }

@@ -192,3 +192,55 @@ async fn kernel_graceful_shutdown_does_not_panic() {
     assert!(result.is_ok());
     assert!(result.unwrap().is_ok());
 }
+
+/// K-04: `graceful_shutdown` must actually close the Axum listener — not just
+/// return while the socket dies later with the process — and must do so
+/// within the bounded drain window (`default_grace_seconds` + fixed margin),
+/// not hang indefinitely.
+#[tokio::test]
+async fn kernel_shutdown_closes_api_listener_within_bound() {
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let cfg = test_config("/tmp/vynkor_kernel_api_shutdown.sock", 19103);
+    let port = cfg.port;
+    let default_grace_seconds = cfg.default_grace_seconds;
+
+    let handle = tokio::spawn(async move {
+        Kernel::run_with_shutdown(cfg, async {
+            let _ = shutdown_rx.await;
+        })
+        .await
+    });
+
+    tokio::time::sleep(Duration::from_millis(30)).await;
+
+    // API server is up: a plain TCP connect to the HTTP port must succeed.
+    tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .expect("API port must accept connections before shutdown");
+
+    let _ = shutdown_tx.send(());
+
+    // bounded: same budget graceful_shutdown itself uses (drain +
+    // fixed margin), plus a little slack for the test harness/task
+    // scheduling — a hang here means shutdown isn't actually bounded.
+    let bound = Duration::from_secs(default_grace_seconds as u64 + 5 + 2);
+    let result = timeout(bound, handle)
+        .await
+        .expect("kernel shutdown did not complete within the bounded timeout");
+    assert!(result.is_ok());
+    assert!(result.unwrap().is_ok());
+
+    // Now that the kernel task has returned, the listener must be gone —
+    // not just "the future resolved while the socket lingers." A connect
+    // attempt must be refused, not hang or succeed.
+    let reconnect = timeout(
+        Duration::from_secs(2),
+        tokio::net::TcpStream::connect(("127.0.0.1", port)),
+    )
+    .await
+    .expect("post-shutdown connect attempt must not hang");
+    assert!(
+        reconnect.is_err(),
+        "API port must stop accepting connections after graceful_shutdown completes"
+    );
+}
