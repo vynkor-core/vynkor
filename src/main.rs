@@ -322,7 +322,13 @@ fn stop_kernel(pid_file: &std::path::Path) -> Result<()> {
     use nix::sys::signal::{kill, Signal};
     use nix::unistd::Pid;
     kill(Pid::from_raw(pid), Signal::SIGTERM)?;
-    for _ in 0..10 {
+    // Must comfortably exceed the kernel's own plugin-shutdown budget
+    // (`default_grace_seconds`, 5s by default — see utils/config.rs) plus
+    // wake-up/cleanup overhead. At 10*500ms == 5s this raced the kernel's
+    // own SIGTERM->SIGKILL deadline for the slowest plugin, so the CLI
+    // routinely force-killed the kernel mid-shutdown instead of waiting for
+    // its graceful path to finish.
+    for _ in 0..20 {
         if !is_running(pid_file)? {
             break;
         }
