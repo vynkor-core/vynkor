@@ -1509,6 +1509,79 @@ UX-1), **PERF-3** (P2) — plus the wire-crate remainder of **PERF-4**
 (2026-08-14), S3 (PR #20), S2 (PR #35), PERF-1 (PR #68), PERF-2 (PR #70),
 UX-2/UX-4 (2026-08-24), UX-3 (PR #68); PERF-4 partial (PR #68).
 
+## Phase 13 — Kernel audit fixes (2026-09-16)
+
+4-way parallel audit of `src/ipc`, `src/plugins`, `src/auth`, `src/kernel`/`src/api`/`src/bridge`/`src/events`/`src/cli`. IPC transport, plugin sandboxing, and auth crypto came back clean (no high/med findings) — prior audit rounds already hardened them. Real findings concentrated in CLI/orchestrator shutdown sequencing and one fail-open permission fallthrough. Full findings not re-duplicated here; see conversation history for the complete per-layer breakdown (IPC/sandbox/auth layers: no action needed).
+
+- [x] **K-01 — CLI stop_kernel wait hardcoded, ignores configured `default_grace_seconds`.**
+  `src/main.rs::stop_kernel` waits a hardcoded 20×500ms=10s for the kernel to
+  exit before SIGKILL. The kernel's own shutdown budget is
+  `default_grace_seconds` from `config.yaml` (default 5s, but operator-set).
+  Any deployment configuring `default_grace_seconds` above ~4.5s still risks
+  the CLI SIGKILLing the kernel mid-graceful-shutdown — the comment at the
+  call site admits it "assumes default," not the actual configured value.
+  - Files: `src/main.rs`.
+  - Fix: `stop_kernel` reads `default_grace_seconds` from the same
+    `config.yaml` the daemon uses and waits `grace + margin` (not a magic
+    constant).
+  - Acceptance: setting `default_grace_seconds: 15` in config and stopping a
+    kernel with a slow-shutdown plugin no longer force-kills before the
+    plugin's grace window elapses; existing shutdown-timing tests still pass.
+  - **Status (2026-09-16): SHIPPED.** `stop_kernel` now takes the wait
+    duration as a parameter; both call sites (`Stop`, `Restart`) pass
+    `cfg.default_grace_seconds` from the same `load_config` result the daemon
+    itself used, plus a fixed 2s margin for signal/cleanup overhead, instead
+    of the old hardcoded 20×500ms=10s loop. Regression test in `src/main.rs`
+    (`stop_kernel_honors_configured_grace_past_old_hardcoded_cap`) spawns a
+    real child that traps SIGTERM and sleeps 12s before exiting, configures
+    grace=15s, and asserts the child exits gracefully (not SIGKILLed) past
+    the old 10s cap.
+
+- [x] **K-02 — Plugin restart backoff has no jitter (thundering herd risk).**
+  `src/plugins/supervisor/mod.rs` backoff is pure exponential
+  (`base * 2^n`, capped) with no randomization. If N plugins crash together
+  (shared dependency breaks, kernel restart under load), all N restart in
+  lockstep at identical wall-clock offsets.
+  - Files: `src/plugins/supervisor/mod.rs`.
+  - Fix: add ±20% jitter to `backoff_delay`.
+  - Acceptance: unit test asserting computed backoff varies across repeated
+    calls at the same attempt count, within the documented jitter band; cap
+    behavior unchanged.
+  - **Status (2026-09-16): SHIPPED.**
+
+- [x] **K-03 — `check_ipc_target` silently fails open on unregistered target.**
+  `src/auth/permissions.rs:99` — the same-user isolation check only runs
+  `if let Some(target) = registry.get(target_id)`; an unregistered target
+  falls straight through to the `ipc_targets` allowlist check instead of
+  being explicitly denied. Not currently exploitable (unregistered targets
+  fail downstream anyway), but it's a fail-open pattern sitting next to a
+  security-critical same-user gate.
+  - Files: `src/auth/permissions.rs`.
+  - Fix: make the `None` branch an explicit deny/error, not implicit
+    fallthrough.
+  - Acceptance: unit test — IPC check against an unregistered target_id is
+    denied even if it would otherwise match an `ipc_targets` allowlist entry.
+  - **Status (2026-09-16): SHIPPED.**
+
+- [ ] **K-04 (deferred) — Orchestrator shutdown doesn't close API/WS/UDS listeners or flush EventStore.**
+  `graceful_shutdown` only stops plugins; Axum server, UDS listener, and
+  retry-worker tasks die via process-exit rather than clean close.
+  - Files: `src/kernel/orchestrator/mod.rs`.
+  - Not scheduled — lower priority than K-01..K-03, needs a tracked
+    `JoinHandle` set design, not a quick patch.
+
+- [ ] **K-05 (deferred) — CLI device/pairing scope creep.**
+  `src/cli/device.rs` (702 lines) bundles QR-code generation (ISO 18004
+  capacity table, SVG rendering — pure onboarding UX) and device
+  fleet pairing/list/revoke into the kernel CLI binary. This is the
+  CLI-side twin of the DC-2 finding in `docs/DUMB_CORE_AUDIT.md`
+  (device-fleet domain model in kernel core).
+  - Recommendation: extract QR rendering (and possibly pairing UX broadly)
+    to a companion `vyn-pair` CLI or plugin; kernel CLI prints the pairing
+    URL/token only.
+  - Needs a boundary decision (see DC-2), not a quick patch — raise before
+    scheduling.
+
 ## Definition of Done
 
 - `cargo test --all --all-features` exits 0; new behavior has regression tests.

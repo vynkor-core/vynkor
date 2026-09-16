@@ -17,6 +17,14 @@ A high-performance plugin kernel written in Rust with C++ interop and multi-SDK 
 
 ## WHAT
 
+### Design Law: Dumb Core
+
+Kernel does exactly 4 things: **transport** (frame bytes over UDS, zero-parse,
+MAC-auth), **lifecycle** (spawn/supervise/sandbox/kill plugins), **security**
+(JWT, per-frame HMAC, default-deny perms), **plumbing** (API gateway, event
+bus, metrics, TLS, CLI). No business logic, no AI models, no app-state DBs —
+that lives in plugins. Active drift-fix tracking: `docs/DUMB_CORE_AUDIT.md`.
+
 ### Core Architecture
 
 ```
@@ -42,6 +50,7 @@ A high-performance plugin kernel written in Rust with C++ interop and multi-SDK 
 - `src/auth/` — JWT, permissions system
 - `src/ipc/` — Framing, connection handler, router, UDS server
 - `src/plugins/` — Plugin loader, manager, supervisor
+- `src/bridge/` — device/transport bridge, pure transport (no capability interpretation, per F3)
 - `src/events/` — Event bus
 - `src/cli/` — CLI interface
 - `src/utils/` — Logging, errors, config parsing
@@ -81,9 +90,9 @@ A high-performance plugin kernel written in Rust with C++ interop and multi-SDK 
 ### Critical Files (Edit Carefully)
 
 - **`../vynkor-wire/proto/vynkor_protocol.proto`** ← Changes affect ALL plugins and SDKs
-- **`src/kernel/orchestrator.rs`** ← Component wiring & shutdown sequencing
-- **`src/plugins/supervisor.rs`** ← Process supervision & resource limits
-- **`src/ipc/protocol.rs`** ← Message routing
+- **`src/kernel/orchestrator/`** (mod.rs + shutdown.rs) ← Component wiring & shutdown sequencing
+- **`src/plugins/supervisor/`** (mod.rs, spawn.rs, watchdog.rs) ← Process supervision & resource limits
+- **`src/ipc/protocol/`** ← Message routing
 - **`Cargo.toml`** ← Dependencies & test targets
 
 ## HOW
@@ -107,7 +116,7 @@ cargo fmt --check
 1. **Define contract first:** Edit `../vynkor-wire/proto/vynkor_protocol.proto`
 2. **Run build:** `cargo build` (wire crate regenerates bindings)
 3. **Implement logic:** Add handler in appropriate `src/` module
-4. **Update SDKs:** If message interface changed, bump the `vynkor-wire` crate version and update sibling SDK repos; mirror the proto to `../vynkor-sdk-cpp/proto/` and `../vynkor-sdk-python/proto/` (CI's T-17 drift check enforces byte-identical copies)
+4. **Update SDKs:** If message interface changed, bump the `vynkor-wire` crate version, run `../vynkor-wire/scripts/sync-proto.sh` to mirror the proto to SDK repos, and bump those repos' pinned wire version (CI's T-17 drift check enforces byte-identical copies)
 5. **Test:** `cargo test --all-features`
 
 ### Bug Fix Workflow
