@@ -110,6 +110,9 @@ fn ipc_target_denied_when_allowlist_empty() {
 fn ipc_target_allowed_when_in_allowlist() {
     let reg = Arc::new(PluginRegistry::new());
     registry_with_ipc("sender", 1, vec!["allowed_plugin"], &reg);
+    // K-03: target must be registered too — an unregistered target_id is an
+    // explicit deny regardless of the sender's allowlist.
+    registry_with_ipc("allowed_plugin", 2, vec![], &reg);
     assert!(check_ipc_target(&reg, "sender", "allowed_plugin").is_ok());
 }
 
@@ -124,6 +127,20 @@ fn ipc_target_denied_when_not_in_allowlist() {
 fn ipc_target_denied_for_unknown_sender() {
     let reg = Arc::new(PluginRegistry::new());
     assert!(check_ipc_target(&reg, "ghost", "anyone").is_err());
+}
+
+// K-03: unregistered target is an explicit deny, not a fallthrough to the
+// ipc_targets allowlist. Sender allowlists the target_id explicitly, so if
+// the None branch still fell through, this would incorrectly pass.
+#[test]
+fn ipc_target_denied_when_unregistered_even_if_allowlisted() {
+    let reg = Arc::new(PluginRegistry::new());
+    registry_with_ipc("sender", 1, vec!["ghost_target"], &reg);
+    let err = check_ipc_target(&reg, "sender", "ghost_target").unwrap_err();
+    assert!(
+        !err.to_string().contains("does not include"),
+        "must be denied by the unregistered-target gate, not the allowlist check: {err}"
+    );
 }
 
 // ── D-03: same-user only IPC ────────────────────────────────────────────────

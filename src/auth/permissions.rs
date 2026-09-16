@@ -96,13 +96,20 @@ pub fn check_ipc_target(
 
     // D-03: same-user only IPC (one comparison). Host plugins all share the
     // "default" user, so single-user deployments are unaffected.
-    if let Some(target) = registry.get(target_id) {
-        if target.user_id != entry.user_id {
-            return Err(VynkorError::PermissionDenied(format!(
-                "cross-user IPC denied: {sender_id} (user {}) -> {target_id} (user {})",
-                entry.user_id, target.user_id
-            )));
-        }
+    //
+    // K-03: unregistered target is an explicit deny, not a fallthrough to the
+    // allowlist check below — the same-user gate must never be silently
+    // skipped, even though unregistered targets currently also fail
+    // downstream in the router.
+    let target = registry
+        .get(target_id)
+        .ok_or_else(|| VynkorError::PermissionDenied(format!("unknown ipc target {target_id}")))?;
+
+    if target.user_id != entry.user_id {
+        return Err(VynkorError::PermissionDenied(format!(
+            "cross-user IPC denied: {sender_id} (user {}) -> {target_id} (user {})",
+            entry.user_id, target.user_id
+        )));
     }
 
     if entry.manifest.ipc_targets.iter().any(|t| t == target_id) {
