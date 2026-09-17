@@ -1640,6 +1640,24 @@ UX-2/UX-4 (2026-08-24), UX-3 (PR #68); PERF-4 partial (PR #68).
     environment-caused `test_sdk_cpp::*` failures, unrelated to this
     change).
 
+## Phase 14 — Kernel audit follow-ups (2026-09-17)
+
+- [ ] **K-06 — Decouple API drain window from `default_grace_seconds`.**
+  K-04 shipped the ordered shutdown reusing `default_grace_seconds` as the
+  Axum `Handle::graceful_shutdown` drain bound (same budget as plugin
+  teardown). Untested assumption: HTTP/WS drain and plugin-kill grace may
+  need different tuning in practice (e.g. long-lived WS sessions want a
+  longer drain than a hung plugin should get before SIGKILL).
+  - Files: `src/kernel/orchestrator/{mod,shutdown}.rs`, `config.yaml`,
+    `src/utils/config.rs`.
+  - Fix: add optional `api_grace_seconds` config key, default to
+    `default_grace_seconds` when unset (no behavior change out of the box).
+  - Acceptance: unit test — setting `api_grace_seconds` distinct from
+    `default_grace_seconds` changes only the API drain timeout, not the
+    plugin grace window.
+  - Not scheduled — raise before picking up, low urgency until a real
+    workload needs the split.
+
 ## Definition of Done
 
 - `cargo test --all --all-features` exits 0; new behavior has regression tests.
