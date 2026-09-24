@@ -2507,3 +2507,43 @@ async fn in_flight_action_fails_fast_when_provider_disconnects() {
         "failed slot must be evicted, not left for the timeout sweep"
     );
 }
+
+// ── CD-05: caller identity reaching a device provider ───────────────────────
+
+#[tokio::test]
+async fn forged_caller_plugin_id_is_overwritten_for_device_targets() {
+    let reg = Arc::new(PluginRegistry::new());
+    let mut dev_rx = register_phone(&reg, 10);
+    let (caller_tx, _caller_rx) = make_write_pair();
+    reg.register(
+        "caller".to_string(),
+        1,
+        dummy_manifest(),
+        caller_tx.clone(),
+        "",
+        "",
+    )
+    .unwrap();
+    let router_tx = spawn_router(Arc::clone(&reg), Arc::new(EventBus::new()));
+
+    let mut env = action_request_env("a1", "dev-phone.geo");
+    if let Some(envelope::Payload::ActionRequest(req)) = env.payload.as_mut() {
+        // a device-side audit/consent check keys on this — must be unforgeable
+        req.caller_plugin_id = "dev-phone".to_string();
+    }
+    router_tx
+        .send(incoming(1, kernel_frame(env), caller_tx))
+        .await
+        .unwrap();
+
+    match decode_envelope(&recv_frame(&mut dev_rx).await).payload {
+        Some(envelope::Payload::ActionRequest(req)) => {
+            assert_eq!(req.action, "dev-phone.geo");
+            assert_eq!(
+                req.caller_plugin_id, "caller",
+                "kernel must stamp the authenticated sender, not the forged value"
+            );
+        }
+        other => panic!("expected forwarded ActionRequest, got {other:?}"),
+    }
+}
