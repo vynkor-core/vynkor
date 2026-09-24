@@ -1603,6 +1603,95 @@ async fn router_rejects_protocol_major_mismatch() {
     );
 }
 
+// ── CD-06: supported protocol range [MIN_SUPPORTED, PROTOCOL_VERSION] ───────
+
+/// registers `version` on a fresh router; Ok(()) on accept, Err(message) on
+/// an ERR_PROTOCOL_MISMATCH reject
+async fn register_with_protocol(version: &str) -> Result<(), String> {
+    let reg = Arc::new(PluginRegistry::new());
+    let router_tx = spawn_router(Arc::clone(&reg), Arc::new(EventBus::new()));
+    let (write_tx, mut write_rx) = make_write_pair();
+    let env = Envelope {
+        payload: Some(envelope::Payload::PluginRegister(PluginRegister {
+            plugin_id: "weather".to_string(),
+            version: "1.0.0".to_string(),
+            manifest: Some(dummy_manifest()),
+            protocol_version: version.to_string(),
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+    router_tx
+        .send(incoming(1, kernel_frame(env), write_tx))
+        .await
+        .unwrap();
+    match decode_envelope(&recv_frame(&mut write_rx).await).payload {
+        Some(envelope::Payload::PluginRegisterAck(ack)) if ack.accepted => {
+            assert!(reg.is_registered(1));
+            Ok(())
+        }
+        Some(envelope::Payload::Error(err)) => {
+            assert_eq!(
+                err.code,
+                vynkor::proto::vynkor::ErrorCode::ErrProtocolMismatch as i32,
+                "version reject must use ERR_PROTOCOL_MISMATCH"
+            );
+            assert!(!reg.is_registered(1), "rejected register must not persist");
+            Err(err.message)
+        }
+        other => panic!("unexpected reply for {version:?}: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_version_negotiation_min_max() {
+    assert_eq!(vynkor::ipc::protocol::MIN_SUPPORTED_PROTOCOL_VERSION, "1.5");
+    let range = format!(
+        "kernel supports {}–{}",
+        vynkor::ipc::protocol::MIN_SUPPORTED_PROTOCOL_VERSION,
+        vynkor_wire::PROTOCOL_VERSION
+    );
+
+    // below the floor
+    let msg = register_with_protocol("1.4").await.unwrap_err();
+    assert_eq!(msg, format!("protocol 1.4 unsupported; {range}"));
+    assert!(register_with_protocol("0.9").await.is_err());
+
+    // inside the range, with and without a patch component
+    for v in ["1.5", "1.6", "1.7", "1.5.2", "1.7.0"] {
+        assert_eq!(
+            register_with_protocol(v).await,
+            Ok(()),
+            "{v} must be accepted"
+        );
+    }
+
+    // next major is a breaking change
+    let msg = register_with_protocol("2.0").await.unwrap_err();
+    assert_eq!(msg, format!("protocol 2.0 unsupported; {range}"));
+
+    // newer minor of the same major: additive, accepted
+    assert_eq!(register_with_protocol("1.8").await, Ok(()));
+    // numeric compare: 1.10 is newer than 1.9, not "1.1" (which would be
+    // below the floor)
+    assert_eq!(register_with_protocol("1.10").await, Ok(()));
+    assert!(register_with_protocol("1.1").await.is_err());
+
+    // malformed
+    for v in [
+        "abc", "1", "1.", ".7", "1.x", "1.7.x", "1.7.0.1", "-1.7", " 1.7",
+    ] {
+        let msg = register_with_protocol(v).await.unwrap_err();
+        assert!(
+            msg.contains("malformed") && msg.contains(&range),
+            "{v:?} must be rejected as malformed, got: {msg}"
+        );
+    }
+
+    // empty = pre-field SDK (v1.5 host plugins): still accepted (D-03)
+    assert_eq!(register_with_protocol("").await, Ok(()));
+}
+
 #[tokio::test]
 async fn router_stores_device_metadata_from_wire() {
     let reg = Arc::new(PluginRegistry::new());

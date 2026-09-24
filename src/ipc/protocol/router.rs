@@ -28,9 +28,9 @@ use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
 use super::helpers::{
-    abort_stream, action_status_message, envelope_message_id, is_throttle_exempt,
-    notify_forced_termination, send_envelope, send_error, send_register_reject, try_send_envelope,
-    ACTION_CORRELATION_SEQ, EVENT_PUBLISH_SEQ,
+    abort_stream, action_status_message, check_protocol_version, envelope_message_id,
+    is_throttle_exempt, notify_forced_termination, send_envelope, send_error, send_register_reject,
+    try_send_envelope, ProtocolCheck, ACTION_CORRELATION_SEQ, EVENT_PUBLISH_SEQ,
 };
 use crate::ipc::connection::out_frame;
 use crate::ipc::framing::target_as_str;
@@ -355,25 +355,28 @@ impl MessageRouter {
                 let plugin_id = reg.plugin_id.clone();
                 let mut manifest = reg.manifest.unwrap_or_default();
 
-                // D-03: reject on protocol_version *major* mismatch (minor/
-                // patch accepted). Empty protocol_version = a v1.5 host
-                // plugin (or a stale SDK) — accept, it predates the field
-                let wire_major = vynkor_wire::PROTOCOL_VERSION
-                    .split('.')
-                    .next()
-                    .unwrap_or("");
-                let plugin_major = reg.protocol_version.split('.').next().unwrap_or(wire_major);
-                if !reg.protocol_version.is_empty() && plugin_major != wire_major {
-                    send_error(
-                        &msg.write_tx,
-                        ErrorCode::ErrProtocolMismatch,
-                        &format!(
-                            "protocol version {} incompatible with kernel {}",
-                            reg.protocol_version,
-                            vynkor_wire::PROTOCOL_VERSION
+                // CD-06: accept [MIN_SUPPORTED_PROTOCOL_VERSION,
+                // PROTOCOL_VERSION]. Empty = a v1.5 host plugin (or stale
+                // SDK) that predates the field — still accepted (D-03), it
+                // can only be >= 1.5 since the field shipped after it.
+                // A newer minor of our major is accepted too: minors are
+                // additive by the proto `reserved` rule and prost skips
+                // unknown fields, so an older kernel just ignores what it
+                // doesn't know. A major bump is a declared break → reject
+                if !reg.protocol_version.is_empty() {
+                    match check_protocol_version(&reg.protocol_version) {
+                        ProtocolCheck::Supported => {}
+                        ProtocolCheck::NewerMinor => warn!(
+                            plugin_id = %plugin_id,
+                            plugin_protocol = %reg.protocol_version,
+                            kernel_protocol = %vynkor_wire::PROTOCOL_VERSION,
+                            "plugin speaks a newer protocol minor than the kernel; accepting"
                         ),
-                    );
-                    return true;
+                        ProtocolCheck::Rejected(reason) => {
+                            send_error(&msg.write_tx, ErrorCode::ErrProtocolMismatch, &reason);
+                            return true;
+                        }
+                    }
                 }
 
                 // JWT validation (only when kernel has jwt_secret configured)

@@ -165,6 +165,65 @@ pub(crate) fn action_status_message(status: ActionStatus) -> &'static str {
     }
 }
 
+/// CD-06: outcome of checking a plugin's declared `protocol_version`.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ProtocolCheck {
+    Supported,
+    /// same major, minor newer than this kernel knows — accepted (see router)
+    NewerMinor,
+    /// wire-visible reject reason, names the supported range
+    Rejected(String),
+}
+
+/// `major.minor[.patch]`, plain decimal components only (no sign, no
+/// whitespace — `u32::from_str` alone would take "+7"). Patch is validated
+/// but ignored: patch bumps never change the wire.
+pub(crate) fn parse_protocol_version(v: &str) -> Option<(u32, u32)> {
+    fn component(s: &str) -> Option<u32> {
+        if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        s.parse().ok()
+    }
+    let mut parts = v.split('.');
+    let major = component(parts.next()?)?;
+    let minor = component(parts.next()?)?;
+    if let Some(patch) = parts.next() {
+        component(patch)?;
+    }
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((major, minor))
+}
+
+/// CD-06: supported = [MIN_SUPPORTED_PROTOCOL_VERSION, PROTOCOL_VERSION],
+/// compared numerically (1.10 > 1.9). Caller handles the empty/legacy case.
+pub(crate) fn check_protocol_version(v: &str) -> ProtocolCheck {
+    let min_s = super::MIN_SUPPORTED_PROTOCOL_VERSION;
+    let max_s = vynkor_wire::PROTOCOL_VERSION;
+    // both are compile-time constants, pinned by a unit test below
+    let (Some(min), Some(max)) = (parse_protocol_version(min_s), parse_protocol_version(max_s))
+    else {
+        return ProtocolCheck::Rejected(format!("kernel protocol range {min_s}–{max_s} invalid"));
+    };
+    let Some(got) = parse_protocol_version(v) else {
+        return ProtocolCheck::Rejected(format!(
+            "malformed protocol_version {v:?}; kernel supports {min_s}–{max_s}"
+        ));
+    };
+    if got < min || got.0 != max.0 {
+        return ProtocolCheck::Rejected(format!(
+            "protocol {v} unsupported; kernel supports {min_s}–{max_s}"
+        ));
+    }
+    if got > max {
+        ProtocolCheck::NewerMinor
+    } else {
+        ProtocolCheck::Supported
+    }
+}
+
 pub(crate) fn send_register_reject(tx: &mpsc::Sender<Outbound>, reason: &str) {
     let ack = crate::proto::vynkor::PluginRegisterAck {
         accepted: false,
@@ -261,6 +320,16 @@ pub(crate) async fn notify_forced_termination(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kernel_protocol_range_constants_parse() {
+        let min = parse_protocol_version(crate::ipc::protocol::MIN_SUPPORTED_PROTOCOL_VERSION);
+        let max = parse_protocol_version(vynkor_wire::PROTOCOL_VERSION);
+        assert!(min.is_some() && max.is_some());
+        assert!(min <= max, "min supported must not exceed wire version");
+        assert_eq!(parse_protocol_version("1.10.3"), Some((1, 10)));
+        assert_eq!(parse_protocol_version("1.+7"), None);
+    }
 
     #[test]
     fn reset_for_test_zeroes_all_sequence_atomics() {
