@@ -199,20 +199,9 @@ pub struct Config {
     /// frame-MAC" gap). Registering arms the session MAC key.
     #[serde(default = "default_ws_register_timeout_secs")]
     pub ws_register_timeout_secs: u64,
-    /// Override the plugin registry URL. Default: official vynkor-core/vynkor-plugins registry.
-    /// Set to a private registry URL for air-gapped or enterprise deployments.
-    #[serde(default)]
-    pub registry_url: Option<String>,
-    /// Ed25519 public key (hex, 32 bytes) used to verify `registry.json`
-    /// entry signatures (T-11). Defaults to the built-in pinned maintainer
-    /// key; set only when pairing with a private `registry_url` signed by a
-    /// different key.
-    #[serde(default)]
-    pub marketplace_public_key: Option<String>,
-    /// How long the registry cache (`~/.cache/vyn/registry.json`) is considered
-    /// fresh before `plugin list --refresh` re-fetches it. Default: 3600 (1h).
-    #[serde(default = "default_registry_cache_ttl_secs")]
-    pub registry_cache_ttl_secs: u64,
+    // registry_url / marketplace_public_key / registry_cache_ttl_secs moved
+    // to vynm with the marketplace (V-07); vynm reads them from this same
+    // file. no deny_unknown_fields here, so old configs keep loading.
     /// Base directory for scratch/cache files (marketplace registry cache, plugin
     /// install staging). Defaults to a per-user private dir — never the shared
     /// `/tmp` (AUDIT M-09) — via `XDG_RUNTIME_DIR`/`/run/user/<uid>`/`~/.local/state/vyn/run`.
@@ -326,9 +315,6 @@ fn default_max_connections() -> usize {
 fn default_prune_interval_secs() -> u64 {
     60
 }
-fn default_registry_cache_ttl_secs() -> u64 {
-    3600
-}
 /// Per-user private scratch dir — mirrors `default_pid_path`/`default_log_path`'s
 /// refusal to fall back into the shared, world-writable `/tmp` (AUDIT M-09).
 fn default_tmp_dir() -> PathBuf {
@@ -422,9 +408,6 @@ impl Default for Config {
             jwt_audience: None,
             bind: None,
             ws_register_timeout_secs: default_ws_register_timeout_secs(),
-            registry_url: None,
-            marketplace_public_key: None,
-            registry_cache_ttl_secs: default_registry_cache_ttl_secs(),
             tmp_dir: default_tmp_dir(),
             action_timeout_ms: default_action_timeout_ms(),
             restart_backoff_base_ms: default_restart_backoff_base_ms(),
@@ -691,6 +674,20 @@ mod tests {
         assert_eq!(config.max_connections, 4096);
         assert_eq!(config.watchdog_interval_secs, 60);
         assert_eq!(config.watchdog_timeout_secs, 15);
+    }
+
+    // marketplace keys are vynm's now but share this file — kernel must
+    // keep loading configs that still set them
+    #[test]
+    fn load_config_ignores_vynm_registry_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_minimal_config(
+            &dir,
+            "registry_url: https://registry.example.internal/registry.json\n\
+             marketplace_public_key: 00\n\
+             registry_cache_ttl_secs: 3600\n",
+        );
+        assert!(load_config(&path).is_ok());
     }
 
     fn write_dropin(dir: &std::path::Path, filename: &str, id: &str) {
