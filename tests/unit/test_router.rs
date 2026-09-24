@@ -2353,3 +2353,157 @@ async fn register_mux_via_router_single_ws_creates_one_entry() {
     let dev = reg.get_device("dev-mux").unwrap();
     assert_eq!(dev.capabilities, caps);
 }
+
+// ── CD-07: offline device fate ───────────────────────────────────────────────
+
+fn register_phone(reg: &PluginRegistry, conn_id: u64) -> mpsc::Receiver<Outbound> {
+    use vynkor::plugins::registry::DeviceMeta;
+    let caps = vec!["geo".to_string()];
+    let (dev_tx, dev_rx) = make_write_pair();
+    reg.register_device(
+        "dev-phone".to_string(),
+        conn_id,
+        caps.clone(),
+        dummy_manifest(),
+        dev_tx,
+        DeviceMeta {
+            device_id: "dev-phone".to_string(),
+            capabilities: caps,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    dev_rx
+}
+
+fn action_request_env(action_id: &str, action: &str) -> Envelope {
+    Envelope {
+        payload: Some(envelope::Payload::ActionRequest(ActionRequest {
+            action_id: action_id.to_string(),
+            action: action.to_string(),
+            params_json: b"{}".to_vec(),
+            timeout_ms: 0,
+            streaming: false,
+            caller_plugin_id: String::new(),
+        })),
+        ..Default::default()
+    }
+}
+
+// alias keeps the T-16 literal scanner (test_proto) from reading the return
+// type as a status-less `ActionResponse {` literal
+type ActionResp = vynkor::proto::vynkor::ActionResponse;
+
+async fn recv_action_response(rx: &mut mpsc::Receiver<Outbound>) -> ActionResp {
+    match decode_envelope(&recv_frame(rx).await).payload {
+        Some(envelope::Payload::ActionResponse(resp)) => resp,
+        other => panic!("expected ActionResponse, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_offline_device_fails_fast() {
+    use vynkor::proto::vynkor::{ActionStatus, DeviceState};
+    let reg = Arc::new(PluginRegistry::new());
+    let _dev_rx = register_phone(&reg, 10);
+    let (caller_tx, mut caller_rx) = make_write_pair();
+    reg.register(
+        "caller".to_string(),
+        1,
+        dummy_manifest(),
+        caller_tx.clone(),
+        "",
+        "",
+    )
+    .unwrap();
+
+    // device drops: registry keeps the device record, flips it offline
+    reg.unregister("dev-phone");
+    assert_eq!(
+        reg.get_device("dev-phone").unwrap().state,
+        DeviceState::Offline as i32
+    );
+
+    let router_tx = spawn_router(Arc::clone(&reg), Arc::new(EventBus::new()));
+    let start = std::time::Instant::now();
+    router_tx
+        .send(incoming(
+            1,
+            kernel_frame(action_request_env("a1", "dev-phone.geo")),
+            caller_tx.clone(),
+        ))
+        .await
+        .unwrap();
+    let resp = recv_action_response(&mut caller_rx).await;
+    assert!(
+        start.elapsed() < Duration::from_millis(100),
+        "offline device must fail fast, not wait for the action timeout"
+    );
+    assert_eq!(resp.action_id, "a1");
+    // same status as before (no wire change), honest reason
+    assert_eq!(resp.status, ActionStatus::ActionNotFound as i32);
+    assert_eq!(resp.error, "device dev-phone offline");
+
+    // a never-seen device prefix keeps the generic reason
+    router_tx
+        .send(incoming(
+            1,
+            kernel_frame(action_request_env("a2", "dev-ghost.geo")),
+            caller_tx,
+        ))
+        .await
+        .unwrap();
+    let resp = recv_action_response(&mut caller_rx).await;
+    assert_eq!(resp.status, ActionStatus::ActionNotFound as i32);
+    assert_eq!(resp.error, "action not found");
+}
+
+#[tokio::test]
+async fn in_flight_action_fails_fast_when_provider_disconnects() {
+    use vynkor::proto::vynkor::ActionStatus;
+    let reg = Arc::new(PluginRegistry::new());
+    let mut dev_rx = register_phone(&reg, 10);
+    let (caller_tx, mut caller_rx) = make_write_pair();
+    reg.register(
+        "caller".to_string(),
+        1,
+        dummy_manifest(),
+        caller_tx.clone(),
+        "",
+        "",
+    )
+    .unwrap();
+    let router_tx = spawn_router(Arc::clone(&reg), Arc::new(EventBus::new()));
+
+    router_tx
+        .send(incoming(
+            1,
+            kernel_frame(action_request_env("a1", "dev-phone.geo")),
+            caller_tx,
+        ))
+        .await
+        .unwrap();
+    let internal_id = match decode_envelope(&recv_frame(&mut dev_rx).await).payload {
+        Some(envelope::Payload::ActionRequest(req)) => req.action_id,
+        other => panic!("expected forwarded ActionRequest, got {other:?}"),
+    };
+    assert!(reg.get_pending_action(&internal_id).is_some());
+
+    // provider vanishes mid-action (disconnect_loop / manager.stop path)
+    let start = std::time::Instant::now();
+    reg.unregister("dev-phone");
+
+    // default action timeout is 30s; recv_frame gives up after 2s
+    let resp = recv_action_response(&mut caller_rx).await;
+    assert!(start.elapsed() < Duration::from_millis(100));
+    assert_eq!(
+        resp.action_id, "a1",
+        "requester's own id, not the internal one"
+    );
+    assert_eq!(resp.status, ActionStatus::ActionError as i32);
+    assert_eq!(resp.error, "provider dev-phone disconnected");
+    assert!(
+        reg.get_pending_action(&internal_id).is_none(),
+        "failed slot must be evicted, not left for the timeout sweep"
+    );
+}

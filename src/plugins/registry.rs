@@ -393,7 +393,29 @@ impl PluginRegistry {
                     dev.state = DeviceState::Offline as i32;
                 }
             }
+            // CD-07: every removal path (disconnect loop, manager stop,
+            // bridge, shutdown) funnels here — fail in-flight actions now
+            // rather than letting requesters sit out the action timeout.
+            // a request routed in the instant before removal still falls
+            // back to the timeout sweep
+            crate::ipc::protocol::helpers::fail_pending_for_provider(self, plugin_id);
         }
+    }
+
+    /// CD-07: evict and return every pending action routed to `provider_id`.
+    pub fn take_pending_actions_for_provider(
+        &self,
+        provider_id: &str,
+    ) -> Vec<(String, PendingAction)> {
+        let keys: Vec<String> = self
+            .pending_actions
+            .iter()
+            .filter(|e| e.provider_id == provider_id)
+            .map(|e| e.key().clone())
+            .collect();
+        keys.into_iter()
+            .filter_map(|k| self.take_pending_action(&k).map(|p| (k, p)))
+            .collect()
     }
 
     pub fn record_pong(&self, plugin_id: &str) {

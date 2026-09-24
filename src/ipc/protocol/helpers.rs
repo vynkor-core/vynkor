@@ -1,8 +1,8 @@
 use crate::plugins::registry::PendingAction;
 use crate::plugins::registry::PluginRegistry;
-use crate::proto::vynkor::ActionStatus;
 use crate::proto::vynkor::ActionStreamAbort;
 use crate::proto::vynkor::{envelope, Envelope};
+use crate::proto::vynkor::{ActionStatus, DeviceState};
 use metrics::counter;
 use prost::Message;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -221,6 +221,51 @@ pub(crate) fn check_protocol_version(v: &str) -> ProtocolCheck {
         ProtocolCheck::NewerMinor
     } else {
         ProtocolCheck::Supported
+    }
+}
+
+/// CD-07: honest reason for an ACTION_NOT_FOUND whose action carries a
+/// known device's `{device_id}.` prefix — the same naming `register_device`
+/// mints and `get_mux` already routes on. Reads only the kernel's own
+/// device lifecycle record; the capability suffix is never interpreted
+pub(crate) fn offline_device_reason(registry: &PluginRegistry, action: &str) -> Option<String> {
+    let (device_id, _) = action.split_once('.')?;
+    let state = registry.get_device(device_id)?.state;
+    match DeviceState::try_from(state) {
+        Ok(DeviceState::Offline) => Some(format!("device {device_id} offline")),
+        Ok(DeviceState::Revoked) => Some(format!("device {device_id} revoked")),
+        _ => None,
+    }
+}
+
+/// CD-07: fail every action still waiting on `provider_id` now that it's
+/// gone, instead of leaving requesters to the timeout sweep. Unaccepted
+/// requests get their one expected `ActionResponse`; accepted streaming
+/// sessions already had theirs, so they only get `ActionStreamAbort`
+/// (same split as `notify_forced_termination`). Non-blocking sends
+pub(crate) fn fail_pending_for_provider(registry: &PluginRegistry, provider_id: &str) {
+    let reason = format!("provider {provider_id} disconnected");
+    for (internal_id, pending) in registry.take_pending_actions_for_provider(provider_id) {
+        debug!(action_id = %internal_id, provider_id, "failing in-flight action: provider gone");
+        counter!("action_provider_gone_total").increment(1);
+        let payload = if pending.session_accepted {
+            envelope::Payload::ActionStreamAbort(ActionStreamAbort {
+                action_id: pending.original_action_id,
+                reason: reason.clone(),
+            })
+        } else {
+            envelope::Payload::ActionResponse(crate::proto::vynkor::ActionResponse {
+                action_id: pending.original_action_id,
+                status: ActionStatus::ActionError as i32,
+                data_json: vec![],
+                error: reason.clone(),
+            })
+        };
+        let env = Envelope {
+            payload: Some(payload),
+            ..Default::default()
+        };
+        send_envelope(&pending.requester_write_tx, env);
     }
 }
 

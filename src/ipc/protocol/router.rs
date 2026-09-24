@@ -29,8 +29,9 @@ use tracing::{debug, info, warn};
 
 use super::helpers::{
     abort_stream, action_status_message, check_protocol_version, envelope_message_id,
-    is_throttle_exempt, notify_forced_termination, send_envelope, send_error, send_register_reject,
-    try_send_envelope, ProtocolCheck, ACTION_CORRELATION_SEQ, EVENT_PUBLISH_SEQ,
+    is_throttle_exempt, notify_forced_termination, offline_device_reason, send_envelope,
+    send_error, send_register_reject, try_send_envelope, ProtocolCheck, ACTION_CORRELATION_SEQ,
+    EVENT_PUBLISH_SEQ,
 };
 use crate::ipc::connection::out_frame;
 use crate::ipc::framing::target_as_str;
@@ -801,13 +802,21 @@ impl MessageRouter {
                 };
 
                 if let Some(status) = not_found_status {
+                    // CD-07: error path only — the forwarding path above is untouched
+                    let error = match status {
+                        ActionStatus::ActionNotFound => {
+                            offline_device_reason(registry, &req.action)
+                        }
+                        _ => None,
+                    }
+                    .unwrap_or_else(|| action_status_message(status).to_string());
                     let response = Envelope {
                         message_id: envelope.message_id.clone(),
                         payload: Some(envelope::Payload::ActionResponse(ActionResponse {
                             action_id,
                             status: status as i32,
                             data_json: vec![],
-                            error: action_status_message(status).to_string(),
+                            error,
                         })),
                         ..Default::default()
                     };
