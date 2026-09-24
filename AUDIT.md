@@ -435,7 +435,8 @@ grown into the kernel (marketplace app-store client, device-fleet domain,
 AI tool-calling surface, hardcoded action→permission policy), and the events
 SQLite DB technically contradicts the manifesto's literal "no databases"
 clause (it is infrastructure, not application state — see DC-5). All five
-findings below are **OPEN** (2026-08-16); fix plan in `docs/DUMB_CORE_AUDIT.md`.
+findings below were **OPEN** on 2026-08-16; **all CLOSED as of 2026-09-24** (see
+each Status line); fix plan + residual gaps in `docs/DUMB_CORE_AUDIT.md`.
 
 ### DC-1. Marketplace / plugin app-store client embedded in the kernel (Medium)
 
@@ -460,21 +461,34 @@ findings below are **OPEN** (2026-08-16); fix plan in `docs/DUMB_CORE_AUDIT.md`.
 - **Issue:** device identity, capabilities negotiation, online/offline state machine, discovery surfaces, per-device JWT minting, QR-pairing UX and a remote-device bridge are product features embedded in the core. Defensible slice: `device_id` in the JWT `sub` is auth infrastructure. The discovery/interpretation/pairing surfaces are not.
 - **Impact:** the kernel owns a whole device-fleet product domain; changing device UX ships a kernel release.
 - **Fix:** keep device identity in the kernel (auth); move discovery surfaces (`GET /devices`, `list_devices`, `vyn devices`), pairing tooling and the bridge into plugins / companion tools.
-- **Status (2026-08-16): OPEN.**
+- **Status (2026-09-24): CLOSED** — F2 (`22d17d8`, #91) moved device
+  display/interpretation out of the registry core; F3 (`12de59f`, #92)
+  stripped `device.<cap>` interpretation from the bridge (pure transport).
+  Per the revised §7 decision, device identity, the bridge, `vyn token mint`
+  and pairing tooling stay in the kernel as transport/auth; QR rendering
+  moved to the `vyn-pair` binary (K-05). Residual: `device_os_str`/
+  `device_state_str` live in `src/api/display.rs` (still kernel crate) and
+  `src/events/bus.rs` uses `device_os_str`.
 
 ### DC-3. AI tool-calling surface baked into protocol and kernel (Low-Med)
 
 - **Files:** wire proto `ActionSpec`/`ActionRisk` — *"tool schema for the AI (D-08)"*, `:159-173`; `src/kernel/commands.rs` `get_manifest` (`:79-127`, comment: *"serve a plugin's manifest (incl. action_specs) to the AI"*); `src/events/bus.rs` `plugin_lifecycle_payload` (`:223-259` — action_specs embedded in `system.plugin_joined/left` *"so the AI can enumerate callable actions from the joined event alone"*)
 - **Issue:** the kernel is explicitly shaped for an AI-agent frontend (README's Kairo framing). Tool-schema interpretation (risk levels, `requires_confirmation`, params_schema) is domain logic.
 - **Fix:** policy decision required — either accept `action_specs` as a generic manifest feature (document it as such) or move tool-schema interpretation to the AI plugin and strip it from lifecycle events.
-- **Status (2026-08-16): OPEN (decision).**
+- **Status (2026-09-24): CLOSED** — decided "generic manifest feature";
+  F4 (`a8a7f25`) neutralized the AI framing in proto/kernel comments, no wire
+  or behaviour change.
 
 ### DC-4. Hardcoded action→permission policy (Low)
 
 - **File:** `src/auth/permissions.rs:12-17` — `required_permission_for_action("http_request") → PERMISSION_NETWORK`
 - **Issue:** the kernel hardcodes knowledge of a specific plugin's ("network") action name as the fallback permission map. The data-driven v2 path (`registry.action_requirement`, `loader.rs:74-90`) supersedes it, but the fallback remains and the comment says new sensitive actions must be added to the kernel.
 - **Fix:** drop the fallback; require v2 per-action permission declarations (fail-closed on undeclared sensitive actions).
-- **Status (2026-08-16): OPEN.**
+- **Status (2026-09-24): CLOSED** — F5 (`cb2dda5`, #93) removed the
+  fallback map; v2 `action_requirement` is the single source. Residual:
+  `src/auth/permissions.rs:11-21` still matches `"http_request"` to log a
+  one-time deprecation warning (always returns `None`) — delete once legacy
+  network-plugin builds are gone.
 
 ### DC-5. Events SQLite DB vs the manifesto's "no databases" clause (Info/Low-Med)
 
