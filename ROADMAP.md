@@ -1,8 +1,14 @@
-# Vynkor ROADMAP — Phases 8–11
+# Vynkor ROADMAP — Phases 8–15
 
 **Baseline:** 2026-08-10 · Kernel `0.1.0`
 **Branch:** `develop`
 **Previous phases:** `docs/archive/` (Phase 1–2: `ROADMAP_phase1.md`/`ROADMAP_v2.md`/`ROADMAP_v3.md` · Phase 3–4: `ROADMAP_v4.md` · Phase 5: `ROADMAP_v5.md` · Phase 6: `ROADMAP_v6.md` · Phase 7 (C++/Python SDK parity): `ROADMAP_v7.md`, all items complete)
+
+> **Paths in shipped items are as-of-shipping.** Since then: `src/ipc/protocol.rs`
+> → `src/ipc/protocol/{router,helpers}.rs` (MA-01, `ad0496b`);
+> `src/plugins/supervisor.rs` → `src/plugins/supervisor/{mod,spawn,watchdog}.rs`
+> (MA-09); `src/kernel/orchestrator.rs` → `src/kernel/orchestrator/{mod,shutdown}.rs`
+> (MA-10); `src/marketplace/*` → the `vynm` binary in `vynkor-manager` (V-07, `1a847ce`).
 
 ---
 
@@ -176,10 +182,11 @@ permission-surface inconsistency; N1 is the largest single hot-path win.
   - Acceptance: `cargo fmt --check` exits 0.
   - **Status (2026-08-11): FIXED** — `cargo fmt` run tree-wide; `fmt --check` exits 0.
 
-> Deferred audit items M7 (C++/Python fuzz harness) remains open — tracked in
-> the Task Summary below and in `AUDIT.md`. M9 (zero-value enum renumber)
-> shipped with the v1.5 bump (P11-03, 2026-08-13). M7 is the last substantive
-> coverage gap.
+> M7 (C++/Python framing fuzz harness) shipped as T-14 in the SDK repos:
+> `vynkor-sdk-cpp/fuzz/fuzz_framing.cpp` (libFuzzer, runs in that repo's CI)
+> and `vynkor-sdk-python/fuzz/fuzz_framing.py` (**no CI job yet** — run
+> manually). M9 (zero-value enum renumber) shipped with the v1.5 bump
+> (P11-03, 2026-08-13).
 
 ---
 
@@ -200,7 +207,7 @@ duplicate registration.
       the old instance's exit to the new entry → `OnFailure` → auto-restart →
       duplicate spawn → `registration rejected: plugin already registered`
       (observed twice in the kernel log: pids 112747, 114277).
-  - Files: `src/plugins/supervisor.rs`.
+  - Files: `src/plugins/supervisor/mod.rs`.
   - Acceptance: `stop` + immediate `start` never produces a duplicate
     registration; a stale exit of the old instance is ignored.
   - **Status (2026-08-12): FIXED** — `ExitEvent` now carries the spawn's
@@ -213,7 +220,7 @@ duplicate registration.
       be dead, while the actually-registered instance keeps running —
       observed unsupervised for minutes after `stop` reported "stopped"
       (pids 112505/112506).
-  - Files: `src/plugins/supervisor.rs`.
+  - Files: `src/plugins/supervisor/mod.rs`.
   - Acceptance: `stop` always terminates the live registered instance and
     waits for it to exit; ESRCH is handled explicitly, not swallowed.
   - **Status (2026-08-12): FIXED** — `stop_plugin` records the stopped
@@ -225,7 +232,7 @@ duplicate registration.
 - [x] B3 — **`spawn_internal` overwrites the manual-start entry on a
       rejected duplicate restart:** the auto-restart path's `entries.insert`
       replaces the operator's freshly-started entry with the duplicate's.
-  - Files: `src/plugins/supervisor.rs`.
+  - Files: `src/plugins/supervisor/mod.rs`.
   - Acceptance: a duplicate-registration restart never clobbers the
     currently-registered entry.
   - **Status (2026-08-12): FIXED** — `spawn_internal` takes
@@ -238,7 +245,7 @@ duplicate registration.
 - [x] B4 — **cgroup scope reap loops on `Device or resource busy`:** when a
       new instance joins the same `vynkor/<id>.scope` before the old one
       exits, the rmdir keeps failing EBUSY and is retried indefinitely.
-  - Files: `src/plugins/supervisor.rs`.
+  - Files: `src/plugins/supervisor/mod.rs`.
   - Acceptance: the old scope is always reaped once its last task exits; no
     unbounded retry loop in the log.
   - **Status (2026-08-12): FIXED** — the wait task fires the `exited`
@@ -841,13 +848,18 @@ rest) · **P1** = F3/F4/F5/F6 (this cycle).
 
 ---
 
-## Phase 9 — Hard isolation (deferred)
+## Phase 9 — Hard isolation — SHIPPED (2026-08-12)
 
-Deferred until the R8 cross-repo items ship. The current sandbox (`sandbox:
-true`) isolates via user + network namespaces plus rlimits only — plugins
-share the host PID space (they can enumerate every host process via
+All of R9-01…R9-06 shipped: per-plugin cgroup v2 `pids.max`
+(`src/plugins/supervisor/spawn.rs`), PID + user + mount namespaces via the
+shim (`src/plugins/shim.rs`), seccomp denylist (`src/plugins/seccomp.rs`),
+Landlock filesystem rules (`src/plugins/fsaccess.rs`).
+
+*History (pre-Phase-9 state):* the original sandbox (`sandbox: true`)
+isolated via user + network namespaces plus rlimits only — plugins
+shared the host PID space (could enumerate every host process via
 `/proc`), read/write host files as the real uid, and their `max_procs`
-budget is *shared with every other process of the same uid* (RLIMIT_NPROC
+budget was *shared with every other process of the same uid* (RLIMIT_NPROC
 is checked at each fork/clone against the real-uid thread count, walked up
 the entire user-namespace tree to `init_user_ns`). Phase 9 replaces the
 shared-uid rlimit accounting with cgroup accounting and closes the
@@ -863,7 +875,7 @@ visibility/file-system gaps.
       writes the child PID into `cgroup.procs` in `pre_exec`, and sets
       `pids.max = max_procs`. Requires cgroup v2 (systemd default) and
       either root or a delegated `user@1000.service` subtree.
-  - Files: `src/plugins/runner.rs` (`sandbox_pre_exec`), `src/plugins/supervisor.rs`.
+  - Files: `src/plugins/runner.rs` (`sandbox_pre_exec`), `src/plugins/supervisor/spawn.rs`.
   - Acceptance: a plugin with `max_procs: 64` runs on a host whose session
     already uses 700+ threads (currently a hard EAGAIN boundary); a
     thread-storm in one plugin does not consume another plugin's budget.
@@ -884,7 +896,7 @@ visibility/file-system gaps.
       threads work), then forwards signals and exit status. Effect: the
       plugin sees only its own processes (`/proc` shows just itself), and
       can no longer enumerate or signal host/other-plugin processes.
-  - Files: new `src/plugins/shim.rs`, `src/plugins/supervisor.rs`.
+  - Files: new `src/plugins/shim.rs`, `src/plugins/supervisor/`.
   - Acceptance: a plugin's `/proc` lists only its own tasks; `ps` inside
     the plugin shows one process; supervisor signal/exit forwarding still
     works (restart, SIGTERM shutdown).
@@ -1019,12 +1031,18 @@ visibility/file-system gaps.
     `/proc`, `pids.max` accounting, RLIMIT caps) and its non-goals
     (no file-access restriction — R9-03, no seccomp — R9-04) match the
     code. `max_procs` semantics are documented on `PluginConfig` in
-    `src/plugins/supervisor.rs` (shared real-uid budget at clone time,
+    `src/plugins/supervisor/mod.rs` (shared real-uid budget at clone time,
     per-plugin when a `pids` cgroup scope is writable — R9-01).
 
 ---
 
-## Phase 10 — Plugin config & marketplace state (deferred)
+## Phase 10 — Plugin config & marketplace state — SHIPPED
+
+> R10-01…R10-04 all shipped. R10-01 (`plugins.d/` drop-ins, `plugins_dir`,
+> `merge_plugin_dropins` in `src/utils/config.rs`) remains kernel. R10-02…04
+> were implemented in `src/marketplace/*` and `src/cli/plugin.rs`, which V-07
+> (`1a847ce`) deleted — that code now lives in `vynm` (`vynkor-manager` repo);
+> the file references below are historical.
 
 Deferred until the R8/N items ship. Today a plugin's runtime settings live
 inline in `config.yaml` (`plugins:` list), the installer edits that one shared
@@ -1373,7 +1391,7 @@ surfaces cover every planned plugin).
 | N3 | config numeric bounds validation — shipped, zero-clamp + warn + tests | none |
 | N4 | daemon-start readiness handshake (pid-file TOCTOU) — shipped, smoke-verified | none |
 | N5 | `cargo fmt` fix for `test_proto_sync.rs` (DoD gate) — shipped, gate green | none |
-| M7 | C++/Python framing fuzz harness (deferred) | none |
+| M7 | C++/Python framing fuzz harness — **SHIPPED** as T-14 in the SDK repos (`vynkor-sdk-cpp/fuzz/fuzz_framing.cpp` + CI job; `vynkor-sdk-python/fuzz/fuzz_framing.py`, no CI job) | none |
 | M9 | zero-value enum renumber — SHIPPED with protocol v1.5 (P11-03, 2026-08-13) | v1.5 wire bump |
 | R9-01 | cgroup v2 `pids.max` per-plugin accounting (replaces shared-uid RLIMIT_NPROC) | R8 + N ship gate |
 | R9-02 | PID namespace via shim supervisor | R9-01 |
@@ -1439,11 +1457,12 @@ deferred until R8 shipped; with that gate lifted, R9-01 (cgroup pids), R9-02
 (shim PID namespace), R9-05 (closed with R9-02), R9-06 (docs), and R9-03
 (Landlock filesystem isolation) have shipped on `develop`. R9-04 (seccomp)
 shipped with the tight kernel-escape denylist (2026-08-12) — Phase 9 is now
-complete. M7 remains deferred by decision; M9 shipped with protocol v1.5
+complete. M7 shipped as T-14 in the SDK repos (Python harness has no CI
+job); M9 shipped with protocol v1.5
 (P11-03, 2026-08-13). R9-01/R9-05 are
 Linux-cgroup/mount-namespace work and require a delegated cgroup v2 subtree or
-root. Phase 10 (plugin config + marketplace state) is likewise deferred and
-independent of Phase 9 — it can land before or after hard isolation.
+root. Phase 10 (plugin config + marketplace state) shipped too; R10-02…04
+moved to `vynm` with the marketplace (V-07).
  Phase 11 shipped (2026-08-13): P11-01 (protocol v1.4 permission values 15–19,
  `vynkor-wire` 0.2.1 published) and P11-02 (proto-copy sync + drift guard) are
  done; P11-03 (M9 zero-value enum renumber) shipped on protocol **v1.5** —
@@ -1657,6 +1676,48 @@ UX-2/UX-4 (2026-08-24), UX-3 (PR #68); PERF-4 partial (PR #68).
     plugin grace window.
   - Not scheduled — raise before picking up, low urgency until a real
     workload needs the split.
+
+## Phase 15 — Client-driven tasks (CD) (2026-09-24)
+
+Specs: `docs/tasks/CD-*.md` (source:
+`CLIENT_DRIVEN_KERNEL_TASKS.md`). Decisions recorded 2026-09-24; each spec
+carries a "Decision" + "Status" block. Dumb core holds: anything that knows an
+action name (`chat_completion`, stt/tts, quotas) lives in `vynkor-plugins`.
+
+| Item | Decision (short) | Where the work lives |
+|------|------------------|----------------------|
+| CD-00 | `ai` `list_models`/`list_agents` + `plugin.json` output schema is the contract; no proto change | vynkor-plugins (`ai`) |
+| CD-01 | HTTP `POST /devices/pair` + unauth rate-limited `POST /devices/consume`; hashed `tickets.json`; WS untouched | kernel |
+| CD-02 | kernel DONE; symmetric per-device secret (Ed25519 → future v3) | SDKs + client |
+| CD-03 | reuse `ActionResponseChunk` streaming; `ChatDelta` dropped | vynkor-plugins (`ai`, `network`) |
+| CD-04 | owner = `agent` plugin; downlink via `{device_id}.*` actions | vynkor-plugins (`agent`, `stt`) + client |
+| CD-05 | recipient = provider device; router already stamps `caller_plugin_id` | kernel (regression test) + client |
+| CD-06 | min 1.5, major.minor range check; ack fields deferred to next wire | kernel |
+| CD-07 | "device offline" message + fail in-flight on provider disconnect | kernel |
+| CD-08 | `docs/TLS.md`, README, SHA-256 fingerprint in pair output + `vyn tls status` | kernel |
+| CD-09 | per-caller quota inside `ai`, keyed by `caller_plugin_id` | vynkor-plugins (`ai`) |
+
+- [ ] CD-00 — strip `api_key_env` from `list_models` output, optional
+      `display_name`, contract test (**vynkor-plugins**; kernel: none).
+- [ ] CD-01 — pairing ticket (**kernel**). *Decided, in progress.*
+- [x] CD-02 — per-device keys, **kernel side**. Remaining: sdk-cpp
+      `resolve_jwt_secret` → device-secret naming; Rust/Python SDK
+      `device_secret`; client `HostProfile.jwtSecret` → `deviceSecret`.
+- [ ] CD-03 — token streaming + cancel (**vynkor-plugins**; kernel: none).
+- [ ] CD-04 — assistant session in `agent`; stt partial transcripts
+      (**vynkor-plugins** + client; kernel: none).
+- [ ] CD-05 — `caller_plugin_id` stamping regression test for device targets
+      (**kernel**) + client audit log. *Decided, in progress.*
+- [ ] CD-06 — protocol range `[1.5, PROTOCOL_VERSION]` (**kernel**).
+      *Decided, in progress.*
+- [ ] CD-07 — offline message + fail in-flight on disconnect (**kernel**).
+      *Decided, in progress.*
+- [ ] CD-08 — TLS docs + fingerprint (**kernel**). *Decided, in progress.*
+- [ ] CD-09 — per-caller `chat_completion` quota (**vynkor-plugins**;
+      kernel: none — existing generic `action_caller_*` limits stay).
+
+K-06 (Phase 14) stays open and unscheduled — YAGNI until a workload needs
+separate API/plugin grace windows.
 
 ## Definition of Done
 

@@ -122,8 +122,8 @@ cargo fmt --check
 ### Bug Fix Workflow
 
 1. Find broken component (e.g., plugin crashes)
-2. Check `src/plugins/supervisor.rs` (restart logic?)
-3. Check `src/ipc/protocol.rs` (message handling?)
+2. Check `src/plugins/supervisor/` (restart logic?)
+3. Check `src/ipc/protocol/router.rs` (message handling?)
 4. Check `../vynkor-wire/proto/vynkor_protocol.proto` (schema match?)
 5. Write test in `tests/unit/` or `tests/integration/`
 6. Fix and verify
@@ -135,13 +135,13 @@ cargo fmt --check
 | Plugin doesn't receive messages | `src/ipc/server.rs` — is route registered? Proto version match? |
 | Proto changes break plugins | Use `reserved` fields. Bump proto version. |
 | Plugin leaks memory | Resource limits apply only with `sandbox: true` (`src/plugins/runner.rs`) |
-| IPC hangs | `src/ipc/protocol.rs` — timeout handling? Message framing? |
+| IPC hangs | `src/ipc/protocol/router.rs` — timeout handling? Message framing? |
 | Auth fails | `src/auth/jwt.rs` — token expiry? Permissions in `permissions.rs`? |
 
 ### When to Raise Questions
 
 - Modifying IPC protocol (`../vynkor-wire/proto/vynkor_protocol.proto`)
-- Changes to plugin lifecycle (`orchestrator.rs`, `supervisor.rs`)
+- Changes to plugin lifecycle (`src/kernel/orchestrator/{mod,shutdown}.rs`, `src/plugins/supervisor/`)
 - Cross-SDK compatibility (affects all three SDKs)
 - Performance-critical paths (IPC, event bus, kernel loop)
 

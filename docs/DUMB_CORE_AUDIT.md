@@ -5,7 +5,8 @@
 `src/ipc`, `src/auth`, `src/marketplace`, `src/bridge`, `src/cli`, `src/utils`,
 plus the wire protocol (`../vynkor-wire/proto/vynkor_protocol.proto` — legacy `vynkor_protocol.proto` still aliased).
 **Companion:** findings mirrored as DC-1…DC-5 in `AUDIT.md`.
-**Status:** all findings **OPEN**. This file is the working plan for the fixes.
+**Status (2026-09-24):** all findings **SHIPPED/CLOSED** (DC-1…DC-5); two
+small residual gaps recorded under F2 and F5. Kept as the design record.
 
 ---
 
@@ -41,10 +42,10 @@ clause is technically violated by the event store:
 
 | # | Finding | Severity | Status |
 |---|---------|----------|--------|
-| DC-1 | Marketplace / app-store client in the kernel (2 485 L) | Medium | OPEN |
-| DC-2 | Device-fleet domain model (D-01…D-14) | Medium | OPEN |
-| DC-3 | AI tool-calling surface in protocol + kernel | Low-Med | OPEN (decision) |
-| DC-4 | Hardcoded action→permission policy | Low | OPEN |
+| DC-1 | Marketplace / app-store client in the kernel (2 485 L) | Medium | SHIPPED (F1 = V-07 `1a847ce`, marketplace → `vynm`) |
+| DC-2 | Device-fleet domain model (D-01…D-14) | Medium | SHIPPED (F2 `22d17d8` #91, F3 `12de59f` #92; residual gap, see F2) |
+| DC-3 | AI tool-calling surface in protocol + kernel | Low-Med | SHIPPED (F4 `a8a7f25`) |
+| DC-4 | Hardcoded action→permission policy | Low | SHIPPED (F5 `cb2dda5` #93; residual gap, see F5) |
 | DC-5 | Events SQLite DB vs "no databases" clause | Info/Low-Med | CLOSED (2026-08-26: wording + S2 + PERF-2 all shipped) |
 
 The drift is not accidental rot — it is deliberate shipped product work
@@ -300,6 +301,10 @@ files, steps and acceptance criteria.
   against a kernel that has no marketplace module; kernel unit tests for
   marketplace move with it.
 
+- **Status: SHIPPED** in V-07 (`1a847ce`) — `src/marketplace/` deleted;
+  `vynm` (vynkor-manager repo) owns install/search/registry and the
+  `registry_url`/`marketplace_public_key`/`registry_cache_ttl_secs` keys.
+
 ### F2 (DC-2, P0) — Keep device surfaces as dumb pass-through, move interpretation
 
 - **Goal:** the kernel keeps identity + liveness + raw metadata and exposes
@@ -329,6 +334,12 @@ files, steps and acceptance criteria.
   friendly view; existing device integration tests pass unchanged (no API
   break — consumers like vynkor-web / the Android agent keep working).
 
+- **Status: SHIPPED** (`22d17d8`, #91). **Residual gap:** the display
+  helpers `device_os_str`/`device_state_str` moved to `src/api/display.rs`
+  but are still in the kernel crate, and `src/events/bus.rs` imports
+  `device_os_str` for the lifecycle payload. Harmless (enum → label), but a
+  full move would emit the raw enum and let consumers map it.
+
 ### F3 (DC-2, P1) — Keep the bridge as transport, strip capability interpretation
 
 - **Goal:** the `role: client` bridge stays in the kernel as transport (remote
@@ -349,6 +360,8 @@ files, steps and acceptance criteria.
 - **Acceptance:** the bridge still connects a client kernel to a host; no
   capability *semantics* live in the kernel; the Android agent (vynkor) still
   pairs via the existing tooling; no `BridgeConfig` change needed.
+
+- **Status: SHIPPED** (`12de59f`, #92).
 
 ### F4 (DC-3, P1) — Neutralize the AI tool-calling surface (generic manifest feature)
 
@@ -373,6 +386,8 @@ files, steps and acceptance criteria.
 - **Acceptance:** no "for the AI" / "to the AI" / "AI" references in the
   protocol schema or kernel comments for this mechanism; behavior unchanged;
   all tests green.
+
+- **Status: SHIPPED** (`a8a7f25`).
 
 ### F5 (DC-4, P1) — Drop the hardcoded action→permission fallback (three-step migration)
 
@@ -418,6 +433,14 @@ files, steps and acceptance criteria.
   manifest (landed before this change); a v2 action without a declared
   permission is denied by default; legacy string-form plugins keep working
   with a boot warning.
+
+- **Status: SHIPPED** (`cb2dda5`, #93) — the fallback map is gone; v2
+  `action_requirement` is the only source. **Residual gap:**
+  `src/auth/permissions.rs:11-21` keeps `required_permission_for_action`
+  as a stub that always returns `None` but still matches the
+  `"http_request"` string to emit a one-time deprecation warning — one
+  plugin action name left in `src/auth/`. Delete the function and its
+  router caller once legacy network-plugin builds are gone.
 
 ### F6 (DC-5, P1) — Manifesto wording + event-store hardening
 
