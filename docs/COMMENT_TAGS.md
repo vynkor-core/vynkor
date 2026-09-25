@@ -4,7 +4,7 @@
 
 In-code audit tags (`T-11`, `S1`, `VULN-020`, `BUG-006`, `R9-02`, …) are opaque
 to a newcomer. This file maps every tag to its issue and primary source file.
-Sources: `AUDIT.md` (security/robustness findings), `ROADMAP.md` (roadmap items,
+Sources: `docs/archive/AUDIT.md` (security/robustness findings), `ROADMAP.md` (roadmap items,
 incl. MA-*), `docs/DUMB_CORE_AUDIT.md` (DC-* dumb-core findings + F1–F6 fixes).
 
 | Tag | Meaning | Source | Files |

@@ -1,5 +1,9 @@
 # Vynkor Codebase Audit
 
+> **Archived 2026-09-25.** Every finding here is closed. References to
+> `ROADMAP.md` sections (Phases 8–14, "Immediate — …") now live in
+> `docs/archive/ROADMAP_v8.md`.
+
 Date: 2026-07-07 (initial) · **Reconciled: 2026-08-11** (full re-audit on `develop` @ `c93342b`) · **Delta audit: 2026-08-14** (`develop` @ `2d16ebf` — post-reconciliation code + previously un-audited performance/UX surfaces) · **Architecture (dumb-core) audit: 2026-08-16** (manifesto compliance — domain logic in the kernel; see "Architecture audit — dumb-core" below; fix plan in `docs/DUMB_CORE_AUDIT.md`) · **Full src audit (maintainability & comments): 2026-08-20** (manual read of all `src/` — 49 files, 14251 LOC, no agents)
 Scope: full repo — kernel/IPC/events/api (`src/kernel`, `src/ipc`, `src/events`, `src/api`, `src/utils`), auth/plugin-lifecycle/marketplace (`src/auth`, `src/plugins`, `src/cli`, `src/marketplace`), and cross-SDK/protocol (`sdk/rust`, `sdk/cpp`, `sdk/python`, `proto/`, `wire/`, `tests/`, `fuzz/`).
 

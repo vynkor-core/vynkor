@@ -59,14 +59,14 @@ This document splits the 10 client-wave tasks by repository so each can be built
 Each file below is one task with plan, files, complexity and acceptance:
 
 - **Track A (vynkor-only):**
-  - `docs/tasks/CD-05-capability-audit.md` — `capability_used` audit
-  - `docs/tasks/CD-07-offline-commands.md` — offline command fate
+  - `docs/archive/tasks/CD-05-capability-audit.md` — `capability_used` audit
+  - `docs/archive/tasks/CD-07-offline-commands.md` — offline command fate
   - `docs/tasks/CD-09-per-device-quota.md` — quota on `ai.chat`
-  - `docs/tasks/CD-06-version-negotiation.md` — min/max
-  - `docs/tasks/CD-08-tls-onboarding.md` — TLS (almost DONE)
+  - `docs/archive/tasks/CD-06-version-negotiation.md` — min/max
+  - `docs/archive/tasks/CD-08-tls-onboarding.md` — TLS (almost DONE)
 
 - **Track B (vynkor+wire):**
-  - `docs/tasks/CD-01-pairing-ticket.md` — ticket without CLI
+  - `docs/archive/tasks/CD-01-pairing-ticket.md` — ticket without CLI
 
 - **Track C (vynkor+wire+ai):**
   - `docs/tasks/CD-00-models-agents.md` — models/agents
