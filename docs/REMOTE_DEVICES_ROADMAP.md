@@ -398,15 +398,12 @@
     `{device_id}.{cap}` (`src/bridge/mod.rs`, `device_id` from config →
     `$HOSTNAME` → `unknown`); the design docs (`ANDROID_DEVICE_AGENT*.md`)
     use the new form. Cross-repo follow-ups still open:
-    - [ ] `vynkor-plugins/plugins/gated-write` — `DEFAULT_CONFIRM_CALLERS =
-      "device.*"` matches nothing now; the confirm allowlist for "any device
-      mirror" needs a decision (glob extension vs operator-set `<device_id>.*`
-      vs matching on the kernel-stamped caller device_id).
-    - [ ] `vynkor-sdk-rust/src/confirmation_gate.rs` — `device.*` doc-comment
-      examples/tests → `<device_id>.*` form (mechanism is generic, docs only).
-    - [ ] `vynkor-plugins/plugins/tts` — `device.phone.speaker` examples
-      (README/USAGE/plugin.json/request.rs) → `<device_id>.speaker`
-      (operator-configured `TTS_PLUGIN_IPC_TARGETS`, examples only).
+    - [x] ~~`vynkor-plugins/plugins/gated-write`~~ — obsolete: the plugin no
+      longer exists (checked 2026-09-25).
+    - [x] `vynkor-sdk/src/confirmation_gate.rs` — docs/tests moved to the
+      `<device_id>` form (vynkor-sdk PR #16).
+    - [x] `vynkor-plugins/plugins/tts` (+ `speech`, same examples) —
+      `device.phone.speaker` → `phone-1.speaker` (vynkor-plugins PR #70).
   - **Status (2026-08-16): IMPLEMENTED + E2E-verified against a live kernel
     over LAN** — Rust core (`vynkor-agent-core`: transport/protocol/caps/ffi
     in `rust/`), Kotlin app (`app/`: FGS, capability providers, onboarding),
