@@ -21,7 +21,11 @@ use crate::helpers::start_kernel_secured_with_data_dir;
 
 const MASTER: &str = "e01-ws-integration-secret-32-bytes!!";
 
-async fn ws_connect(port: u16, token: &str) -> Result<Ws, tokio_tungstenite::tungstenite::Error> {
+// boxed: tungstenite::Error is large enough to trip clippy::result_large_err
+async fn ws_connect(
+    port: u16,
+    token: &str,
+) -> Result<Ws, Box<tokio_tungstenite::tungstenite::Error>> {
     use tokio_tungstenite::tungstenite::handshake::client::generate_key;
     use tokio_tungstenite::tungstenite::http::Request;
     let req = Request::builder()
@@ -38,6 +42,7 @@ async fn ws_connect(port: u16, token: &str) -> Result<Ws, tokio_tungstenite::tun
     tokio_tungstenite::connect_async(req)
         .await
         .map(|(ws, _)| ws)
+        .map_err(Box::new)
 }
 
 fn register_env(plugin_id: &str, device_id: &str, token: &str) -> Vec<u8> {
