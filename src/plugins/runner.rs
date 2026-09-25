@@ -433,23 +433,45 @@ mod tests {
         // vmem to 0 bytes (would instantly OOM on any mmap).
     }
 
+    /// setrlimit is process-wide and a lowered hard limit can't be raised
+    /// back: run the body in a re-exec'd copy of this test binary so the
+    /// harness process (and every other test's thread stacks) keeps its
+    /// limits. Returns true in the parent, false in the child (run the body).
+    #[cfg(target_os = "linux")]
+    fn in_child_process(test: &str) -> bool {
+        const CHILD: &str = "VYN_RLIMIT_TEST_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            return false;
+        }
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([&format!("plugins::runner::tests::{test}"), "--exact"])
+            .env(CHILD, "1")
+            .status()
+            .unwrap();
+        assert!(status.success(), "{test} failed in child process");
+        true
+    }
+
     #[test]
     #[cfg(target_os = "linux")]
     fn apply_resource_limits_zero_vmem_sets_infinity() {
+        if in_child_process("apply_resource_limits_zero_vmem_sets_infinity") {
+            return;
+        }
         // should succeed and set RLIMIT_AS to infinity without error
         let result = apply_resource_limits(1024, 0, None);
         assert!(
             result.is_ok(),
             "0 vmem should mean unlimited, not error: {result:?}"
         );
-        // restore a sane limit for this test process so later tests aren't
-        // left with infinity (harmless, but keep deterministic)
-        let _ = apply_resource_limits(1024, 2048, None);
     }
 
     #[test]
     #[cfg(target_os = "linux")]
     fn apply_resource_limits_without_cgroup_warns_but_succeeds() {
+        if in_child_process("apply_resource_limits_without_cgroup_warns_but_succeeds") {
+            return;
+        }
         // no cgroup scope — must warn but still succeed (no NPROC cap)
         let result = apply_resource_limits(64, 512, None);
         assert!(result.is_ok());
