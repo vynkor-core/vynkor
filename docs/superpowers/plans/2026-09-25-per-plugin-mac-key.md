@@ -62,7 +62,7 @@
 **Interfaces:**
 - Produces: `pub fn vynkor::auth::plugin_key::plugin_mac_secret(master: &[u8], plugin_id: &str) -> String`. Returns 64 lowercase hex chars, deterministic.
 
-- [ ] **Step 1: Write the failing test** in `tests/unit/test_plugin_key.rs`:
+- [x] **Step 1: Write the failing test** in `tests/unit/test_plugin_key.rs`:
 
 ```rust
 use vynkor::auth::plugin_key::plugin_mac_secret;
@@ -111,12 +111,12 @@ fn derived_secret_known_answer() {
 
 Add `mod test_plugin_key;` to `tests/unit/mod.rs` next to the other `mod test_*;` lines. For the KAT, temporarily declare `const KAT_K_P: &str = "";` at the top of the test file (it gets filled in Step 4).
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cargo test --test unit test_plugin_key`
 Expected: compile error `unresolved import vynkor::auth::plugin_key`.
 
-- [ ] **Step 3: Implement** `src/auth/plugin_key.rs`:
+- [x] **Step 3: Implement** `src/auth/plugin_key.rs`:
 
 ```rust
 //! Per-plugin frame-MAC secret. A local plugin must not hold the master
@@ -143,14 +143,14 @@ pub fn plugin_mac_secret(master: &[u8], plugin_id: &str) -> String {
 
 Add `pub mod plugin_key;` to `src/auth/mod.rs` (alphabetical, after `pairing`).
 
-- [ ] **Step 4: Fill the KAT.** Run `cargo test --test unit derived_secret_known_answer`. The failure prints the actual value. Paste it into `KAT_K_P`. This is intentional: the value pins the implementation just written, and Steps 5 onward guard against it drifting.
+- [x] **Step 4: Fill the KAT.** Run `cargo test --test unit derived_secret_known_answer`. The failure prints the actual value. Paste it into `KAT_K_P`. This is intentional: the value pins the implementation just written, and Steps 5 onward guard against it drifting.
 
-- [ ] **Step 5: Run all of them**
+- [x] **Step 5: Run all of them**
 
 Run: `cargo test --test unit test_plugin_key`
 Expected: 6 passed.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/auth/plugin_key.rs src/auth/mod.rs tests/unit/test_plugin_key.rs tests/unit/mod.rs
