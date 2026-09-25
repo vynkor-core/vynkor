@@ -232,6 +232,38 @@ pub(crate) async fn api_post(
     Ok(())
 }
 
+/// POST a JSON body and return the response body. Non-2xx surfaces the
+/// UX-1 envelope's message rather than a bare status.
+pub(crate) async fn api_post_json(
+    client: &reqwest::Client,
+    base: &str,
+    path: &str,
+    token: Option<&str>,
+    body: &serde_json::Value,
+) -> anyhow::Result<String> {
+    let url = format!("{base}{path}");
+    let mut req = client.post(&url).json(body);
+    if let Some(t) = token {
+        req = req.bearer_auth(t);
+    }
+    let resp = req
+        .send()
+        .await
+        .map_err(|_| anyhow::anyhow!("kernel not running — start it with `vyn start`"))?;
+    let status = resp.status();
+    let text = resp.text().await?;
+    if !status.is_success() {
+        let msg = serde_json::from_str::<serde_json::Value>(&text)
+            .ok()
+            .and_then(|v| v.get("message")?.as_str().map(str::to_string));
+        match msg {
+            Some(m) => anyhow::bail!("API error: HTTP {status}: {m}"),
+            None => anyhow::bail!("API error: HTTP {status}"),
+        }
+    }
+    Ok(text)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

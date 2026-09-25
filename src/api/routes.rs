@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, Query, State},
+    extract::{rejection::JsonRejection, Path, Query, State},
     http::StatusCode,
     Json,
 };
@@ -8,10 +8,11 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::auth::jwt::JwtValidator;
+use crate::auth::pairing::{PairPayload, PairRequest, PairingService, TicketView};
 use crate::plugins::loader::{validate_plugin_def, PluginLoader};
 use crate::plugins::manager::PluginManager;
 use crate::utils::config::PluginDef;
-use crate::utils::errors::VynkorError;
+use crate::utils::errors::{TicketRejection, VynkorError};
 
 pub struct AppState {
     pub manager: Arc<PluginManager>,
@@ -20,6 +21,8 @@ pub struct AppState {
     /// Plugins declared under `plugins:` in config.yaml — the set `POST
     /// /plugins/:id/start` is allowed to spawn (never arbitrary binaries).
     pub plugin_defs: Vec<PluginDef>,
+    /// cd-01: ticket pairing; `None` without jwt_secret (nothing to sign with)
+    pub pairing: Option<Arc<PairingService>>,
 }
 
 /// Uniform JSON envelope for every non-2xx REST response (UX-1). Clients parse
@@ -62,6 +65,26 @@ impl ApiError {
 
     pub fn forbidden(msg: &str) -> (StatusCode, Json<ApiError>) {
         Self::body(StatusCode::FORBIDDEN, msg, false)
+    }
+
+    pub fn bad_request(msg: &str) -> (StatusCode, Json<ApiError>) {
+        Self::body(StatusCode::BAD_REQUEST, msg, false)
+    }
+
+    pub fn gone(msg: &str) -> (StatusCode, Json<ApiError>) {
+        Self::body(StatusCode::GONE, msg, false)
+    }
+
+    pub fn too_many_requests(msg: &str) -> (StatusCode, Json<ApiError>) {
+        Self::body(StatusCode::TOO_MANY_REQUESTS, msg, true)
+    }
+
+    pub fn unavailable(msg: &str) -> (StatusCode, Json<ApiError>) {
+        Self::body(StatusCode::SERVICE_UNAVAILABLE, msg, false)
+    }
+
+    pub fn internal(msg: &str) -> (StatusCode, Json<ApiError>) {
+        Self::body(StatusCode::INTERNAL_SERVER_ERROR, msg, true)
     }
 }
 
@@ -288,4 +311,65 @@ pub async fn get_plugin_logs(
     }
     let n = q.lines.unwrap_or(100).min(MAX_LOG_LINES);
     Ok(Json(state.manager.logs(&id, n).await))
+}
+
+type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
+
+fn pairing_of(state: &AppState) -> Result<&PairingService, (StatusCode, Json<ApiError>)> {
+    state
+        .pairing
+        .as_deref()
+        .ok_or_else(|| ApiError::unavailable("pairing requires jwt_secret in config"))
+}
+
+// store/io details stay in the log, never in the response
+fn pairing_error(e: VynkorError) -> (StatusCode, Json<ApiError>) {
+    match e {
+        // unknown and forged are indistinguishable on purpose
+        VynkorError::Ticket(TicketRejection::Unknown) => ApiError::not_found("unknown ticket"),
+        VynkorError::Ticket(TicketRejection::AlreadyUsed) => {
+            ApiError::conflict("ticket already used")
+        }
+        VynkorError::Ticket(TicketRejection::Expired) => ApiError::gone("ticket expired"),
+        VynkorError::InvalidInput(msg) | VynkorError::NetworkError(msg) => {
+            ApiError::unprocessable(&msg)
+        }
+        other => {
+            tracing::error!("pairing failed: {other}");
+            ApiError::internal("pairing failed")
+        }
+    }
+}
+
+/// CD-01: mint a single-use pairing ticket (admin only). Body is optional.
+pub async fn pair_device(
+    State(state): State<Arc<AppState>>,
+    body: Option<Json<PairRequest>>,
+) -> ApiResult<TicketView> {
+    let pairing = pairing_of(&state)?;
+    let req = body.map(|Json(b)| b).unwrap_or_default();
+    pairing.create_ticket(req).map(Json).map_err(pairing_error)
+}
+
+#[derive(Deserialize)]
+pub struct ConsumeRequest {
+    pub ticket: String,
+}
+
+/// CD-01: trade a ticket for a per-device credential. Unauthenticated — the
+/// ticket is the credential — but globally rate-limited.
+pub async fn consume_ticket(
+    State(state): State<Arc<AppState>>,
+    body: Result<Json<ConsumeRequest>, JsonRejection>,
+) -> ApiResult<PairPayload> {
+    let pairing = pairing_of(&state)?;
+    if !pairing.allow_consume() {
+        return Err(ApiError::too_many_requests("too many pairing attempts"));
+    }
+    let Json(req) =
+        body.map_err(|_| ApiError::bad_request("body must be {\"ticket\": \"...\"}"))?;
+    pairing
+        .consume(&req.ticket)
+        .map(Json)
+        .map_err(pairing_error)
 }

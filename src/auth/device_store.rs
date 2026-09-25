@@ -15,6 +15,7 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
 
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
@@ -70,6 +71,9 @@ pub struct DeviceStore {
     path: PathBuf,
     /// HKDF(jwt_master_secret) — the master itself is not retained.
     key: [u8; 32],
+    // cd-01: the api now issues too, concurrently — unserialized
+    // read-modify-write would drop rows. cross-process (cli) stays unlocked.
+    write_lock: Mutex<()>,
 }
 
 impl DeviceStore {
@@ -78,6 +82,7 @@ impl DeviceStore {
         Self {
             path: data_dir.join(STORE_FILE),
             key: Self::derive_key(jwt_master_secret),
+            write_lock: Mutex::new(()),
         }
     }
 
@@ -134,6 +139,10 @@ impl DeviceStore {
         String::from_utf8(pt).map_err(|_| VynkorError::Auth("bad secret encoding".into()))
     }
 
+    fn lock_writes(&self) -> MutexGuard<'_, ()> {
+        self.write_lock.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     fn read_all(&self) -> Result<Vec<DeviceRecord>, VynkorError> {
         let raw = match fs::read_to_string(&self.path) {
             Ok(raw) => raw,
@@ -154,28 +163,9 @@ impl DeviceStore {
     }
 
     fn write_all(&self, rows: &[DeviceRecord]) -> Result<(), VynkorError> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent).map_err(VynkorError::Io)?;
-        }
         let json =
             serde_json::to_string_pretty(rows).map_err(|e| VynkorError::Internal(e.to_string()))?;
-        // temp+rename so a crash mid-write can't shred existing credentials;
-        // 0600 before the data lands (secrets at rest)
-        let tmp = self.path.with_extension("json.tmp");
-        {
-            let file = fs::File::create(&tmp).map_err(VynkorError::Io)?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                file.set_permissions(fs::Permissions::from_mode(0o600))
-                    .map_err(VynkorError::Io)?;
-            }
-            let mut w = file;
-            w.write_all(json.as_bytes()).map_err(VynkorError::Io)?;
-            w.flush().map_err(VynkorError::Io)?;
-        }
-        fs::rename(&tmp, &self.path).map_err(VynkorError::Io)?;
-        Ok(())
+        write_private_atomic(&self.path, json.as_bytes())
     }
 
     /// Issue or rotate the credential for `device_id`. The plaintext secret is
@@ -183,6 +173,7 @@ impl DeviceStore {
     pub fn issue(&self, device_id: &str, name: &str, ttl_secs: u64) -> Result<String, VynkorError> {
         let now = now_secs();
         let secret_hex = random_device_secret_hex();
+        let _guard = self.lock_writes();
         let mut rows = self.read_all()?;
         let enc = self.seal(&secret_hex)?;
         match rows.iter_mut().find(|r| r.device_id == device_id) {
@@ -225,6 +216,7 @@ impl DeviceStore {
     }
 
     pub fn set_revoked(&self, device_id: &str, revoked: bool) -> Result<bool, VynkorError> {
+        let _guard = self.lock_writes();
         let mut rows = self.read_all()?;
         let mut changed = false;
         for row in rows.iter_mut().filter(|r| r.device_id == device_id) {
@@ -238,6 +230,7 @@ impl DeviceStore {
     }
 
     pub fn remove(&self, device_id: &str) -> Result<bool, VynkorError> {
+        let _guard = self.lock_writes();
         let mut rows = self.read_all()?;
         let before = rows.len();
         rows.retain(|r| r.device_id != device_id);
@@ -265,6 +258,29 @@ impl DeviceStore {
             },
         }
     }
+}
+
+/// temp+rename so a crash mid-write can't shred existing rows; 0600 before
+/// the data lands. shared by the device and ticket stores.
+pub(crate) fn write_private_atomic(path: &Path, bytes: &[u8]) -> Result<(), VynkorError> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(VynkorError::Io)?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    {
+        let file = fs::File::create(&tmp).map_err(VynkorError::Io)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            file.set_permissions(fs::Permissions::from_mode(0o600))
+                .map_err(VynkorError::Io)?;
+        }
+        let mut w = file;
+        w.write_all(bytes).map_err(VynkorError::Io)?;
+        w.flush().map_err(VynkorError::Io)?;
+    }
+    fs::rename(&tmp, path).map_err(VynkorError::Io)?;
+    Ok(())
 }
 
 fn now_secs() -> u64 {

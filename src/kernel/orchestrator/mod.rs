@@ -270,6 +270,28 @@ impl Kernel {
         let shutdown_supervisor = Arc::clone(&supervisor);
         let manager = Arc::new(PluginManager::new(supervisor, Arc::clone(&registry)));
         PluginLoader::load_all(&config.plugins, &manager, Some(&event_bus)).await;
+        // CD-01: ticket pairing shares the device store; needs jwt_secret to
+        // sign device tokens, so it exists exactly when the store does
+        let pairing = match (&device_store, &config.jwt_secret) {
+            (Some(store), Some(secret)) => {
+                Some(Arc::new(crate::auth::pairing::PairingService::new(
+                    &config.data_dir,
+                    Arc::clone(store),
+                    crate::auth::pairing::PairingConfig {
+                        jwt_secret: secret.clone(),
+                        audience: config
+                            .jwt_audience
+                            .clone()
+                            .unwrap_or_else(|| "vynkor".to_string()),
+                        port: config.port,
+                        tls: config.tls,
+                        cert_path: tls_cert_path.clone(),
+                        device_ttl_secs: 86_400,
+                    },
+                )))
+            }
+            _ => None,
+        };
         let api = ApiServer::new(
             config.port,
             bind_ip,
@@ -287,7 +309,8 @@ impl Kernel {
             config.ws_handshake_timeout_secs,
             config.max_ws_connections,
             config.ws_register_timeout_secs,
-        );
+        )
+        .with_pairing(pairing);
         // K-04: kept outside the spawned task so graceful_shutdown can signal
         // it (axum-server's Handle is the drain/stop switch for the listener).
         let api_shutdown_handle = axum_server::Handle::new();
