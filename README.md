@@ -4,7 +4,7 @@
 
 > A tiny Rust daemon that turns a laptop into a private cloud. Plugins — AI, storage, automations — run as isolated processes and talk through Vynkor. Your phone becomes a remote device. No vendor, no cloud account.
 
-[![Kernel 0.1.0](https://img.shields.io/badge/kernel-0.1.0-blue)](https://github.com/vynkor-core/vynkor/blob/main/ROADMAP.md) [![Proto v1.7](https://img.shields.io/badge/proto-v1.7-green)](https://github.com/vynkor-core/vynkor-wire/blob/main/proto/vynkor_protocol.proto) [![License MIT/Apache](https://img.shields.io/badge/license-MIT%2FApache--2.0-orange)](https://github.com/vynkor-core/vynkor/blob/main/LICENSE-MIT) [![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-red)](https://github.com/vynkor-core/vynkor/blob/main/Cargo.toml)
+[![Kernel 0.1.3](https://img.shields.io/badge/kernel-0.1.3-blue)](https://github.com/vynkor-core/vynkor/blob/main/ROADMAP.md) [![Proto v1.7](https://img.shields.io/badge/proto-v1.7-green)](https://github.com/vynkor-core/vynkor-wire/blob/main/proto/vynkor_protocol.proto) [![License MIT/Apache](https://img.shields.io/badge/license-MIT%2FApache--2.0-orange)](https://github.com/vynkor-core/vynkor/blob/main/LICENSE-MIT) [![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-red)](https://github.com/vynkor-core/vynkor/blob/main/Cargo.toml)
 
 ---
 
@@ -56,7 +56,7 @@ All repos live in `vynkor-core`. The wire protocol in [`vynkor-wire`](https://gi
 
 ---
 
-## What you can do today — `0.1.0`
+## What you can do today — `0.1.3`
 
 - **Run plugins in isolation.** Supervised, auto-restart, resource limits (`512 MiB` / `1024` pids, cgroup `pids.max` + PID-namespace per plugin on Linux). One crash never takes the host down.
 - **Use any language.** `cargo add vynkor-sdk` / `pip install vynkor-sdk` — streaming actions (`ActionRequestChunk`/`ResponseChunk`), `publish_event`, `SessionClose` — same in Rust/Python/C++.
@@ -124,7 +124,7 @@ SDKs: [`vynkor-sdk`](https://github.com/vynkor-core/vynkor-sdk) · [`vynkor-sdk-
 
 ## Security in one paragraph
 
-TLS on by default (auto self-signed `vyn-tls/`), `Sec-WebSocket-Protocol: vynkor, <jwt>` auth, per-device credentials instead of sharing the master `jwt_secret`, HMAC-SHA256 per frame after registration, default-deny `ipc_targets`, same-user IPC, sandboxed processes. Details: [`docs/THREAT_MODEL.md`](https://github.com/vynkor-core/vynkor/blob/main/docs/THREAT_MODEL.md), [`docs/FRAMING.md`](https://github.com/vynkor-core/vynkor/blob/main/docs/FRAMING.md) (flag table), [`AUDIT.md`](https://github.com/vynkor-core/vynkor/blob/main/AUDIT.md).
+TLS on by default (auto self-signed `vyn-tls/`), `Sec-WebSocket-Protocol: vynkor, <jwt>` auth, per-device credentials instead of sharing the master `jwt_secret`, HMAC-SHA256 per frame after registration, default-deny `ipc_targets`, same-user IPC, sandboxed processes. Details: [`docs/THREAT_MODEL.md`](https://github.com/vynkor-core/vynkor/blob/main/docs/THREAT_MODEL.md), [`docs/FRAMING.md`](https://github.com/vynkor-core/vynkor/blob/main/docs/FRAMING.md) (flag table), [`docs/archive/AUDIT.md`](https://github.com/vynkor-core/vynkor/blob/main/docs/archive/AUDIT.md).
 
 ### TLS
 
@@ -143,7 +143,7 @@ Built for humans, not CLIs — the next wave is **zero-terminal onboarding and r
 - **Trust you can see.** `capability_used {cap, ts, origin}` back to your phone.
 - **Hygiene.** Version negotiation, honest `device offline`, cert fingerprint in QR, per-device quota on `ai.chat`.
 
-Details and repo split per task: [`docs/CLIENT_DRIVEN_SPLIT.md`](https://github.com/vynkor-core/vynkor/blob/main/docs/CLIENT_DRIVEN_SPLIT.md) + `docs/tasks/CD-00..CD-09`.
+Details and repo split per task: [`docs/CLIENT_DRIVEN_SPLIT.md`](https://github.com/vynkor-core/vynkor/blob/main/docs/CLIENT_DRIVEN_SPLIT.md) + `docs/tasks/` (open CD specs; shipped ones in `docs/archive/tasks/`).
 
 ---
 

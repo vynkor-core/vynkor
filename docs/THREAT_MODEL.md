@@ -5,7 +5,7 @@ proto v1.7 — E-01 per-device credentials). Residual updated: S2 fixed (PR #35,
 2026-08-14). Consolidates §10 (auth/channel security), §19 (host reachability)
 and §21 (AI tool-calling safety) of `docs/REMOTE_DEVICES_PLAN.md` into one
 focused threat model, so the security posture lives in a single place.
-Companion files: `AUDIT.md` (findings ledger) and
+Companion files: `docs/archive/AUDIT.md` (findings ledger) and
 `docs/REMOTE_DEVICES_ROADMAP.md` (task status).
 
 Scope: the kernel plus the remote-devices deployment (WS gateway, TLS, JWT,
@@ -58,7 +58,7 @@ revocation until D-18); low-severity dependency advisories (S4) and internal
 detail in plugin-facing errors (S5) aid recon. S2 (events DB in per-user private dir — was `/tmp/vyn`, fixed PR #35)
 and S3 (`crossbeam-epoch` RUSTSEC) are closed: the event DB now lives in the
 per-user private runtime dir (0o700, PR #35, 2026-08-18) and `crossbeam-epoch`
-is at 0.9.20 (PR #20, 2026-08-14). All open items tracked in `AUDIT.md`.
+is at 0.9.20 (PR #20, 2026-08-14). All open items tracked in `docs/archive/AUDIT.md`.
 
 ### 2. compromised plugin
 
@@ -168,7 +168,7 @@ schema it reads.
 - **Single-user enforcement.** Same-user IPC is live (D-03), but event-bus
   user-scoping is not (D-23 deferred). With co-users on one kernel, a plugin
   could subscribe to `*` events.
-- **Open audit items** (tracked in `AUDIT.md`/`ROADMAP.md`): S4
+- **Open audit items** (tracked in `docs/archive/AUDIT.md`/`ROADMAP.md`): S4
   `anyhow`/`number_prefix` advisories (Low, P3), S5 internals leak into
   plugin-facing errors (Low, P2), PERF-1/PERF-2 (Medium, P1),
   PERF-3/UX-1/UX-2 (Low-Med, P2), PERF-4/UX-3/UX-4 (Low, P3), M7 C++/Python

@@ -39,7 +39,7 @@
 
 ## Phase 15 — Client-driven tasks (CD) (2026-09-24)
 
-Specs: `docs/tasks/CD-*.md` (source:
+Specs: `docs/tasks/CD-*.md`, shipped ones in `docs/archive/tasks/` (source:
 `CLIENT_DRIVEN_KERNEL_TASKS.md`). Decisions recorded 2026-09-24; each spec
 carries a "Decision" + "Status" block. Dumb core holds: anything that knows an
 action name (`chat_completion`, stt/tts, quotas) lives in `vynkor-plugins`.

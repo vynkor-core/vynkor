@@ -9,7 +9,7 @@ Task: **V-02** from `docs/VYNM_ROADMAP.md` (kernel lane, stage 2). Branch
 |---|---|
 | `src/plugins/loader.rs` | Import swap: `crate::marketplace::installer::{validate_manifest, InstallManifest}` → `vynkor_wire::manifest::*`. `validate_plugin_def` passes `crate::auth::permissions::resolve_permission` as the injected resolver (D1 seam — same fn the marketplace copy called inline). Config-permission cross-check via `normalize_permission` stays kernel-side untouched. |
 | `Cargo.toml` | `vynkor-wire = "0.2.3"` → `{ version = "0.2.4", features = ["manifest"] }`. |
-| `docs/V-02_EXPERIENCE.md` | this file |
+| `docs/archive/V-02_EXPERIENCE.md` | this file |
 
 Marketplace module is untouched — its own manifest copy keeps compiling and
 its tests keep passing (acceptance criterion). The two copies coexist until
