@@ -61,9 +61,11 @@ action name (`chat_completion`, stt/tts, quotas) lives in `vynkor-plugins`.
       `display_name`, contract test (**vynkor-plugins**; kernel: none).
 - [x] CD-01 — pairing ticket (**kernel**). SHIPPED 2026-09-25 (d677a02):
       `POST /devices/pair` + `/devices/consume`, `vyn device pair`.
-- [x] CD-02 — per-device keys, **kernel side**. Remaining: sdk-cpp
-      `resolve_jwt_secret` → device-secret naming; Rust/Python SDK
-      `device_secret`; client `HostProfile.jwtSecret` → `deviceSecret`.
+- [x] CD-02 — per-device keys, **kernel side**. Rust SDK done
+      (`connect_ws_device`, `VYN_DEVICE_ID`/`VYN_DEVICE_SECRET`, strict env
+      policy — vynkor-sdk PR #16). Remaining: sdk-cpp `resolve_jwt_secret` →
+      device-secret naming; Python SDK `device_secret`; client
+      `HostProfile.jwtSecret` → `deviceSecret`.
 - [ ] CD-03 — token streaming + cancel (**vynkor-plugins**; kernel: none).
 - [ ] CD-04 — assistant session in `agent`; stt partial transcripts
       (**vynkor-plugins** + client; kernel: none).

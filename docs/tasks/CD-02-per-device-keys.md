@@ -38,8 +38,13 @@ Compromise of a phone ≠ compromise of the host. The phone holds only its own
       used at `include/vynkor/plugin.hpp:75,88`) — for remote devices resolve
       the per-device secret under device-secret naming (e.g. `VYN_DEVICE_SECRET`),
       not `jwt_secret`.
-- [ ] **vynkor-sdk (Rust) / vynkor-sdk-python:** first-class `device_secret`
-      support for remote-device clients (session-key derivation + frame MAC).
+- [x] **vynkor-sdk (Rust):** `VynkorClient::connect_ws_device` /
+      `with_device_id` send `PluginRegister.device_id`; `Plugin::run_ws` reads
+      `VYN_DEVICE_ID` + `VYN_DEVICE_SECRET`. Env policy is strict: a half-set
+      pair, or `VYN_JWT_SECRET` next to a device pair, is an error (vynkor-sdk
+      PR #16). C++/Python should mirror the same names and policy.
+- [ ] **vynkor-sdk-python:** first-class `device_secret` support for
+      remote-device clients (session-key derivation + frame MAC).
 - [ ] **vynkor-client-android:** rename `HostProfile.jwtSecret` → `deviceSecret`.
 - `vynkor-plugins`: nothing — host plugins register as `device_id="local"`.
 
