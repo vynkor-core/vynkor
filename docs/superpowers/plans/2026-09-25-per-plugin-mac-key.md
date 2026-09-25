@@ -172,7 +172,7 @@ git commit -m "feat(auth): derive a per-plugin frame-MAC secret from jwt_secret"
 - Consumes: `plugin_mac_secret` (Task 1).
 - Produces: `Config.legacy_plugin_mac: bool` (serde default `false`). Task 3 reads it.
 
-- [ ] **Step 1: Write failing integration tests.** Append to `tests/integration/test_mac.rs`. Use sockets and ports unique to this file (19502–19505); check for collisions with `command grep -rn '1950[2-5]' tests`.
+- [x] **Step 1: Write failing integration tests.** Append to `tests/integration/test_mac.rs`. Use sockets and ports unique to this file (19502–19505); check for collisions with `command grep -rn '1950[2-5]' tests`.
 
 ```rust
 use vynkor::auth::plugin_key::plugin_mac_secret;
@@ -253,12 +253,12 @@ async fn legacy_flag_accepts_master_secret() {
 
 Also update the existing `secured_kernel_completes_mac_handshake_and_pings`: replace `secret.as_bytes()` in its `connect_with_secret` call with `plugin_mac_secret(secret.as_bytes(), "mac-plugin").as_bytes()`. Keep `create_test_token(..., secret.as_bytes(), ...)` on the master: JWTs are still signed by the master. Check that `start_kernel_with_config` is `pub` in `helpers.rs` and returns the same tuple; if it is private, make it `pub`.
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `cargo test --test integration test_mac`
 Expected: compile error "no field `legacy_plugin_mac`". Once the field exists, `derived_plugin_secret_completes_handshake`, `master_secret_client_rejected_by_default` and the updated handshake test must FAIL. The other two may pass for the wrong reason.
 
-- [ ] **Step 3: Add the config field** in `src/utils/config.rs`, right after `allow_no_auth`:
+- [x] **Step 3: Add the config field** in `src/utils/config.rs`, right after `allow_no_auth`:
 
 ```rust
     /// Migration escape hatch: when true, local plugins MAC their frames with
@@ -272,9 +272,9 @@ Expected: compile error "no field `legacy_plugin_mac`". Once the field exists, `
 
 If `Config` has a manual `Default` impl or struct literals (`test_config` in `tests/integration/helpers.rs`, and any others: `command grep -rn 'allow_no_auth:' src tests`), add `legacy_plugin_mac: false` next to each `allow_no_auth:`.
 
-- [ ] **Step 4: Thread the flag into the router.** The router receives `mac_secret: Option<Arc<Vec<u8>>>` in its run/constructor fn (`router.rs` ~line 82) and passes `&mac_secret` into `handle_kernel_message` (~line 266). Add a `legacy_plugin_mac: bool` parameter right after `mac_secret` at the constructor, at the `handle_kernel_message` signature (~line 328) and at every call site (`command grep -n 'handle_kernel_message(' src`). In `src/kernel/orchestrator/mod.rs`, pass `config.legacy_plugin_mac` right after `mac_secret` (~line 202).
+- [x] **Step 4: Thread the flag into the router.** The router receives `mac_secret: Option<Arc<Vec<u8>>>` in its run/constructor fn (`router.rs` ~line 82) and passes `&mac_secret` into `handle_kernel_message` (~line 266). Add a `legacy_plugin_mac: bool` parameter right after `mac_secret` at the constructor, at the `handle_kernel_message` signature (~line 328) and at every call site (`command grep -n 'handle_kernel_message(' src`). In `src/kernel/orchestrator/mod.rs`, pass `config.legacy_plugin_mac` right after `mac_secret` (~line 202).
 
-- [ ] **Step 5: Change the IKM selection** in `router.rs`. It currently reads:
+- [x] **Step 5: Change the IKM selection** in `router.rs`. It currently reads:
 
 ```rust
                     let ikm: &[u8] = match &device_secret {
@@ -305,13 +305,13 @@ Replace with:
 
 Also update the comment in `orchestrator/mod.rs` above `let mac_secret` ("the same secret used for JWT") so it says local plugins get a per-plugin key derived from it.
 
-- [ ] **Step 6: Run tests**
+- [x] **Step 6: Run tests**
 
 Run: `cargo test --test integration test_mac`
 Expected: all MAC tests pass (the 2 existing + 4 new).
 Then `cargo test --test integration` and `cargo test --test unit` must stay green. Any other test that connects with the raw master secret now fails. Fix each one by switching it to `plugin_mac_secret(master, <its plugin_id>)`; do not flip it to legacy mode. List what you changed in the commit body. To find them: `command grep -rn 'connect_with_secret\|VYN_JWT_SECRET' tests`. `sdk_harness.rs`, `test_sdk_python.rs` and `test_sdk_cpp.rs` may set `VYN_JWT_SECRET` on a child process; give them the derived value for the plugin_id they register.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add -A src tests

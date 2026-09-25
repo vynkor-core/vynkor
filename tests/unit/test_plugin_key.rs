@@ -7,17 +7,27 @@ const KAT_K_P: &str = "c22d6e2a62c9c0d1b5a47bcf98de02eb4ce12af214d672506ec2dbebf
 fn derived_secret_is_64_lowercase_hex() {
     let s = plugin_mac_secret(MASTER, "telegram");
     assert_eq!(s.len(), 64);
-    assert!(s.chars().all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)), "{s}");
+    assert!(
+        s.chars()
+            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
+        "{s}"
+    );
 }
 
 #[test]
 fn derived_secret_is_deterministic() {
-    assert_eq!(plugin_mac_secret(MASTER, "agent"), plugin_mac_secret(MASTER, "agent"));
+    assert_eq!(
+        plugin_mac_secret(MASTER, "agent"),
+        plugin_mac_secret(MASTER, "agent")
+    );
 }
 
 #[test]
 fn derived_secret_differs_per_plugin() {
-    assert_ne!(plugin_mac_secret(MASTER, "agent"), plugin_mac_secret(MASTER, "telegram"));
+    assert_ne!(
+        plugin_mac_secret(MASTER, "agent"),
+        plugin_mac_secret(MASTER, "telegram")
+    );
 }
 
 #[test]

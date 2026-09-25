@@ -15,6 +15,7 @@ use prost::Message as _;
 use vynkor::auth::device_store::DeviceStore;
 use vynkor::auth::frame_mac::derive_session_key;
 use vynkor::auth::jwt::mint_device_token;
+use vynkor::auth::plugin_key::plugin_mac_secret;
 use vynkor::events::bus::EventBus;
 use vynkor::ipc::connection::Outbound;
 use vynkor::ipc::framing::Frame;
@@ -108,6 +109,7 @@ fn spawn_router_with_store(
         None,
         None,
         mac_secret,
+        false, // legacy_plugin_mac
         None,
         None,
         None,
@@ -258,7 +260,7 @@ async fn expired_device_registration_is_rejected() {
 }
 
 #[tokio::test]
-async fn local_plugins_still_derive_from_master_secret() {
+async fn local_plugins_derive_from_per_plugin_key() {
     let fx = fixture();
     // local plugin: token sub = plugin_id, registration carries NO device_id
     let token = mint("local-plugin", 600);
@@ -268,8 +270,17 @@ async fn local_plugins_still_derive_from_master_secret() {
     let installed = recv_installed_key(&mut write_rx).await;
     assert_eq!(
         installed,
+        derive_session_key(
+            plugin_mac_secret(MASTER.as_bytes(), "local-plugin").as_bytes(),
+            &ack.session_nonce,
+            "local-plugin"
+        ),
+        "empty-device_id registrations derive from plugin_mac_secret(master, plugin_id)"
+    );
+    assert_ne!(
+        installed,
         derive_session_key(MASTER.as_bytes(), &ack.session_nonce, "local-plugin"),
-        "empty-device_id registrations keep the master-secret derivation"
+        "the master secret must never be a local plugin's MAC IKM"
     );
 }
 
