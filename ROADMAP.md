@@ -1686,11 +1686,14 @@ UX-2/UX-4 (2026-08-24), UX-3 (PR #68); PERF-4 partial (PR #68).
   window). Test now asserts the real guarantee — no fd of this process is a
   LISTEN socket on the port (`/proc/net/tcp` + `/proc/self/fd`), with a
   positive control before shutdown. No retries; mutation-checked.
-- [ ] **K-08 — `test_sdk_cpp` (4 tests) fail: "action not found".** Fails on
-  0c1fa35 too (pre-dates Phase 15), only where `../vynkor-sdk-cpp` is
-  checked out (skipped in worktrees/CI without it). Likely the cpp echo
-  plugin vs current wire (F4 proto sync 41b6924) — investigate in
-  `vynkor-sdk-cpp`.
+- [x] **K-08 — `test_sdk_cpp` (4 tests) fail: "action not found".** FIXED
+  (v0.1.2). Root cause: stale local artifact, not a wire/kernel break. The
+  `../vynkor-sdk-cpp/build/echo_plugin` was built 2026-08-28 from an
+  uncommitted mid-rename working tree (`chore/rename-veyron-remnants`). A
+  fresh build of the then-committed SDK (`e229dc0`) and of current `main`
+  both pass 4/4 against the current kernel, so no compat regression. The
+  test harness now refuses an `echo_plugin` older than the SDK sources and
+  panics with the rebuild command instead of failing opaquely.
 
 ## Phase 15 — Client-driven tasks (CD) (2026-09-24)
 

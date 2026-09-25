@@ -23,13 +23,50 @@ fn echo_plugin_binary() -> Option<std::path::PathBuf> {
         return path.exists().then_some(path);
     }
     let cwd = std::env::current_dir().ok()?;
-    [
+    let bin = [
         "../vynkor-sdk-cpp/build/echo_plugin",
         "../vynkor-sdk-cpp/build/examples/echo_plugin",
     ]
     .into_iter()
     .map(|rel| cwd.join(rel))
-    .find(|p| p.exists())
+    .find(|p| p.exists())?;
+    // K-08: a leftover build from an older checkout failed as a baffling
+    // "action not found" — refuse it loudly instead of testing stale code
+    let sdk = cwd.join("../vynkor-sdk-cpp");
+    let built = mtime(&bin);
+    if let Some(src) = ["src", "include", "examples", "proto", "CMakeLists.txt"]
+        .into_iter()
+        .filter_map(|rel| newest_mtime(&sdk.join(rel)))
+        .max()
+        .filter(|&src| src > built)
+    {
+        panic!(
+            "{} is older than the vynkor-sdk-cpp sources ({:?} < {:?}) — rebuild: \
+             cmake --build ../vynkor-sdk-cpp/build --target echo_plugin",
+            bin.display(),
+            built,
+            src
+        );
+    }
+    Some(bin)
+}
+
+fn mtime(path: &std::path::Path) -> std::time::SystemTime {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .expect("stat echo_plugin binary")
+}
+
+/// newest mtime of a file, or of any file under a directory (recursive).
+fn newest_mtime(path: &std::path::Path) -> Option<std::time::SystemTime> {
+    let meta = std::fs::metadata(path).ok()?;
+    if !meta.is_dir() {
+        return meta.modified().ok();
+    }
+    std::fs::read_dir(path)
+        .ok()?
+        .filter_map(|e| newest_mtime(&e.ok()?.path()))
+        .max()
 }
 
 /// Spawn the real C++ echo plugin binary, send ActionRequest, verify ActionResponse.
