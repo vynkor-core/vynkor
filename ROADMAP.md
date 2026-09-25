@@ -48,7 +48,7 @@ action name (`chat_completion`, stt/tts, quotas) lives in `vynkor-plugins`.
 |------|------------------|----------------------|
 | CD-00 | `ai` `list_models`/`list_agents` + `plugin.json` output schema is the contract; no proto change | vynkor-plugins (`ai`) |
 | CD-01 | HTTP `POST /devices/pair` + unauth rate-limited `POST /devices/consume`; hashed `tickets.json`; WS untouched | kernel |
-| CD-02 | kernel DONE; symmetric per-device secret (Ed25519 → future v3) | SDKs + client |
+| CD-02 | DONE; symmetric per-device secret (Ed25519 → future v3) | kernel + SDKs + client |
 | CD-03 | reuse `ActionResponseChunk` streaming; `ChatDelta` dropped | vynkor-plugins (`ai`, `network`) |
 | CD-04 | owner = `agent` plugin; downlink via `{device_id}.*` actions | vynkor-plugins (`agent`, `stt`) + client |
 | CD-05 | recipient = provider device; router already stamps `caller_plugin_id` | kernel (regression test) + client |
@@ -61,11 +61,11 @@ action name (`chat_completion`, stt/tts, quotas) lives in `vynkor-plugins`.
       `display_name`, contract test (**vynkor-plugins**; kernel: none).
 - [x] CD-01 — pairing ticket (**kernel**). SHIPPED 2026-09-25 (d677a02):
       `POST /devices/pair` + `/devices/consume`, `vyn device pair`.
-- [x] CD-02 — per-device keys, **kernel side**. Rust SDK done
-      (`connect_ws_device`, `VYN_DEVICE_ID`/`VYN_DEVICE_SECRET`, strict env
-      policy — vynkor-sdk PR #16). Remaining: sdk-cpp `resolve_jwt_secret` →
-      device-secret naming; Python SDK `device_secret`; client
-      `HostProfile.jwtSecret` → `deviceSecret`.
+- [x] CD-02 — per-device keys. **DONE** 2026-09-25 across kernel, SDKs and
+      client: `connect_ws_device` + `VYN_DEVICE_ID`/`VYN_DEVICE_SECRET` with
+      one strict env policy in Rust (vynkor-sdk #16, **0.0.4** on crates.io),
+      C++ (vynkor-sdk-cpp #9) and Python (vynkor-sdk-python #10); Android
+      client already on `deviceSecret`.
 - [ ] CD-03 — token streaming + cancel (**vynkor-plugins**; kernel: none).
 - [ ] CD-04 — assistant session in `agent`; stt partial transcripts
       (**vynkor-plugins** + client; kernel: none).

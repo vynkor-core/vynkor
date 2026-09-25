@@ -74,6 +74,6 @@ Each file below is one task with plan, files, complexity and acceptance:
   - `docs/tasks/CD-04-assistant-session.md` — assistant session
 
 - **Track D (cross-repo):**
-  - `docs/tasks/CD-02-per-device-keys.md` — E-01 (DONE in kernel)
+  - `docs/archive/tasks/CD-02-per-device-keys.md` — E-01 (DONE everywhere)
 
 > All tasks follow `REMOTE_DEVICES_ROADMAP.md` / `ROADMAP.md` style: checkbox, `Files:`, `Acceptance:`, estimate.

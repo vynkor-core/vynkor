@@ -7,7 +7,8 @@
 > rejected Ed25519 — the Ed25519 / wire-1.8 challenge item is removed here and
 > parked as "future v3". Plugins: nothing to do.
 >
-> **Status:** kernel DONE. Remaining: SDKs + client naming/support (below).
+> **Status (2026-09-25): DONE** across kernel, all three SDKs and the
+> Android client. `vynkor-sdk` 0.0.4 published to crates.io.
 
 ## Goal
 
@@ -32,20 +33,23 @@ Compromise of a phone ≠ compromise of the host. The phone holds only its own
 - Wire v1.7 — `DeviceState::REVOKED`, `DeviceInfo{created, expires}`.
 - Rotating `jwt_secret` intentionally invalidates all paired devices (re-pair).
 
-## Remaining (cross-repo)
+## Cross-repo (all done)
 
-- [ ] **vynkor-sdk-cpp:** `resolve_jwt_secret` (`include/vynkor/env.hpp:21`,
-      used at `include/vynkor/plugin.hpp:75,88`) — for remote devices resolve
-      the per-device secret under device-secret naming (e.g. `VYN_DEVICE_SECRET`),
-      not `jwt_secret`.
 - [x] **vynkor-sdk (Rust):** `VynkorClient::connect_ws_device` /
       `with_device_id` send `PluginRegister.device_id`; `Plugin::run_ws` reads
       `VYN_DEVICE_ID` + `VYN_DEVICE_SECRET`. Env policy is strict: a half-set
       pair, or `VYN_JWT_SECRET` next to a device pair, is an error (vynkor-sdk
-      PR #16). C++/Python should mirror the same names and policy.
-- [ ] **vynkor-sdk-python:** first-class `device_secret` support for
-      remote-device clients (session-key derivation + frame MAC).
-- [ ] **vynkor-client-android:** rename `HostProfile.jwtSecret` → `deviceSecret`.
+      PR #16; published as **0.0.4**, kernel dev-dep bumped in vynkor PR #99).
+- [x] **vynkor-sdk-cpp:** `set_device_id` / `connect_ws_device`,
+      `resolve_ws_credentials(_from_env)` — same names and strict policy;
+      `resolve_jwt_secret` kept for host-side plugins (vynkor-sdk-cpp PR #9).
+- [x] **vynkor-sdk-python:** `with_device_id` / `connect_ws_device`,
+      `resolve_ws_credentials` — same names and policy (vynkor-sdk-python
+      PR #10).
+- [x] **vynkor-client-android:** already on `deviceSecret`
+      (`HostProfile`/`PairingApplier`/`AgentService`); its Rust core sends
+      `device_id` at registration and keys the MAC off the device secret
+      (`rust/src/transport.rs`) — verified 2026-09-25.
 - `vynkor-plugins`: nothing — host plugins register as `device_id="local"`.
 
 No proto change: all 3 proto copies (`vynkor-wire`, `vynkor-sdk-cpp`,
@@ -60,5 +64,5 @@ asymmetric trust model is needed; out of scope for v1 per the RFC.
 | | Estimate |
 |---|---|
 | **Kernel** | DONE |
-| **Remaining** | ~6–10h across SDKs + client (naming + device-secret plumbing) |
+| **SDKs + client** | DONE (2026-09-25) |
 | **Depends on** | None; CD-01 builds on this |
