@@ -128,7 +128,7 @@ otel = ["tracing-opentelemetry", "opentelemetry", "opentelemetry_sdk", "opentele
 tokio = { version = "1", features = ["test-util"] }
 clap_complete = "4"
 crc32fast = "1"
-vynkor-sdk = "0.0.3"
+vynkor-sdk = "0.0.4"
 tower = "0.5"
 mockito = "1"
 tempfile = "3"
