@@ -24,6 +24,14 @@ pub enum TokenCmd {
         #[arg(long)]
         aud: Option<String>,
     },
+    /// Print the per-plugin frame-MAC secret for a plugin the kernel does not
+    /// spawn itself (dev runs, external harnesses). Set it as VYN_JWT_SECRET.
+    /// Supervised plugins get it injected automatically.
+    PluginSecret {
+        /// The plugin_id the process registers as.
+        #[arg(long)]
+        plugin: String,
+    },
 }
 
 pub async fn handle(cmd: TokenCmd, config_path: &str) -> anyhow::Result<()> {
@@ -61,6 +69,13 @@ pub async fn handle(cmd: TokenCmd, config_path: &str) -> anyhow::Result<()> {
             )
             .map_err(anyhow::Error::msg)?;
             println!("{token}");
+            Ok(())
+        }
+        TokenCmd::PluginSecret { plugin } => {
+            println!(
+                "{}",
+                crate::auth::plugin_key::plugin_mac_secret(secret.as_bytes(), &plugin)
+            );
             Ok(())
         }
     }

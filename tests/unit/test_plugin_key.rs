@@ -50,3 +50,14 @@ fn derived_secret_known_answer() {
     // silent change breaks every deployed plugin loudly here instead.
     assert_eq!(plugin_mac_secret(b"k", "p"), KAT_K_P);
 }
+
+#[test]
+fn cli_plugin_secret_known_answer() {
+    // `vyn token plugin-secret --plugin demo` with
+    // jwt_secret "cli-test-master-secret-at-least-32-bytes" printed this value
+    // (cross-checked against an independent Python HKDF-SHA256)
+    assert_eq!(
+        plugin_mac_secret(b"cli-test-master-secret-at-least-32-bytes", "demo"),
+        "596d53bee779c426d1eb6040f3e5c8d6912e2ebcc4d2e92a8185b72b24eb2a03"
+    );
+}

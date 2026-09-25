@@ -44,7 +44,8 @@ pub enum Commands {
         #[arg(long)]
         token: Option<String>,
     },
-    /// Mint JWTs offline (D-07) — per-device tokens for remote device agents.
+    /// Mint JWTs offline (D-07) — per-device tokens for remote device agents —
+    /// and print per-plugin frame-MAC secrets for externally launched plugins.
     /// Reads jwt_secret from the config file; the kernel need not be running.
     Token {
         #[command(subcommand)]

@@ -22,12 +22,18 @@ what is actually implemented, not a design wish-list.
 | JWTs + shared HS256 `jwt_secret` | kernel config + issued tokens | all identity and authorization |
 | Plugin registry + devices map | kernel memory (`DashMap`) | plugin topology and permissions |
 | Event bus + event store | kernel + SQLite `events.db` | at-least-once delivery state |
-| Plugin configs + credentials | `plugins.d/*.yaml`, env (`VYN_JWT_TOKEN`/`VYN_JWT_SECRET`) | the operator's grants |
+| Plugin configs + credentials | `plugins.d/*.yaml`, env (`VYN_JWT_TOKEN` + a **per-plugin** `VYN_JWT_SECRET` injected by the supervisor) | the operator's grants |
 | AI tool-calling surface (`action_specs`) | registry-served manifest data (D-08) | what the model can reach |
 | User data in flight | protobuf payloads through plugins | end-user content |
 
 The crown jewels are the shared `jwt_secret` (compromise equals forging any
 identity) and the credentials a compromised plugin holds.
+Since 2026-09-25 local plugins never receive it: each gets
+`plugin_mac_secret(jwt_secret, plugin_id)` (HKDF-SHA256, salt
+`vynkor-plugin-mac-v1`), which MACs frames for that plugin_id only and cannot
+sign JWTs. `legacy_plugin_mac: true` restores the old exposure for migration.
+Plugins the kernel does not spawn get theirs from
+`vyn token plugin-secret --plugin <id>`.
 
 ## Actors
 
@@ -177,5 +183,8 @@ schema it reads.
   (`crossbeam-epoch` RUSTSEC) are closed — see the external-attacker residual.
   None of these changes the controls above; they are hardening debt, not new
   exposures.
-- **Operator opt-outs.** `allow_no_auth: true` and `tls: false` exist for
+- **Long-lived plugin tokens.** Plugins' `VYN_JWT_TOKEN`s are long-lived (exp
+  ~2036 in the reference deployment). A stolen token is still replayable by a
+  process that also has that plugin's derived key.
+- **Operator opt-outs.** `allow_no_auth: true`, `legacy_plugin_mac: true` and `tls: false` exist for
   explicit downgrade; running either is a deliberate, documented posture change.

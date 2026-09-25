@@ -501,7 +501,7 @@ git commit -m "feat(supervisor): inject the per-plugin MAC key as VYN_JWT_SECRET
 - Consumes: `plugin_mac_secret`.
 - Produces: `TokenCmd::PluginSecret { plugin: String }`, which prints `plugin_mac_secret(jwt_secret, plugin)`.
 
-- [ ] **Step 1: Add the subcommand** to `TokenCmd` in `src/cli/token.rs`:
+- [x] **Step 1: Add the subcommand** to `TokenCmd` in `src/cli/token.rs`:
 
 ```rust
     /// Print the per-plugin frame-MAC secret for a plugin the kernel does not
@@ -523,12 +523,12 @@ and a match arm in `handle`:
         }
 ```
 
-- [ ] **Step 2: Verify manually**
+- [x] **Step 2: Verify manually**
 
 Run: `cargo run -q -- token --help` (check how `vyn token` is wired in `src/cli/mod.rs` ~line 49 for the exact config flag) and then `cargo run -q -- token plugin-secret --plugin demo` with a temp config holding `jwt_secret: "cli-test-master-secret-at-least-32-bytes"`.
 Expected: 64 hex chars, equal to `plugin_mac_secret(b"cli-test-master-secret-at-least-32-bytes", "demo")`. Assert that with a one-off `#[test]` in `tests/unit/test_plugin_key.rs` if the CLI exposes a callable fn; otherwise record the manual output in the commit body.
 
-- [ ] **Step 3: Docs.** In `docs/THREAT_MODEL.md`:
+- [x] **Step 3: Docs.** In `docs/THREAT_MODEL.md`:
   - asset row "Plugin configs + credentials": env is now `VYN_JWT_TOKEN` + a **per-plugin** `VYN_JWT_SECRET` injected by the supervisor;
   - after "The crown jewels are the shared `jwt_secret`…" add: "Since 2026-09-25 local plugins never receive it: each gets `plugin_mac_secret(jwt_secret, plugin_id)` (HKDF-SHA256, salt `vynkor-plugin-mac-v1`), which MACs frames for that plugin_id only and cannot sign JWTs. `legacy_plugin_mac: true` restores the old exposure for migration.";
   - Residual risk: add "Plugins' `VYN_JWT_TOKEN`s are long-lived (exp ~2036 in the reference deployment). A stolen token is still replayable by a process that also has that plugin's derived key."
@@ -541,12 +541,12 @@ Expected: 64 hex chars, equal to `plugin_mac_secret(b"cli-test-master-secret-at-
 #   # legacy_plugin_mac: true
 ```
 
-- [ ] **Step 4: Full suite + clippy**
+- [x] **Step 4: Full suite + clippy**
 
 Run: `cargo test --lib && cargo test --test unit && cargo test --test integration && cargo clippy --all-targets -- -D warnings`
 Expected: green. If clippy fails on code this plan did not touch, note it in the report instead of fixing it.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/cli/token.rs docs/THREAT_MODEL.md config.yaml tests/unit

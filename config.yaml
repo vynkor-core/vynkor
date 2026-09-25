@@ -9,6 +9,9 @@ log_file: /run/user/1000/vyn.log
 
 # Authentication is required to start. For production, set a JWT secret:
 #   jwt_secret: "<a long random secret>"
+#   # Local plugins get a per-plugin frame-MAC key injected as VYN_JWT_SECRET;
+#   # do NOT put the master jwt_secret in plugins.d. Migration only:
+#   # legacy_plugin_mac: true
 #
 # This dev config opts out of auth instead. INSECURE: any local process can
 # register as any plugin and reach the control plane. Do NOT use in production —
