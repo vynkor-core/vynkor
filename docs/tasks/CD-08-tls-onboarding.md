@@ -8,7 +8,7 @@
 > fingerprint** printed by `vyn device connect` / `vyn device pair` and by a
 > new `vyn tls status`. No ACME client in the kernel, no wire change.
 >
-> **Status:** decided, in progress (kernel branch).
+> **Status:** DONE 2026-09-25 (kernel, 30dc367).
 
 ## Goal
 

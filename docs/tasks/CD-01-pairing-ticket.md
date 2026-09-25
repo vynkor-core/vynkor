@@ -13,7 +13,7 @@
 > per-device secret (see CD-02). `vyn device pair` prints the link; QR
 > rendering is `vyn-pair`'s job (K-05).
 >
-> **Status:** decided, in progress (kernel branch).
+> **Status:** DONE 2026-09-25 (kernel, d677a02).
 
 ## Goal
 

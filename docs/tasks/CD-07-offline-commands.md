@@ -12,7 +12,7 @@
 > 2. **fail in-flight actions immediately** when their provider disconnects,
 >    instead of letting them run to `action_timeout_ms`.
 >
-> **Status:** decided, in progress (kernel branch).
+> **Status:** DONE 2026-09-25 (kernel, 7e0a4a1).
 
 ## Already Exists
 

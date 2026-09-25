@@ -12,8 +12,8 @@
 > The kernel only adds a regression test guaranteeing the stamping for
 > device targets.
 >
-> **Status:** decided, in progress (kernel regression test on another branch;
-> client-side log is `vynkor-client-android` work).
+> **Status:** kernel DONE 2026-09-25 (19ef1c9, regression test). Remaining:
+> client-side audit log (`vynkor-client-android`).
 
 ## Goal
 

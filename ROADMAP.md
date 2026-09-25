@@ -1677,6 +1677,19 @@ UX-2/UX-4 (2026-08-24), UX-3 (PR #68); PERF-4 partial (PR #68).
   - Not scheduled — raise before picking up, low urgency until a real
     workload needs the split.
 
+- [ ] **K-07 — `kernel_shutdown_closes_api_listener_within_bound` flaky under
+  parallel load.** Passes alone and with `--test-threads=1`; in the full
+  parallel `--test unit` run the post-shutdown reconnect sometimes succeeds
+  although `ss` a moment later shows no listener on the port — the listener
+  closes slightly after `run_with_shutdown` returns. Decide whether shutdown
+  must guarantee the fd is closed on return (fix in `shutdown.rs`) or the
+  test should poll for refusal. Do not mask with retries before deciding.
+- [ ] **K-08 — `test_sdk_cpp` (4 tests) fail: "action not found".** Fails on
+  0c1fa35 too (pre-dates Phase 15), only where `../vynkor-sdk-cpp` is
+  checked out (skipped in worktrees/CI without it). Likely the cpp echo
+  plugin vs current wire (F4 proto sync 41b6924) — investigate in
+  `vynkor-sdk-cpp`.
+
 ## Phase 15 — Client-driven tasks (CD) (2026-09-24)
 
 Specs: `docs/tasks/CD-*.md` (source:
@@ -1699,20 +1712,22 @@ action name (`chat_completion`, stt/tts, quotas) lives in `vynkor-plugins`.
 
 - [ ] CD-00 — strip `api_key_env` from `list_models` output, optional
       `display_name`, contract test (**vynkor-plugins**; kernel: none).
-- [ ] CD-01 — pairing ticket (**kernel**). *Decided, in progress.*
+- [x] CD-01 — pairing ticket (**kernel**). SHIPPED 2026-09-25 (d677a02):
+      `POST /devices/pair` + `/devices/consume`, `vyn device pair`.
 - [x] CD-02 — per-device keys, **kernel side**. Remaining: sdk-cpp
       `resolve_jwt_secret` → device-secret naming; Rust/Python SDK
       `device_secret`; client `HostProfile.jwtSecret` → `deviceSecret`.
 - [ ] CD-03 — token streaming + cancel (**vynkor-plugins**; kernel: none).
 - [ ] CD-04 — assistant session in `agent`; stt partial transcripts
       (**vynkor-plugins** + client; kernel: none).
-- [ ] CD-05 — `caller_plugin_id` stamping regression test for device targets
-      (**kernel**) + client audit log. *Decided, in progress.*
-- [ ] CD-06 — protocol range `[1.5, PROTOCOL_VERSION]` (**kernel**).
-      *Decided, in progress.*
-- [ ] CD-07 — offline message + fail in-flight on disconnect (**kernel**).
-      *Decided, in progress.*
-- [ ] CD-08 — TLS docs + fingerprint (**kernel**). *Decided, in progress.*
+- [x] CD-05 — `caller_plugin_id` stamping regression test for device targets
+      (**kernel**, 19ef1c9). Remaining: client-side audit log (android).
+- [x] CD-06 — protocol range `[1.5, PROTOCOL_VERSION]` (**kernel**, 272e48b).
+      `PluginRegisterAck` negotiated/min fields deferred to next wire release.
+- [x] CD-07 — offline message + fail in-flight on disconnect (**kernel**,
+      7e0a4a1).
+- [x] CD-08 — TLS docs + fingerprint (**kernel**, 30dc367): `docs/TLS.md`,
+      `vyn tls status`; explicit `--host wss://` survives `tls: false`.
 - [ ] CD-09 — per-caller `chat_completion` quota (**vynkor-plugins**;
       kernel: none — existing generic `action_caller_*` limits stay).
 

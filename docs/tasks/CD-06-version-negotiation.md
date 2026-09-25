@@ -10,7 +10,7 @@
 > `negotiated_version` / `min_supported_version` (free tags 5, 6) are deferred
 > to the next wire release.
 >
-> **Status:** decided, in progress (kernel branch).
+> **Status:** DONE 2026-09-25 (kernel, 272e48b).
 
 ## Goal
 
