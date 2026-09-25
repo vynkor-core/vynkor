@@ -18,34 +18,14 @@
 //! router re-reads the store on every registration and the WS gateway on every
 //! upgrade.
 
-use std::io::Write;
-use std::net::{IpAddr, UdpSocket};
-
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use base64::Engine as _;
 use clap::Subcommand;
-use serde::Serialize;
 
 use crate::auth::device_store::{DeviceStatus, DeviceStore};
+use crate::auth::pairing::{
+    default_device_permissions, encode_pair_link, PairPayload, TicketLinkPayload, TicketView,
+};
 use crate::utils::config::{effective_tls_cert_path, load_config, Config};
-
-/// The JSON document encoded (deflate-compressed, base64url) as
-/// `vynkor://pair?d=...&z=1`. The app decodes it into a host profile and
-/// connects. `cert_pem` is present only when the kernel serves TLS (D-07
-/// default), so the agent can pin it and use `wss://` against a self-signed
-/// cert instead of falling back to `tls: false`.
-#[derive(Serialize)]
-struct PairPayload {
-    v: u32,
-    name: String,
-    host_url: String,
-    device_id: String,
-    jwt_token: String,
-    /// per-device secret issued by THIS host — never the master jwt_secret
-    device_secret: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    cert_pem: Option<String>,
-}
+use crate::utils::url::{is_loopback_url, resolve_advertise_url};
 
 #[derive(Subcommand)]
 pub enum DeviceCmd {
@@ -77,6 +57,28 @@ pub enum DeviceCmd {
         /// Audience claim. Default: config `jwt_audience`, else "vynkor".
         #[arg(long)]
         aud: Option<String>,
+    },
+    /// Mint a single-use pairing ticket on the running kernel (CD-01) and
+    /// print a `vynkor://pair` link carrying just `{v, ws, ticket, cert_pem?}`.
+    /// The app trades the ticket for its own credential via
+    /// `POST /devices/consume` — no secrets in the QR. Pipe to `vyn-pair`
+    /// for a QR code.
+    Pair {
+        /// Ticket lifetime: seconds, or with a unit (`90s`, `5m`, `1h`).
+        /// Clamped to 1h by the kernel.
+        #[arg(long, default_value = "5m", value_parser = parse_duration_secs)]
+        ttl: u64,
+        /// Display name saved on the device once it pairs.
+        #[arg(long)]
+        name: Option<String>,
+        /// Host address the phone connects to — LAN IP, Tailscale name/100.x,
+        /// or a full `ws(s)://` URL. Default: kernel auto-detects its LAN IP.
+        #[arg(long)]
+        host: Option<String>,
+        /// Kernel-admin JWT. Falls back to VYN_JWT_TOKEN, else a 60s admin
+        /// token is minted locally from config jwt_secret.
+        #[arg(long)]
+        token: Option<String>,
     },
     /// List paired device credentials (from the local store), merged with live
     /// state from the running kernel when reachable.
@@ -125,6 +127,16 @@ pub async fn handle(cmd: DeviceCmd, config_path: &str) -> anyhow::Result<()> {
             )?;
             Ok(())
         }
+        DeviceCmd::Pair {
+            ttl,
+            name,
+            host,
+            token,
+        } => {
+            let token = token.or_else(|| std::env::var("VYN_JWT_TOKEN").ok());
+            pair(ttl, name, host, token, config_path).await?;
+            Ok(())
+        }
         DeviceCmd::List { offline } => list(offline, config_path).await,
         DeviceCmd::Revoke { device_id, undo } => revoke(&device_id, undo, config_path),
         DeviceCmd::Remove { device_id } => remove(&device_id, config_path),
@@ -169,19 +181,17 @@ fn connect(opts: ConnectOpts, config_path: &str) -> anyhow::Result<String> {
 
     let device_id = device.unwrap_or_else(random_device_id);
     let name = name.unwrap_or_else(|| device_id.clone());
-    let host_url = resolve_advertise_url(&cfg, host.as_deref())?;
+    let host_url = resolve_advertise_url(cfg.port, cfg.tls, host.as_deref())?;
+    warn_if_loopback(&host_url);
 
     // E-01: mint the per-device credential FIRST — a failure here must not
     // leave a half-paired device behind (token exists, row missing).
     let store = DeviceStore::new(&cfg.data_dir, &secret);
     let device_secret = store.issue(&device_id, &name, ttl_seconds)?;
 
-    let perms = permissions.map(parse_csv).unwrap_or_else(|| {
-        vec![
-            "PERMISSION_IPC_SEND".to_string(),
-            "PERMISSION_EVENT_PUBLISH".to_string(),
-        ]
-    });
+    let perms = permissions
+        .map(parse_csv)
+        .unwrap_or_else(default_device_permissions);
     let targets = ipc_targets.map(parse_csv).unwrap_or_default();
     let audience = aud
         .or(cfg.jwt_audience.clone())
@@ -217,13 +227,7 @@ fn connect(opts: ConnectOpts, config_path: &str) -> anyhow::Result<String> {
         device_secret,
         cert_pem,
     };
-    let json = serde_json::to_string(&payload)?;
-    // deflate + base64url: the cert dominates the payload and the in-app
-    // scanner chokes past QR version ~33; `z=1` tells the agent to inflate.
-    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
-    encoder.write_all(json.as_bytes())?;
-    let compressed = encoder.finish()?;
-    let link = format!("vynkor://pair?z=1&d={}", URL_SAFE_NO_PAD.encode(compressed));
+    let link = encode_pair_link(&payload)?;
 
     println!("Pairing link (open on the phone, or render as a QR with `vyn-pair`):\n");
     println!("{link}\n");
@@ -232,6 +236,101 @@ fn connect(opts: ConnectOpts, config_path: &str) -> anyhow::Result<String> {
     println!("credential expires in {ttl_seconds}s; revoke anytime: vyn device revoke {device_id}");
 
     Ok(link)
+}
+
+/// CD-01: thin client over `POST /devices/pair` — the running kernel owns the
+/// ticket store, so this never touches tickets.json itself.
+async fn pair(
+    ttl_secs: u64,
+    name: Option<String>,
+    host: Option<String>,
+    token: Option<String>,
+    config_path: &str,
+) -> anyhow::Result<String> {
+    let cfg = load_config(config_path)?;
+    let token = match token {
+        Some(t) => t,
+        None => local_admin_token(&cfg, config_path)?,
+    };
+    let scheme = if cfg.tls { "https" } else { "http" };
+    let base = format!("{scheme}://127.0.0.1:{}", cfg.port);
+    let cert = effective_tls_cert_path(&cfg);
+    let client = super::plugin::build_client(cfg.tls, cert.as_deref())?;
+    let body = serde_json::json!({ "ttl_secs": ttl_secs, "name": name, "host": host });
+    let resp =
+        super::plugin::api_post_json(&client, &base, "/devices/pair", Some(&token), &body).await?;
+    let view: TicketView = serde_json::from_str(&resp)?;
+    warn_if_loopback(&view.ws);
+
+    let link = encode_pair_link(&TicketLinkPayload {
+        v: view.v,
+        ws: view.ws.clone(),
+        ticket: view.ticket,
+        cert_pem: view.cert_pem,
+    })?;
+    println!("Pairing link (single use, open on the phone or render with `vyn-pair`):\n");
+    println!("{link}\n");
+    println!(
+        "ticket for {} expires in {}s (at {} UTC) — link {} chars",
+        view.ws,
+        view.ttl_secs,
+        format_ts(view.expires_at),
+        link.len()
+    );
+    println!("render a scannable QR code: vyn device pair ... | vyn-pair");
+    println!("once scanned, the device shows up in: vyn device list");
+    Ok(link)
+}
+
+/// Short-lived kernel-admin token signed with the local jwt_secret — the
+/// operator running `vyn` on the host can already read that secret.
+fn local_admin_token(cfg: &Config, config_path: &str) -> anyhow::Result<String> {
+    let secret = cfg.jwt_secret.as_ref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "no jwt_secret in '{config_path}' and no --token/VYN_JWT_TOKEN — pairing needs auth"
+        )
+    })?;
+    let audience = cfg
+        .jwt_audience
+        .clone()
+        .unwrap_or_else(|| "vynkor".to_string());
+    Ok(crate::auth::jwt::mint_device_token(
+        secret.as_bytes(),
+        "vyn-cli",
+        vec![crate::proto::vynkor::PermissionType::PermissionKernelAdmin
+            .as_str_name()
+            .to_string()],
+        vec![],
+        60,
+        &audience,
+    )?)
+}
+
+/// `300`, `300s`, `5m`, `1h` → seconds.
+fn parse_duration_secs(s: &str) -> Result<u64, String> {
+    let s = s.trim();
+    let (num, mult) = match s.char_indices().last() {
+        Some((i, 's')) => (&s[..i], 1),
+        Some((i, 'm')) => (&s[..i], 60),
+        Some((i, 'h')) => (&s[..i], 3600),
+        _ => (s, 1),
+    };
+    let n: u64 = num
+        .parse()
+        .map_err(|_| format!("bad duration '{s}' (try 300, 90s, 5m, 1h)"))?;
+    match n.checked_mul(mult) {
+        Some(0) | None => Err(format!("duration '{s}' out of range")),
+        Some(v) => Ok(v),
+    }
+}
+
+fn warn_if_loopback(url: &str) {
+    if is_loopback_url(url) {
+        eprintln!(
+            "⚠️  '{url}' is loopback — the phone cannot reach your host there. \
+             Use a LAN IP or Tailscale name (same Wi-Fi/LAN only works while both are on it)."
+        );
+    }
 }
 
 async fn list(offline: bool, config_path: &str) -> anyhow::Result<()> {
@@ -406,67 +505,6 @@ fn format_ts(epoch_secs: u64) -> String {
     )
 }
 
-/// Resolve the advertise URL the phone should dial. Never loopback — the QR is
-/// scanned by a phone whose `localhost` is itself. A bare `--host` (no port)
-/// gains the config port; a full URL keeps its host/port/path but is
-/// canonicalized to `ws`/`wss`.
-fn resolve_advertise_url(cfg: &Config, host_override: Option<&str>) -> anyhow::Result<String> {
-    let scheme = if cfg.tls { "wss" } else { "ws" };
-    let host = match host_override {
-        Some(h) => h.trim().to_string(),
-        None => {
-            let ip = detect_lan_ip().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "could not auto-detect a LAN address — pass --host (e.g. \
-                     --host 100.64.0.2 or --host myhost.tailnet)"
-                )
-            })?;
-            if ip.is_loopback() {
-                anyhow::bail!(
-                    "detected loopback {ip} — a phone scanning this QR would reach itself. \
-                     Pass --host with a LAN IP or Tailscale name."
-                );
-            }
-            format!("{ip}:{}", cfg.port)
-        }
-    };
-
-    let gave_bare_host = !host.contains("://");
-    let with_scheme = if gave_bare_host {
-        format!("{scheme}://{host}")
-    } else {
-        host.clone()
-    };
-    let mut url =
-        url::Url::parse(&with_scheme).map_err(|e| anyhow::anyhow!("bad --host '{host}': {e}"))?;
-
-    if url.port().is_none() && gave_bare_host {
-        url.set_port(Some(cfg.port)).ok();
-    }
-    if url.path().is_empty() || url.path() == "/" {
-        url.set_path(crate::utils::url::DEFAULT_WS_PATH);
-    }
-    url.set_scheme(scheme)
-        .map_err(|()| anyhow::anyhow!("bad --host '{host}'"))?;
-
-    let host_only = url.host_str().unwrap_or_default();
-    if host_only == "localhost" || host_only == "127.0.0.1" || host_only == "::1" {
-        eprintln!(
-            "⚠️  host '{host_only}' is loopback — the phone cannot reach your host there. \
-             Use a LAN IP or Tailscale name (same Wi-Fi/LAN only works while both are on it)."
-        );
-    }
-
-    Ok(url.to_string())
-}
-
-/// Local egress IP via the UDP-connect trick (no packets actually sent).
-fn detect_lan_ip() -> Option<IpAddr> {
-    let sock = UdpSocket::bind("0.0.0.0:0").ok()?;
-    sock.connect("8.8.8.8:80").ok()?;
-    sock.local_addr().ok().map(|a| a.ip())
-}
-
 fn random_device_id() -> String {
     use rand::Rng;
     let n: u32 = rand::thread_rng().gen();
@@ -483,6 +521,8 @@ fn parse_csv(s: String) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine as _;
 
     fn write_cfg(dir: &std::path::Path, extras: &str) -> String {
         let path = dir.join("config.yaml");
@@ -498,52 +538,84 @@ mod tests {
     }
 
     #[test]
-    fn loopback_host_warns_but_resolves() {
-        let cfg = Config {
-            port: 8080,
-            tls: false,
-            ..Config::default()
-        };
-        let url = resolve_advertise_url(&cfg, Some("localhost:8080")).unwrap();
-        assert_eq!(url, "ws://localhost:8080/ws");
-    }
-
-    #[test]
-    fn bare_host_gets_config_port() {
-        let cfg = Config {
-            port: 25565,
-            tls: false,
-            ..Config::default()
-        };
-        let url = resolve_advertise_url(&cfg, Some("myhost.tailnet")).unwrap();
-        assert_eq!(url, "ws://myhost.tailnet:25565/ws");
-    }
-
-    #[test]
-    fn host_with_explicit_port_keeps_it() {
-        let cfg = Config {
-            port: 25565,
-            tls: true,
-            ..Config::default()
-        };
-        let url = resolve_advertise_url(&cfg, Some("100.64.0.2:8443")).unwrap();
-        assert_eq!(url, "wss://100.64.0.2:8443/ws");
-    }
-
-    #[test]
-    fn full_url_keeps_path_and_drops_default_port() {
-        let cfg = Config {
-            port: 9999,
-            tls: true,
-            ..Config::default()
-        };
-        let url = resolve_advertise_url(&cfg, Some("https://myhost.tailnet:443/ws")).unwrap();
-        assert_eq!(url, "wss://myhost.tailnet/ws");
-    }
-
-    #[test]
     fn random_device_id_has_prefix() {
         assert!(random_device_id().starts_with("dev-"));
+    }
+
+    #[test]
+    fn duration_parses_units() {
+        assert_eq!(parse_duration_secs("300"), Ok(300));
+        assert_eq!(parse_duration_secs("90s"), Ok(90));
+        assert_eq!(parse_duration_secs("5m"), Ok(300));
+        assert_eq!(parse_duration_secs("1h"), Ok(3600));
+        assert!(parse_duration_secs("0").is_err());
+        assert!(parse_duration_secs("5d").is_err());
+        assert!(parse_duration_secs("").is_err());
+    }
+
+    fn decode_link(link: &str) -> serde_json::Value {
+        let encoded = link.strip_prefix("vynkor://pair?z=1&d=").unwrap();
+        let compressed = URL_SAFE_NO_PAD.decode(encoded).unwrap();
+        let mut decoder = flate2::read::ZlibDecoder::new(&compressed[..]);
+        use std::io::Read;
+        let mut json = String::new();
+        decoder.read_to_string(&mut json).unwrap();
+        serde_json::from_str(&json).unwrap()
+    }
+
+    #[tokio::test]
+    async fn pair_posts_to_kernel_and_prints_ticket_link() {
+        let mut server = mockito::Server::new_async().await;
+        let ticket = "t".repeat(43);
+        let mock = server
+            .mock("POST", "/devices/pair")
+            .match_header(
+                "authorization",
+                mockito::Matcher::Regex("^Bearer .+".into()),
+            )
+            .match_body(mockito::Matcher::PartialJson(
+                serde_json::json!({"ttl_secs": 120, "name": "friend"}),
+            ))
+            .with_status(200)
+            .with_body(
+                serde_json::json!({
+                    "v": 2, "ticket": ticket, "ws": "ws://10.0.0.5:8080/ws",
+                    "ttl_secs": 120, "expires_at": 1_700_000_000u64
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let port = server.socket_address().port();
+        let cfg_path = dir.path().join("config.yaml");
+        std::fs::write(
+            &cfg_path,
+            format!(
+                "port: {port}\ntls: false\ndata_dir: {}\njwt_secret: {}\n",
+                dir.path().display(),
+                "s".repeat(40)
+            ),
+        )
+        .unwrap();
+
+        let link = pair(
+            120,
+            Some("friend".into()),
+            None,
+            None,
+            cfg_path.to_str().unwrap(),
+        )
+        .await
+        .unwrap();
+        mock.assert_async().await;
+
+        let v = decode_link(&link);
+        assert_eq!(v["v"], 2);
+        assert_eq!(v["ws"], "ws://10.0.0.5:8080/ws");
+        assert_eq!(v["ticket"], ticket);
+        assert!(v.get("jwt_token").is_none() && v.get("device_secret").is_none());
     }
 
     #[test]

@@ -12,6 +12,7 @@ mod test_kernel;
 mod test_loader;
 mod test_manifest_enforcement;
 mod test_metrics;
+mod test_pairing;
 mod test_permissions;
 mod test_proto;
 mod test_proto_sync;

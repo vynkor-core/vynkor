@@ -20,6 +20,19 @@ pub enum VynkorError {
     Incompatible(String),
     NetworkError(String),
     CacheError(String),
+    /// caller-supplied value rejected (maps to 422 at the api edge)
+    InvalidInput(String),
+    /// cd-01: pairing ticket refused — each maps to a distinct http status
+    Ticket(TicketRejection),
+}
+
+/// Why a pairing ticket was refused. `Unknown` covers never-issued, forged
+/// and swept tickets alike so callers can't probe which one it was.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TicketRejection {
+    Unknown,
+    AlreadyUsed,
+    Expired,
 }
 
 impl fmt::Display for VynkorError {
@@ -46,6 +59,12 @@ impl fmt::Display for VynkorError {
             VynkorError::Incompatible(msg) => write!(f, "incompatible: {}", msg),
             VynkorError::NetworkError(msg) => write!(f, "network error: {}", msg),
             VynkorError::CacheError(msg) => write!(f, "cache error: {}", msg),
+            VynkorError::InvalidInput(msg) => write!(f, "invalid input: {}", msg),
+            VynkorError::Ticket(TicketRejection::Unknown) => write!(f, "unknown pairing ticket"),
+            VynkorError::Ticket(TicketRejection::AlreadyUsed) => {
+                write!(f, "pairing ticket already used")
+            }
+            VynkorError::Ticket(TicketRejection::Expired) => write!(f, "pairing ticket expired"),
         }
     }
 }

@@ -17,11 +17,12 @@ use tracing::info;
 use crate::api::middleware::{auth_middleware, require_kernel_admin};
 use crate::api::rate_limit::{build_rate_limiter, rate_limit_middleware, TokenRateLimiter};
 use crate::api::routes::{
-    get_plugin, get_plugin_logs, health_check, list_devices, list_plugins, restart_plugin,
-    start_plugin, stop_plugin, AppState,
+    consume_ticket, get_plugin, get_plugin_logs, health_check, list_devices, list_plugins,
+    pair_device, restart_plugin, start_plugin, stop_plugin, AppState,
 };
 use crate::api::websocket::{ws_handler, WsGateway};
 use crate::auth::jwt::JwtValidator;
+use crate::auth::pairing::PairingService;
 use crate::ipc::messages::IncomingMessage;
 use crate::plugins::manager::PluginManager;
 use crate::utils::config::PluginDef;
@@ -33,6 +34,8 @@ pub struct RouterConfig {
     pub jwt_validator: Option<Arc<JwtValidator>>,
     /// E-01: device credential store for WS-upgrade revocation checks.
     pub device_store: Option<Arc<crate::auth::device_store::DeviceStore>>,
+    /// CD-01: ticket pairing (`POST /devices/pair` + `/devices/consume`).
+    pub pairing: Option<Arc<PairingService>>,
     pub ws_router_tx: Option<mpsc::Sender<IncomingMessage>>,
     pub ws_disconnect_tx: Option<mpsc::Sender<u64>>,
     pub started_at: Instant,
@@ -62,6 +65,7 @@ pub fn create_router(
         manager,
         jwt_validator,
         device_store: None,
+        pairing: None,
         ws_router_tx: None,
         ws_disconnect_tx: None,
         started_at: Instant::now(),
@@ -81,9 +85,14 @@ pub fn create_router_full(config: RouterConfig) -> BuiltRouter {
         jwt_validator: config.jwt_validator.clone(),
         started_at: config.started_at,
         plugin_defs: config.plugin_defs,
+        pairing: config.pairing,
     });
 
-    let public = Router::new().route("/health", get(health_check));
+    // /devices/consume is public on purpose: the single-use ticket is the
+    // credential. it carries its own global rate limit (PairingService).
+    let public = Router::new()
+        .route("/health", get(health_check))
+        .route("/devices/consume", post(consume_ticket));
 
     // All non-health endpoints require auth when jwt_secret is configured.
     // auth_middleware short-circuits to next.run when jwt_validator is None,
@@ -95,6 +104,7 @@ pub fn create_router_full(config: RouterConfig) -> BuiltRouter {
         .route("/plugins/{id}/start", post(start_plugin))
         .route("/plugins/{id}/stop", post(stop_plugin))
         .route("/plugins/{id}/restart", post(restart_plugin))
+        .route("/devices/pair", post(pair_device))
         .layer(middleware::from_fn(require_kernel_admin));
 
     let mut protected = Router::new()
@@ -179,6 +189,7 @@ pub struct ApiServer {
     manager: Arc<PluginManager>,
     jwt_validator: Option<Arc<JwtValidator>>,
     device_store: Option<Arc<crate::auth::device_store::DeviceStore>>,
+    pairing: Option<Arc<PairingService>>,
     ws_router_tx: Option<mpsc::Sender<IncomingMessage>>,
     ws_disconnect_tx: Option<mpsc::Sender<u64>>,
     started_at: Instant,
@@ -229,7 +240,15 @@ impl ApiServer {
             ws_handshake_timeout_secs,
             max_ws_connections,
             ws_register_timeout_secs,
+            pairing: None,
         }
+    }
+
+    /// CD-01: enable ticket pairing routes (a builder step rather than a 17th
+    /// positional arg to `new`).
+    pub fn with_pairing(mut self, pairing: Option<Arc<PairingService>>) -> Self {
+        self.pairing = pairing;
+        self
     }
 
     /// `shutdown_handle` lets the orchestrator stop accepting new
@@ -243,6 +262,7 @@ impl ApiServer {
             manager: Arc::clone(&self.manager),
             jwt_validator: self.jwt_validator.clone(),
             device_store: self.device_store.clone(),
+            pairing: self.pairing.clone(),
             ws_router_tx: self.ws_router_tx.clone(),
             ws_disconnect_tx: self.ws_disconnect_tx.clone(),
             started_at: self.started_at,
