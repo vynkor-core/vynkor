@@ -71,7 +71,7 @@ clap_complete = "4"
 
 anyhow = "1"
 
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 url = "2"
 semver = { version = "1.0", features = ["serde"] }
 serde_json = "1"
@@ -95,6 +95,7 @@ futures-util = "0.3"
 
 # D-07: self-signed cert generation when TLS is on by default and the operator
 # provided no tls_cert_path/tls_key_path
+rustls = { version = "0.23", features = ["aws_lc_rs"] }
 rcgen = "0.13"
 
 # D-14/K-05: `vyn-pair` (src/bin/vyn-pair.rs) renders the pairing QR (terminal

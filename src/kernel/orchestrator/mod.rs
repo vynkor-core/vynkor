@@ -54,6 +54,9 @@ impl Kernel {
     where
         F: Future<Output = ()>,
     {
+        // library entry point, not just `main`: tests and embedders reach the
+        // tls server/bridge through here without ever running the binary
+        crate::utils::tls::install_crypto_provider();
         crate::metrics::init_metrics();
 
         let event_store = match EventStore::new(&config.data_dir) {

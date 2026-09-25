@@ -11,6 +11,8 @@ use vynkor::utils;
 use vynkor::utils::config::{load_config, BridgeConfig, Config, Role};
 
 fn main() -> Result<()> {
+    // before any cli path builds a tls client (reqwest, bridge)
+    utils::tls::install_crypto_provider();
     let cli = Cli::parse();
 
     // sandbox shim: must stay single-threaded — unshare(CLONE_NEWUSER) fails
