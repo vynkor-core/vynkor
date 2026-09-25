@@ -1603,6 +1603,95 @@ async fn router_rejects_protocol_major_mismatch() {
     );
 }
 
+// ── CD-06: supported protocol range [MIN_SUPPORTED, PROTOCOL_VERSION] ───────
+
+/// registers `version` on a fresh router; Ok(()) on accept, Err(message) on
+/// an ERR_PROTOCOL_MISMATCH reject
+async fn register_with_protocol(version: &str) -> Result<(), String> {
+    let reg = Arc::new(PluginRegistry::new());
+    let router_tx = spawn_router(Arc::clone(&reg), Arc::new(EventBus::new()));
+    let (write_tx, mut write_rx) = make_write_pair();
+    let env = Envelope {
+        payload: Some(envelope::Payload::PluginRegister(PluginRegister {
+            plugin_id: "weather".to_string(),
+            version: "1.0.0".to_string(),
+            manifest: Some(dummy_manifest()),
+            protocol_version: version.to_string(),
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+    router_tx
+        .send(incoming(1, kernel_frame(env), write_tx))
+        .await
+        .unwrap();
+    match decode_envelope(&recv_frame(&mut write_rx).await).payload {
+        Some(envelope::Payload::PluginRegisterAck(ack)) if ack.accepted => {
+            assert!(reg.is_registered(1));
+            Ok(())
+        }
+        Some(envelope::Payload::Error(err)) => {
+            assert_eq!(
+                err.code,
+                vynkor::proto::vynkor::ErrorCode::ErrProtocolMismatch as i32,
+                "version reject must use ERR_PROTOCOL_MISMATCH"
+            );
+            assert!(!reg.is_registered(1), "rejected register must not persist");
+            Err(err.message)
+        }
+        other => panic!("unexpected reply for {version:?}: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_version_negotiation_min_max() {
+    assert_eq!(vynkor::ipc::protocol::MIN_SUPPORTED_PROTOCOL_VERSION, "1.5");
+    let range = format!(
+        "kernel supports {}–{}",
+        vynkor::ipc::protocol::MIN_SUPPORTED_PROTOCOL_VERSION,
+        vynkor_wire::PROTOCOL_VERSION
+    );
+
+    // below the floor
+    let msg = register_with_protocol("1.4").await.unwrap_err();
+    assert_eq!(msg, format!("protocol 1.4 unsupported; {range}"));
+    assert!(register_with_protocol("0.9").await.is_err());
+
+    // inside the range, with and without a patch component
+    for v in ["1.5", "1.6", "1.7", "1.5.2", "1.7.0"] {
+        assert_eq!(
+            register_with_protocol(v).await,
+            Ok(()),
+            "{v} must be accepted"
+        );
+    }
+
+    // next major is a breaking change
+    let msg = register_with_protocol("2.0").await.unwrap_err();
+    assert_eq!(msg, format!("protocol 2.0 unsupported; {range}"));
+
+    // newer minor of the same major: additive, accepted
+    assert_eq!(register_with_protocol("1.8").await, Ok(()));
+    // numeric compare: 1.10 is newer than 1.9, not "1.1" (which would be
+    // below the floor)
+    assert_eq!(register_with_protocol("1.10").await, Ok(()));
+    assert!(register_with_protocol("1.1").await.is_err());
+
+    // malformed
+    for v in [
+        "abc", "1", "1.", ".7", "1.x", "1.7.x", "1.7.0.1", "-1.7", " 1.7",
+    ] {
+        let msg = register_with_protocol(v).await.unwrap_err();
+        assert!(
+            msg.contains("malformed") && msg.contains(&range),
+            "{v:?} must be rejected as malformed, got: {msg}"
+        );
+    }
+
+    // empty = pre-field SDK (v1.5 host plugins): still accepted (D-03)
+    assert_eq!(register_with_protocol("").await, Ok(()));
+}
+
 #[tokio::test]
 async fn router_stores_device_metadata_from_wire() {
     let reg = Arc::new(PluginRegistry::new());
@@ -2263,4 +2352,198 @@ async fn register_mux_via_router_single_ws_creates_one_entry() {
     assert!(entry.manifest.actions.contains(&"dev-mux.geo".to_string()));
     let dev = reg.get_device("dev-mux").unwrap();
     assert_eq!(dev.capabilities, caps);
+}
+
+// ── CD-07: offline device fate ───────────────────────────────────────────────
+
+fn register_phone(reg: &PluginRegistry, conn_id: u64) -> mpsc::Receiver<Outbound> {
+    use vynkor::plugins::registry::DeviceMeta;
+    let caps = vec!["geo".to_string()];
+    let (dev_tx, dev_rx) = make_write_pair();
+    reg.register_device(
+        "dev-phone".to_string(),
+        conn_id,
+        caps.clone(),
+        dummy_manifest(),
+        dev_tx,
+        DeviceMeta {
+            device_id: "dev-phone".to_string(),
+            capabilities: caps,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    dev_rx
+}
+
+fn action_request_env(action_id: &str, action: &str) -> Envelope {
+    Envelope {
+        payload: Some(envelope::Payload::ActionRequest(ActionRequest {
+            action_id: action_id.to_string(),
+            action: action.to_string(),
+            params_json: b"{}".to_vec(),
+            timeout_ms: 0,
+            streaming: false,
+            caller_plugin_id: String::new(),
+        })),
+        ..Default::default()
+    }
+}
+
+// alias keeps the T-16 literal scanner (test_proto) from reading the return
+// type as a status-less `ActionResponse {` literal
+type ActionResp = vynkor::proto::vynkor::ActionResponse;
+
+async fn recv_action_response(rx: &mut mpsc::Receiver<Outbound>) -> ActionResp {
+    match decode_envelope(&recv_frame(rx).await).payload {
+        Some(envelope::Payload::ActionResponse(resp)) => resp,
+        other => panic!("expected ActionResponse, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_offline_device_fails_fast() {
+    use vynkor::proto::vynkor::{ActionStatus, DeviceState};
+    let reg = Arc::new(PluginRegistry::new());
+    let _dev_rx = register_phone(&reg, 10);
+    let (caller_tx, mut caller_rx) = make_write_pair();
+    reg.register(
+        "caller".to_string(),
+        1,
+        dummy_manifest(),
+        caller_tx.clone(),
+        "",
+        "",
+    )
+    .unwrap();
+
+    // device drops: registry keeps the device record, flips it offline
+    reg.unregister("dev-phone");
+    assert_eq!(
+        reg.get_device("dev-phone").unwrap().state,
+        DeviceState::Offline as i32
+    );
+
+    let router_tx = spawn_router(Arc::clone(&reg), Arc::new(EventBus::new()));
+    let start = std::time::Instant::now();
+    router_tx
+        .send(incoming(
+            1,
+            kernel_frame(action_request_env("a1", "dev-phone.geo")),
+            caller_tx.clone(),
+        ))
+        .await
+        .unwrap();
+    let resp = recv_action_response(&mut caller_rx).await;
+    assert!(
+        start.elapsed() < Duration::from_millis(100),
+        "offline device must fail fast, not wait for the action timeout"
+    );
+    assert_eq!(resp.action_id, "a1");
+    // same status as before (no wire change), honest reason
+    assert_eq!(resp.status, ActionStatus::ActionNotFound as i32);
+    assert_eq!(resp.error, "device dev-phone offline");
+
+    // a never-seen device prefix keeps the generic reason
+    router_tx
+        .send(incoming(
+            1,
+            kernel_frame(action_request_env("a2", "dev-ghost.geo")),
+            caller_tx,
+        ))
+        .await
+        .unwrap();
+    let resp = recv_action_response(&mut caller_rx).await;
+    assert_eq!(resp.status, ActionStatus::ActionNotFound as i32);
+    assert_eq!(resp.error, "action not found");
+}
+
+#[tokio::test]
+async fn in_flight_action_fails_fast_when_provider_disconnects() {
+    use vynkor::proto::vynkor::ActionStatus;
+    let reg = Arc::new(PluginRegistry::new());
+    let mut dev_rx = register_phone(&reg, 10);
+    let (caller_tx, mut caller_rx) = make_write_pair();
+    reg.register(
+        "caller".to_string(),
+        1,
+        dummy_manifest(),
+        caller_tx.clone(),
+        "",
+        "",
+    )
+    .unwrap();
+    let router_tx = spawn_router(Arc::clone(&reg), Arc::new(EventBus::new()));
+
+    router_tx
+        .send(incoming(
+            1,
+            kernel_frame(action_request_env("a1", "dev-phone.geo")),
+            caller_tx,
+        ))
+        .await
+        .unwrap();
+    let internal_id = match decode_envelope(&recv_frame(&mut dev_rx).await).payload {
+        Some(envelope::Payload::ActionRequest(req)) => req.action_id,
+        other => panic!("expected forwarded ActionRequest, got {other:?}"),
+    };
+    assert!(reg.get_pending_action(&internal_id).is_some());
+
+    // provider vanishes mid-action (disconnect_loop / manager.stop path)
+    let start = std::time::Instant::now();
+    reg.unregister("dev-phone");
+
+    // default action timeout is 30s; recv_frame gives up after 2s
+    let resp = recv_action_response(&mut caller_rx).await;
+    assert!(start.elapsed() < Duration::from_millis(100));
+    assert_eq!(
+        resp.action_id, "a1",
+        "requester's own id, not the internal one"
+    );
+    assert_eq!(resp.status, ActionStatus::ActionError as i32);
+    assert_eq!(resp.error, "provider dev-phone disconnected");
+    assert!(
+        reg.get_pending_action(&internal_id).is_none(),
+        "failed slot must be evicted, not left for the timeout sweep"
+    );
+}
+
+// ── CD-05: caller identity reaching a device provider ───────────────────────
+
+#[tokio::test]
+async fn forged_caller_plugin_id_is_overwritten_for_device_targets() {
+    let reg = Arc::new(PluginRegistry::new());
+    let mut dev_rx = register_phone(&reg, 10);
+    let (caller_tx, _caller_rx) = make_write_pair();
+    reg.register(
+        "caller".to_string(),
+        1,
+        dummy_manifest(),
+        caller_tx.clone(),
+        "",
+        "",
+    )
+    .unwrap();
+    let router_tx = spawn_router(Arc::clone(&reg), Arc::new(EventBus::new()));
+
+    let mut env = action_request_env("a1", "dev-phone.geo");
+    if let Some(envelope::Payload::ActionRequest(req)) = env.payload.as_mut() {
+        // a device-side audit/consent check keys on this — must be unforgeable
+        req.caller_plugin_id = "dev-phone".to_string();
+    }
+    router_tx
+        .send(incoming(1, kernel_frame(env), caller_tx))
+        .await
+        .unwrap();
+
+    match decode_envelope(&recv_frame(&mut dev_rx).await).payload {
+        Some(envelope::Payload::ActionRequest(req)) => {
+            assert_eq!(req.action, "dev-phone.geo");
+            assert_eq!(
+                req.caller_plugin_id, "caller",
+                "kernel must stamp the authenticated sender, not the forged value"
+            );
+        }
+        other => panic!("expected forwarded ActionRequest, got {other:?}"),
+    }
 }

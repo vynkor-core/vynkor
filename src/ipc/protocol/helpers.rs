@@ -1,8 +1,8 @@
 use crate::plugins::registry::PendingAction;
 use crate::plugins::registry::PluginRegistry;
-use crate::proto::vynkor::ActionStatus;
 use crate::proto::vynkor::ActionStreamAbort;
 use crate::proto::vynkor::{envelope, Envelope};
+use crate::proto::vynkor::{ActionStatus, DeviceState};
 use metrics::counter;
 use prost::Message;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -165,6 +165,110 @@ pub(crate) fn action_status_message(status: ActionStatus) -> &'static str {
     }
 }
 
+/// CD-06: outcome of checking a plugin's declared `protocol_version`.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ProtocolCheck {
+    Supported,
+    /// same major, minor newer than this kernel knows — accepted (see router)
+    NewerMinor,
+    /// wire-visible reject reason, names the supported range
+    Rejected(String),
+}
+
+/// `major.minor[.patch]`, plain decimal components only (no sign, no
+/// whitespace — `u32::from_str` alone would take "+7"). Patch is validated
+/// but ignored: patch bumps never change the wire.
+pub(crate) fn parse_protocol_version(v: &str) -> Option<(u32, u32)> {
+    fn component(s: &str) -> Option<u32> {
+        if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        s.parse().ok()
+    }
+    let mut parts = v.split('.');
+    let major = component(parts.next()?)?;
+    let minor = component(parts.next()?)?;
+    if let Some(patch) = parts.next() {
+        component(patch)?;
+    }
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((major, minor))
+}
+
+/// CD-06: supported = [MIN_SUPPORTED_PROTOCOL_VERSION, PROTOCOL_VERSION],
+/// compared numerically (1.10 > 1.9). Caller handles the empty/legacy case.
+pub(crate) fn check_protocol_version(v: &str) -> ProtocolCheck {
+    let min_s = super::MIN_SUPPORTED_PROTOCOL_VERSION;
+    let max_s = vynkor_wire::PROTOCOL_VERSION;
+    // both are compile-time constants, pinned by a unit test below
+    let (Some(min), Some(max)) = (parse_protocol_version(min_s), parse_protocol_version(max_s))
+    else {
+        return ProtocolCheck::Rejected(format!("kernel protocol range {min_s}–{max_s} invalid"));
+    };
+    let Some(got) = parse_protocol_version(v) else {
+        return ProtocolCheck::Rejected(format!(
+            "malformed protocol_version {v:?}; kernel supports {min_s}–{max_s}"
+        ));
+    };
+    if got < min || got.0 != max.0 {
+        return ProtocolCheck::Rejected(format!(
+            "protocol {v} unsupported; kernel supports {min_s}–{max_s}"
+        ));
+    }
+    if got > max {
+        ProtocolCheck::NewerMinor
+    } else {
+        ProtocolCheck::Supported
+    }
+}
+
+/// CD-07: honest reason for an ACTION_NOT_FOUND whose action carries a
+/// known device's `{device_id}.` prefix — the same naming `register_device`
+/// mints and `get_mux` already routes on. Reads only the kernel's own
+/// device lifecycle record; the capability suffix is never interpreted
+pub(crate) fn offline_device_reason(registry: &PluginRegistry, action: &str) -> Option<String> {
+    let (device_id, _) = action.split_once('.')?;
+    let state = registry.get_device(device_id)?.state;
+    match DeviceState::try_from(state) {
+        Ok(DeviceState::Offline) => Some(format!("device {device_id} offline")),
+        Ok(DeviceState::Revoked) => Some(format!("device {device_id} revoked")),
+        _ => None,
+    }
+}
+
+/// CD-07: fail every action still waiting on `provider_id` now that it's
+/// gone, instead of leaving requesters to the timeout sweep. Unaccepted
+/// requests get their one expected `ActionResponse`; accepted streaming
+/// sessions already had theirs, so they only get `ActionStreamAbort`
+/// (same split as `notify_forced_termination`). Non-blocking sends
+pub(crate) fn fail_pending_for_provider(registry: &PluginRegistry, provider_id: &str) {
+    let reason = format!("provider {provider_id} disconnected");
+    for (internal_id, pending) in registry.take_pending_actions_for_provider(provider_id) {
+        debug!(action_id = %internal_id, provider_id, "failing in-flight action: provider gone");
+        counter!("action_provider_gone_total").increment(1);
+        let payload = if pending.session_accepted {
+            envelope::Payload::ActionStreamAbort(ActionStreamAbort {
+                action_id: pending.original_action_id,
+                reason: reason.clone(),
+            })
+        } else {
+            envelope::Payload::ActionResponse(crate::proto::vynkor::ActionResponse {
+                action_id: pending.original_action_id,
+                status: ActionStatus::ActionError as i32,
+                data_json: vec![],
+                error: reason.clone(),
+            })
+        };
+        let env = Envelope {
+            payload: Some(payload),
+            ..Default::default()
+        };
+        send_envelope(&pending.requester_write_tx, env);
+    }
+}
+
 pub(crate) fn send_register_reject(tx: &mpsc::Sender<Outbound>, reason: &str) {
     let ack = crate::proto::vynkor::PluginRegisterAck {
         accepted: false,
@@ -261,6 +365,16 @@ pub(crate) async fn notify_forced_termination(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kernel_protocol_range_constants_parse() {
+        let min = parse_protocol_version(crate::ipc::protocol::MIN_SUPPORTED_PROTOCOL_VERSION);
+        let max = parse_protocol_version(vynkor_wire::PROTOCOL_VERSION);
+        assert!(min.is_some() && max.is_some());
+        assert!(min <= max, "min supported must not exceed wire version");
+        assert_eq!(parse_protocol_version("1.10.3"), Some((1, 10)));
+        assert_eq!(parse_protocol_version("1.+7"), None);
+    }
 
     #[test]
     fn reset_for_test_zeroes_all_sequence_atomics() {
