@@ -1677,13 +1677,15 @@ UX-2/UX-4 (2026-08-24), UX-3 (PR #68); PERF-4 partial (PR #68).
   - Not scheduled — raise before picking up, low urgency until a real
     workload needs the split.
 
-- [ ] **K-07 — `kernel_shutdown_closes_api_listener_within_bound` flaky under
-  parallel load.** Passes alone and with `--test-threads=1`; in the full
-  parallel `--test unit` run the post-shutdown reconnect sometimes succeeds
-  although `ss` a moment later shows no listener on the port — the listener
-  closes slightly after `run_with_shutdown` returns. Decide whether shutdown
-  must guarantee the fd is closed on return (fix in `shutdown.rs`) or the
-  test should poll for refusal. Do not mask with retries before deciding.
+- [x] **K-07 — `kernel_shutdown_closes_api_listener_within_bound` flaky under
+  parallel load.** FIXED (v0.1.1). Root cause: not the kernel — axum-server
+  drops the listener before `serve` returns, so our fd is closed on return.
+  The port was held by plugin children that sibling tests (`test_loader`)
+  fork from the same test process: between fork and exec a child holds a
+  copy of every fd (CLOEXEC fires only on exec; `pre_exec` widens the
+  window). Test now asserts the real guarantee — no fd of this process is a
+  LISTEN socket on the port (`/proc/net/tcp` + `/proc/self/fd`), with a
+  positive control before shutdown. No retries; mutation-checked.
 - [ ] **K-08 — `test_sdk_cpp` (4 tests) fail: "action not found".** Fails on
   0c1fa35 too (pre-dates Phase 15), only where `../vynkor-sdk-cpp` is
   checked out (skipped in worktrees/CI without it). Likely the cpp echo
