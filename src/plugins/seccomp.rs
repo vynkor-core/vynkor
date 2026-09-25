@@ -30,12 +30,14 @@ use std::env::consts::ARCH;
 /// namespaces + Landlock. New mount-API entries and any future escape vector
 /// belong at the top so they cannot be missed.
 fn denied() -> Vec<(i64, Vec<SeccompRule>)> {
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    use libc::SYS_modify_ldt;
     use libc::{
         SYS_acct, SYS_add_key, SYS_bpf, SYS_chroot, SYS_delete_module, SYS_fanotify_init,
         SYS_finit_module, SYS_fsconfig, SYS_fsopen, SYS_fspick, SYS_init_module,
         SYS_io_uring_enter, SYS_io_uring_register, SYS_io_uring_setup, SYS_kcmp,
-        SYS_kexec_file_load, SYS_kexec_load, SYS_keyctl, SYS_lookup_dcookie, SYS_modify_ldt,
-        SYS_mount, SYS_mount_setattr, SYS_move_mount, SYS_name_to_handle_at, SYS_open_by_handle_at,
+        SYS_kexec_file_load, SYS_kexec_load, SYS_keyctl, SYS_lookup_dcookie, SYS_mount,
+        SYS_mount_setattr, SYS_move_mount, SYS_name_to_handle_at, SYS_open_by_handle_at,
         SYS_open_tree, SYS_perf_event_open, SYS_pivot_root, SYS_process_vm_readv,
         SYS_process_vm_writev, SYS_ptrace, SYS_quotactl, SYS_reboot, SYS_request_key,
         SYS_setdomainname, SYS_sethostname, SYS_setns, SYS_swapoff, SYS_swapon, SYS_syslog,
@@ -80,6 +82,7 @@ fn denied() -> Vec<(i64, Vec<SeccompRule>)> {
         (SYS_syslog, vec![]),
         (SYS_sethostname, vec![]),
         (SYS_setdomainname, vec![]),
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         (SYS_modify_ldt, vec![]),
         (SYS_quotactl, vec![]),
         (SYS_lookup_dcookie, vec![]),
