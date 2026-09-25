@@ -77,6 +77,10 @@ pub struct TicketView {
     pub expires_at: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cert_pem: Option<String>,
+    /// cd-08: colon-hex sha-256 of the served cert, for eyeball comparison
+    /// against the phone's pin — never needed to connect
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cert_sha256: Option<String>,
 }
 
 /// `vynkor://pair?z=1&d=<base64url(zlib(json))>` — deflate because the cert
@@ -168,13 +172,20 @@ impl PairingService {
             req.host.as_deref(),
         )?;
         let issued = self.tickets.issue(ttl_secs, name, ws.clone())?;
+        let cert_pem = self.cert_pem()?;
+        // a pem we can't fingerprint still pins fine on the phone — don't fail
+        // pairing over a display-only field
+        let cert_sha256 = cert_pem
+            .as_deref()
+            .and_then(|p| crate::utils::tls::cert_sha256_fingerprint(p).ok());
         Ok(TicketView {
             v: 2,
             ticket: issued.ticket,
             ws,
             ttl_secs,
             expires_at: issued.record.expires_at,
-            cert_pem: self.cert_pem()?,
+            cert_pem,
+            cert_sha256,
         })
     }
 

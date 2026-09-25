@@ -232,6 +232,9 @@ fn connect(opts: ConnectOpts, config_path: &str) -> anyhow::Result<String> {
     println!("Pairing link (open on the phone, or render as a QR with `vyn-pair`):\n");
     println!("{link}\n");
     println!("paired device '{device_id}' — link {} chars", link.len());
+    if let Some(fp) = fingerprint_of(payload.cert_pem.as_deref()) {
+        println!("cert sha256: {fp}");
+    }
     println!("render a scannable QR code: vyn device connect ... | vyn-pair");
     println!("credential expires in {ttl_seconds}s; revoke anytime: vyn device revoke {device_id}");
 
@@ -261,6 +264,7 @@ async fn pair(
         super::plugin::api_post_json(&client, &base, "/devices/pair", Some(&token), &body).await?;
     let view: TicketView = serde_json::from_str(&resp)?;
     warn_if_loopback(&view.ws);
+    let cert_sha256 = view.cert_sha256.clone();
 
     let link = encode_pair_link(&TicketLinkPayload {
         v: view.v,
@@ -277,6 +281,9 @@ async fn pair(
         format_ts(view.expires_at),
         link.len()
     );
+    if let Some(fp) = cert_sha256 {
+        println!("cert sha256: {fp}");
+    }
     println!("render a scannable QR code: vyn device pair ... | vyn-pair");
     println!("once scanned, the device shows up in: vyn device list");
     Ok(link)
@@ -322,6 +329,12 @@ fn parse_duration_secs(s: &str) -> Result<u64, String> {
         Some(0) | None => Err(format!("duration '{s}' out of range")),
         Some(v) => Ok(v),
     }
+}
+
+/// cd-08: shown next to the link so the operator can match it against what
+/// the phone pins (`vyn tls status` prints the same value).
+fn fingerprint_of(cert_pem: Option<&str>) -> Option<String> {
+    cert_pem.and_then(|p| crate::utils::tls::cert_sha256_fingerprint(p).ok())
 }
 
 fn warn_if_loopback(url: &str) {

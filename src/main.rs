@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::process::Command;
 use tracing::{info, warn};
-use vynkor::cli::{complete, device, devices, plugin, token};
+use vynkor::cli::{complete, device, devices, plugin, tls, token};
 use vynkor::cli::{Cli, Commands};
 use vynkor::kernel;
 use vynkor::utils;
@@ -166,6 +166,9 @@ async fn run_kernel(cli: Cli) -> Result<()> {
         }
         Commands::Device { cmd, config } => {
             device::handle(cmd, &config).await?;
+        }
+        Commands::Tls { cmd, config } => {
+            tls::handle(cmd, &config)?;
         }
         Commands::Completions { shell } => {
             complete::generate_completions(shell);

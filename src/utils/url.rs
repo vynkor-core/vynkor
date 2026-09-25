@@ -66,7 +66,22 @@ pub fn resolve_advertise_url(
     if url.path().is_empty() || url.path() == "/" {
         url.set_path(DEFAULT_WS_PATH);
     }
-    url.set_scheme(scheme)
+    // an explicit scheme wins over the kernel's own tls flag: behind a
+    // tls-terminating proxy the kernel runs `tls: false` yet phones must
+    // still dial wss:// (docs/TLS.md)
+    let target = if gave_bare_host {
+        scheme
+    } else {
+        match url.scheme() {
+            "ws" | "wss" => return Ok(url.to_string()),
+            other => ws_scheme_for(other).ok_or_else(|| {
+                VynkorError::InvalidInput(format!(
+                    "bad host '{host}': scheme must be ws, wss, http or https"
+                ))
+            })?,
+        }
+    };
+    url.set_scheme(target)
         .map_err(|()| VynkorError::InvalidInput(format!("bad host '{host}'")))?;
     Ok(url.to_string())
 }
@@ -114,6 +129,18 @@ mod tests {
     fn full_url_keeps_path_and_drops_default_port() {
         let url = resolve_advertise_url(9999, true, Some("https://myhost.tailnet:443/ws")).unwrap();
         assert_eq!(url, "wss://myhost.tailnet/ws");
+    }
+
+    #[test]
+    fn explicit_scheme_survives_plaintext_kernel_behind_proxy() {
+        let url = resolve_advertise_url(8080, false, Some("wss://vyn.example.com/ws")).unwrap();
+        assert_eq!(url, "wss://vyn.example.com/ws");
+        let url = resolve_advertise_url(8080, false, Some("https://vyn.example.com")).unwrap();
+        assert_eq!(url, "wss://vyn.example.com/ws");
+        // and the reverse: an explicit ws:// is not silently upgraded
+        let url = resolve_advertise_url(8080, true, Some("ws://10.0.0.5:8080/ws")).unwrap();
+        assert_eq!(url, "ws://10.0.0.5:8080/ws");
+        assert!(resolve_advertise_url(8080, true, Some("ftp://h")).is_err());
     }
 
     #[test]

@@ -126,6 +126,10 @@ SDKs: [`vynkor-sdk`](https://github.com/vynkor-core/vynkor-sdk) · [`vynkor-sdk-
 
 TLS on by default (auto self-signed `vyn-tls/`), `Sec-WebSocket-Protocol: vynkor, <jwt>` auth, per-device credentials instead of sharing the master `jwt_secret`, HMAC-SHA256 per frame after registration, default-deny `ipc_targets`, same-user IPC, sandboxed processes. Details: [`docs/THREAT_MODEL.md`](https://github.com/vynkor-core/vynkor/blob/main/docs/THREAT_MODEL.md), [`docs/FRAMING.md`](https://github.com/vynkor-core/vynkor/blob/main/docs/FRAMING.md) (flag table), [`AUDIT.md`](https://github.com/vynkor-core/vynkor/blob/main/AUDIT.md).
 
+### TLS
+
+Three supported setups: the default self-signed cert (phones pin it from the pairing QR), your own `tls_cert_path`/`tls_key_path`, or Let's Encrypt through a reverse proxy (Caddy/nginx) in front of a loopback-only `tls: false` gateway. `vyn tls status` prints the served cert's SHA-256 fingerprint (openssl format); `vyn device connect`/`pair` print it next to the link. Walkthrough: [`docs/TLS.md`](https://github.com/vynkor-core/vynkor/blob/main/docs/TLS.md).
+
 ---
 
 ## What is coming next

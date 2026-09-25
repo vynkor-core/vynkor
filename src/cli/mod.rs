@@ -2,6 +2,7 @@ pub mod complete;
 pub mod device;
 pub mod devices;
 pub mod plugin;
+pub mod tls;
 pub mod token;
 
 use clap::{Parser, Subcommand};
@@ -9,6 +10,7 @@ use clap_complete::Shell;
 use device::DeviceCmd;
 use plugin::PluginCmd;
 use std::path::PathBuf;
+use tls::TlsCmd;
 use token::TokenCmd;
 
 #[derive(Parser)]
@@ -57,6 +59,15 @@ pub enum Commands {
     Device {
         #[command(subcommand)]
         cmd: DeviceCmd,
+
+        #[arg(short, long, default_value = "config.yaml")]
+        config: String,
+    },
+    /// Inspect the gateway's TLS material (CD-08) — served cert and its
+    /// SHA-256 fingerprint for checking a phone's pin.
+    Tls {
+        #[command(subcommand)]
+        cmd: TlsCmd,
 
         #[arg(short, long, default_value = "config.yaml")]
         config: String,
