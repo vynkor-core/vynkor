@@ -332,7 +332,7 @@ git commit -m "fix(auth): MAC local plugin frames with a per-plugin key, not jwt
 - Consumes: `plugin_mac_secret` (Task 1), `Config.legacy_plugin_mac` (Task 2).
 - Produces: `PluginSupervisor::set_plugin_mac(&mut self, master: Option<Arc<Vec<u8>>>, legacy: bool)` and `pub(crate) fn mac_env_override(master: Option<&[u8]>, legacy: bool, plugin_id: &str) -> Option<String>`.
 
-- [ ] **Step 1: Write the failing unit tests** at the bottom of `src/plugins/supervisor/spawn.rs`:
+- [x] **Step 1: Write the failing unit tests** at the bottom of `src/plugins/supervisor/spawn.rs`:
 
 ```rust
 #[cfg(test)]
@@ -375,12 +375,12 @@ mod mac_env_tests {
 }
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `cargo test --lib mac_env_tests`
 Expected: compile error: `mac_env_override` / `merged_env` not found.
 
-- [ ] **Step 3: Implement the pure helpers** in `spawn.rs` (module level):
+- [x] **Step 3: Implement the pure helpers** in `spawn.rs` (module level):
 
 ```rust
 /// The `VYN_JWT_SECRET` value the kernel forces on a spawned plugin: its
@@ -410,12 +410,12 @@ pub(crate) fn merged_env(operator_env: &[String], mac_override: Option<String>) 
 }
 ```
 
-- [ ] **Step 4: Run the helper tests**
+- [x] **Step 4: Run the helper tests**
 
 Run: `cargo test --lib mac_env_tests`
 Expected: 4 passed.
 
-- [ ] **Step 5: Wire it into the supervisor.**
+- [x] **Step 5: Wire it into the supervisor.**
 
 In `src/plugins/supervisor/mod.rs`, add fields to `PluginSupervisor` and initialize them in the constructor that sets `data_dir: None` (~line 167):
 
@@ -475,12 +475,12 @@ In `src/kernel/orchestrator/mod.rs`, next to `supervisor.set_data_dir(config.dat
 
 (Reuse the existing `mac_secret` Arc via `.clone()` if it is still in scope at that point; otherwise build it as above.)
 
-- [ ] **Step 6: Run the full suite**
+- [x] **Step 6: Run the full suite**
 
 Run: `cargo test --lib && cargo test --test unit && cargo test --test integration`
 Expected: all green. `test_autoload.rs` / `test_shim.rs` spawn real plugins: if one runs on a secured kernel and its child connects with a secret, it now receives the derived key automatically. That is the point, and it must pass unchanged.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/plugins/supervisor src/kernel/orchestrator/mod.rs

@@ -256,6 +256,15 @@ impl Kernel {
             config.restart_backoff_max_ms,
         );
         supervisor.set_data_dir(config.data_dir.clone());
+        // local plugins get plugin_mac_secret(jwt_secret, plugin_id) as
+        // VYN_JWT_SECRET, never the master itself
+        supervisor.set_plugin_mac(
+            config
+                .jwt_secret
+                .as_ref()
+                .map(|s| Arc::new(s.as_bytes().to_vec())),
+            config.legacy_plugin_mac,
+        );
         let supervisor = Arc::new(supervisor);
         let sup_loop = Arc::clone(&supervisor);
         background_handles.push(tokio::spawn(async move { sup_loop.monitor_loop().await }));
