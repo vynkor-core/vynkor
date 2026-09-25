@@ -1695,6 +1695,14 @@ UX-2/UX-4 (2026-08-24), UX-3 (PR #68); PERF-4 partial (PR #68).
   test harness now refuses an `echo_plugin` older than the SDK sources and
   panics with the rebuild command instead of failing opaquely.
 
+- [x] **K-09 — `event_ack_from_plugin_marks_event_delivered` flaky on CI.**
+  FIXED (v0.1.3). Found on PR #94's CI run. The test slept a fixed 60 ms
+  after sending `EventAck`, but `mark_delivered` runs on `spawn_blocking`
+  (PERF-2), so a slow runner checked the store before the write landed. The
+  sibling persist test had the same 30 ms race. Both now poll the store for
+  the condition (2 s deadline); mutation-checked by dropping
+  `mark_delivered_async` in the router.
+
 ## Phase 15 — Client-driven tasks (CD) (2026-09-24)
 
 Specs: `docs/tasks/CD-*.md` (source:

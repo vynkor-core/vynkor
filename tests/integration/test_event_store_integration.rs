@@ -41,6 +41,26 @@ async fn start_kernel_with_store(socket: &str, port: u16, data_dir: &Path) -> on
     shutdown_tx
 }
 
+/// Poll the store until `done(pending_ids)` holds or 2s pass, then return the
+/// last pending ids. Store writes run on `spawn_blocking` (PERF-2), so a fixed
+/// sleep races slow CI runners; waiting on the condition doesn't.
+async fn wait_pending(data_dir: &Path, done: impl Fn(&[String]) -> bool) -> Vec<String> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        // a second handle on the same DB file, so we see what the kernel wrote
+        let inspector = EventStore::new(data_dir).expect("inspector store must open");
+        let ids: Vec<String> = inspector
+            .pending_older_than(0)
+            .into_iter()
+            .map(|e| e.event_id)
+            .collect();
+        if done(&ids) || tokio::time::Instant::now() >= deadline {
+            return ids;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 fn tmp_data_dir(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("vynkor_es_integ_{tag}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -73,13 +93,10 @@ async fn kernel_system_event_is_persisted_to_store_as_pending() {
         .await
         .unwrap();
 
-    // Give the kernel time to persist the system.plugin_joined event.
-    tokio::time::sleep(Duration::from_millis(30)).await;
-
-    // Open a second EventStore handle on the same DB file to inspect state.
-    let inspector = EventStore::new(&data_dir).expect("inspector store must open");
-    let pending = inspector.pending_older_than(0);
-    let ids: Vec<&str> = pending.iter().map(|e| e.event_id.as_str()).collect();
+    let ids = wait_pending(&data_dir, |ids| {
+        ids.iter().any(|id| id.contains("joiner_persist"))
+    })
+    .await;
     assert!(
         ids.iter().any(|id| id.contains("joiner_persist")),
         "system.plugin_joined for joiner_persist must be pending in store; got: {ids:?}"
@@ -146,16 +163,10 @@ async fn event_ack_from_plugin_marks_event_delivered() {
         .await
         .unwrap();
 
-    // give kernel time to process the ack
-    tokio::time::sleep(Duration::from_millis(60)).await;
-
-    let inspector = EventStore::new(&data_dir).expect("inspector store must open");
-    let pending = inspector.pending_older_than(0);
-    let still_pending = pending.iter().any(|e| e.event_id == event_id);
+    let pending = wait_pending(&data_dir, |ids| !ids.contains(&event_id)).await;
     assert!(
-        !still_pending,
-        "acked event '{event_id}' must not remain pending; pending: {:?}",
-        pending.iter().map(|e| &e.event_id).collect::<Vec<_>>()
+        !pending.contains(&event_id),
+        "acked event '{event_id}' must not remain pending; pending: {pending:?}"
     );
 
     let _ = shutdown_tx.send(());
