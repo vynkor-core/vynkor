@@ -41,6 +41,14 @@ fn test_config(socket: &str, port: u16) -> Config {
         pid_file: "/tmp/vynkor_kernel_test.pid".into(),
         log_file: "/tmp/vynkor_kernel_test.log".into(),
         allow_no_auth: true, // tests exercise the no-auth path deliberately
+        // the defaults point at the operator's real runtime dirs (live
+        // daemon's events.db/devices.json, shared vyn-tls pair) — never share
+        tls: false,
+        data_dir: tempfile::Builder::new()
+            .prefix("vynkor-ut-data-")
+            .tempdir()
+            .expect("create test data dir")
+            .keep(),
         ..Config::default()
     }
 }

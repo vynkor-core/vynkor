@@ -17,8 +17,22 @@ pub fn test_config(socket: &str, port: u16) -> Config {
         log_file: "/tmp/vynkor_integ_test.log".into(),
         allow_no_auth: true, // tests exercise the no-auth path deliberately
         tls: false,          // tests hit the plain-HTTP/WS path
+        data_dir: isolated_data_dir(),
         ..Config::default()
     }
+}
+
+/// Fresh private dir per kernel. The default data_dir is the operator's real
+/// `$XDG_RUNTIME_DIR/vyn-data` — shared with a live `vyn` daemon's
+/// devices.json and events.db, so tests would read real device rows (401 on
+/// ws upgrade) and write test events into the live store. Kept, not
+/// auto-deleted: the kernel task outlives the helper's scope.
+pub fn isolated_data_dir() -> std::path::PathBuf {
+    tempfile::Builder::new()
+        .prefix("vynkor-it-data-")
+        .tempdir()
+        .expect("create test data dir")
+        .keep()
 }
 
 /// Starts kernel in background; returns shutdown sender and shared registry.

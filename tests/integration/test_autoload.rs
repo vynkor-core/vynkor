@@ -22,6 +22,9 @@ async fn start_kernel_with_plugins(
         log_file: "/tmp/vynkor_integ_autoload.log".into(),
         allow_no_auth: true,
         plugins: defs,
+        // never the operator's real runtime dirs (see helpers::isolated_data_dir)
+        tls: false,
+        data_dir: super::helpers::isolated_data_dir(),
         ..Config::default()
     };
     let registry = Arc::new(PluginRegistry::new());
