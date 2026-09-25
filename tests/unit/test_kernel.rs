@@ -225,6 +225,12 @@ async fn kernel_shutdown_closes_api_listener_within_bound() {
     tokio::net::TcpStream::connect(("127.0.0.1", port))
         .await
         .expect("API port must accept connections before shutdown");
+    // positive control: the probe below must see our own listener, or its
+    // post-shutdown "not held" result proves nothing
+    assert!(
+        process_holds_tcp_listener(port),
+        "probe must detect the live API listener"
+    );
 
     let _ = shutdown_tx.send(());
 
@@ -238,17 +244,44 @@ async fn kernel_shutdown_closes_api_listener_within_bound() {
     assert!(result.is_ok());
     assert!(result.unwrap().is_ok());
 
-    // Now that the kernel task has returned, the listener must be gone —
-    // not just "the future resolved while the socket lingers." A connect
-    // attempt must be refused, not hang or succeed.
-    let reconnect = timeout(
-        Duration::from_secs(2),
-        tokio::net::TcpStream::connect(("127.0.0.1", port)),
-    )
-    .await
-    .expect("post-shutdown connect attempt must not hang");
+    // K-07: the guarantee is that *this process* holds no listener once
+    // run_with_shutdown returns. a connect() probe can't check that here:
+    // sibling tests fork plugin children from this same process, and a child
+    // between fork and exec holds a copy of every fd (CLOEXEC only fires on
+    // exec), so it can briefly keep the port in LISTEN after our fd is gone.
     assert!(
-        reconnect.is_err(),
-        "API port must stop accepting connections after graceful_shutdown completes"
+        !process_holds_tcp_listener(port),
+        "API listener fd must be closed when graceful_shutdown returns"
     );
+}
+
+/// true if any fd of the current process is a LISTEN socket on `port`
+/// (127.0.0.1 or 0.0.0.0, ipv4 — what test_config binds).
+fn process_holds_tcp_listener(port: u16) -> bool {
+    const TCP_LISTEN: &str = "0A";
+    let tcp = std::fs::read_to_string("/proc/net/tcp").expect("read /proc/net/tcp");
+    let port_hex = format!("{port:04X}");
+    let inodes: Vec<String> = tcp
+        .lines()
+        .skip(1)
+        .filter_map(|line| {
+            let f: Vec<&str> = line.split_whitespace().collect();
+            let local_port = f.get(1)?.rsplit(':').next()?;
+            if local_port == port_hex && *f.get(3)? == TCP_LISTEN {
+                f.get(9).map(|s| s.to_string())
+            } else {
+                None
+            }
+        })
+        .collect();
+    if inodes.is_empty() {
+        return false;
+    }
+    std::fs::read_dir("/proc/self/fd")
+        .expect("read /proc/self/fd")
+        .filter_map(|e| std::fs::read_link(e.ok()?.path()).ok())
+        .any(|target| {
+            let t = target.to_string_lossy();
+            inodes.iter().any(|ino| t == format!("socket:[{ino}]"))
+        })
 }
