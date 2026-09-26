@@ -2,6 +2,7 @@ use super::helpers::start_kernel_secured;
 use crate::jwt_helper::create_test_token;
 use std::time::Duration;
 use tokio::time::timeout;
+use vynkor::auth::plugin_key::plugin_mac_secret;
 use vynkor::proto::vynkor::{envelope, Envelope, ErrorCode, Ping, PluginManifest};
 use vynkor_sdk::VynkorClient;
 
@@ -13,10 +14,12 @@ async fn secured_kernel_completes_mac_handshake_and_pings() {
 
     let token = create_test_token("mac-plugin", vec![], secret.as_bytes(), 3600);
 
-    let mut client =
-        VynkorClient::connect_with_secret("/tmp/vynkor_mac_handshake.sock", secret.as_bytes())
-            .await
-            .expect("connect");
+    let mut client = VynkorClient::connect_with_secret(
+        "/tmp/vynkor_mac_handshake.sock",
+        plugin_mac_secret(secret.as_bytes(), "mac-plugin").as_bytes(),
+    )
+    .await
+    .expect("connect");
     let ack = client
         .register_with_token("mac-plugin", PluginManifest::default(), &token)
         .await
@@ -100,5 +103,105 @@ async fn secured_kernel_rejects_unmaced_client() {
     assert!(
         dropped,
         "un-MAC'd client must be dropped by a secured kernel"
+    );
+}
+
+/// Sends one MAC'd ping and reports whether a Pong came back within 2s.
+async fn ping_gets_pong(client: &mut VynkorClient) -> bool {
+    let env = Envelope {
+        payload: Some(envelope::Payload::Ping(Ping { timestamp: 9 })),
+        ..Default::default()
+    };
+    let mut buf = vec![];
+    prost::Message::encode(&env, &mut buf).unwrap();
+    if client.send_raw("kernel", buf).await.is_err() {
+        return false;
+    }
+    for _ in 0..2 {
+        match timeout(Duration::from_secs(2), client.recv()).await {
+            Ok(Ok(e)) if matches!(e.payload, Some(envelope::Payload::Pong(_))) => return true,
+            Ok(Ok(_)) => continue, // error frame before drop
+            _ => return false,
+        }
+    }
+    false
+}
+
+#[tokio::test]
+async fn derived_plugin_secret_completes_handshake() {
+    let secret = "integration-mac-secret-3-32-bytes-min";
+    let sock = "/tmp/vynkor_mac_derived.sock";
+    let (_s, _r, _b) = start_kernel_secured(sock, 19502, secret).await;
+    let token = create_test_token("tg", vec![], secret.as_bytes(), 3600);
+    let derived = plugin_mac_secret(secret.as_bytes(), "tg");
+    let mut c = VynkorClient::connect_with_secret(sock, derived.as_bytes())
+        .await
+        .unwrap();
+    let ack = c
+        .register_with_token("tg", PluginManifest::default(), &token)
+        .await
+        .unwrap();
+    assert!(ack.accepted);
+    assert!(ping_gets_pong(&mut c).await, "derived key must MAC-verify");
+}
+
+#[tokio::test]
+async fn master_secret_client_rejected_by_default() {
+    let secret = "integration-mac-secret-4-32-bytes-min";
+    let sock = "/tmp/vynkor_mac_master.sock";
+    let (_s, _r, _b) = start_kernel_secured(sock, 19503, secret).await;
+    let token = create_test_token("tg", vec![], secret.as_bytes(), 3600);
+    let mut c = VynkorClient::connect_with_secret(sock, secret.as_bytes())
+        .await
+        .unwrap();
+    let _ = c
+        .register_with_token("tg", PluginManifest::default(), &token)
+        .await;
+    assert!(
+        !ping_gets_pong(&mut c).await,
+        "master secret must no longer MAC a local plugin"
+    );
+}
+
+#[tokio::test]
+async fn derived_key_of_other_plugin_is_rejected() {
+    let secret = "integration-mac-secret-5-32-bytes-min";
+    let sock = "/tmp/vynkor_mac_cross.sock";
+    let (_s, _r, _b) = start_kernel_secured(sock, 19504, secret).await;
+    let token = create_test_token("agent", vec![], secret.as_bytes(), 3600);
+    let telegram_key = plugin_mac_secret(secret.as_bytes(), "telegram");
+    let mut c = VynkorClient::connect_with_secret(sock, telegram_key.as_bytes())
+        .await
+        .unwrap();
+    let _ = c
+        .register_with_token("agent", PluginManifest::default(), &token)
+        .await;
+    assert!(
+        !ping_gets_pong(&mut c).await,
+        "telegram's key must not MAC as agent"
+    );
+}
+
+#[tokio::test]
+async fn legacy_flag_accepts_master_secret() {
+    let secret = "integration-mac-secret-6-32-bytes-min";
+    let sock = "/tmp/vynkor_mac_legacy.sock";
+    let mut cfg = super::helpers::test_config(sock, 19505);
+    cfg.allow_no_auth = false;
+    cfg.jwt_secret = Some(secret.to_string());
+    cfg.legacy_plugin_mac = true;
+    let (_s, _r, _b) = super::helpers::start_kernel_with_config(cfg).await;
+    let token = create_test_token("tg", vec![], secret.as_bytes(), 3600);
+    let mut c = VynkorClient::connect_with_secret(sock, secret.as_bytes())
+        .await
+        .unwrap();
+    let ack = c
+        .register_with_token("tg", PluginManifest::default(), &token)
+        .await
+        .unwrap();
+    assert!(ack.accepted);
+    assert!(
+        ping_gets_pong(&mut c).await,
+        "legacy mode keeps master-secret MAC"
     );
 }

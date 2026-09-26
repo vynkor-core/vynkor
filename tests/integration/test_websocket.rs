@@ -6,6 +6,7 @@ use std::time::Duration;
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::protocol::Message as WsMsg;
 use vynkor::auth::frame_mac::{compute_tag, derive_session_key, MAC_TAG_LEN};
+use vynkor::auth::plugin_key::plugin_mac_secret;
 use vynkor::proto::vynkor::{envelope, Envelope, Ping, PluginManifest, PluginRegister};
 
 /// Build a frame with HMAC-SHA256 MAC (FLAG_MAC_PRESENT = 0x0001 set, 32-byte tag appended).
@@ -276,8 +277,13 @@ async fn ws_mac_tagged_frames_accepted_on_secured_kernel() {
         other => panic!("expected PluginRegisterAck, got {:?}", other),
     };
 
-    // Derive session key same way the kernel does
-    let key = derive_session_key(secret.as_bytes(), &session_nonce, "ws-mac-plugin");
+    // Derive session key same way the kernel does: a local plugin's IKM is
+    // its per-plugin key, not the master secret
+    let key = derive_session_key(
+        plugin_mac_secret(secret.as_bytes(), "ws-mac-plugin").as_bytes(),
+        &session_nonce,
+        "ws-mac-plugin",
+    );
 
     // Send a MAC-tagged Ping
     let ping_env = Envelope {
@@ -519,7 +525,11 @@ async fn ws_client_that_registers_survives_the_deadline() {
     let token = create_test_token("registered-plugin", vec![], secret.as_bytes(), 3600);
     let mut ws = ws_connect_with_jwt(19358, &token).await;
     let nonce = register_and_get_nonce(&mut ws, "registered-plugin", "", &token).await;
-    let key = derive_session_key(secret.as_bytes(), &nonce, "registered-plugin");
+    let key = derive_session_key(
+        plugin_mac_secret(secret.as_bytes(), "registered-plugin").as_bytes(),
+        &nonce,
+        "registered-plugin",
+    );
 
     // wait out the deadline — a registered connection must not be dropped
     tokio::time::sleep(Duration::from_millis(1500)).await;

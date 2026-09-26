@@ -7,6 +7,39 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tracing::{info, warn};
 
+/// The `VYN_JWT_SECRET` value the kernel forces on a spawned plugin: its
+/// per-plugin MAC key. `None` = inject nothing (auth off, or legacy mode
+/// where the operator's YAML still supplies the master secret).
+pub(crate) fn mac_env_override(
+    master: Option<&[u8]>,
+    legacy: bool,
+    plugin_id: &str,
+) -> Option<String> {
+    match master {
+        Some(m) if !legacy => Some(crate::auth::plugin_key::plugin_mac_secret(m, plugin_id)),
+        _ => None,
+    }
+}
+
+/// Operator `KEY=VALUE` env, then the kernel's MAC key on top: the override
+/// replaces any operator-supplied `VYN_JWT_SECRET` (today every plugins.d
+/// file carries the master secret there).
+pub(crate) fn merged_env(
+    operator_env: &[String],
+    mac_override: Option<String>,
+) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = operator_env
+        .iter()
+        .filter_map(|kv| kv.split_once('='))
+        .filter(|(k, _)| mac_override.is_none() || *k != "VYN_JWT_SECRET")
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    if let Some(key) = mac_override {
+        out.push(("VYN_JWT_SECRET".to_string(), key));
+    }
+    out
+}
+
 impl PluginSupervisor {
     pub(crate) async fn spawn_internal(
         &self,
@@ -94,10 +127,24 @@ impl PluginSupervisor {
         if let Some(dir) = &plugin_data_dir {
             cmd.env("VYN_DATA_DIR", dir);
         }
-        for kv in &config.env {
-            if let Some((k, v)) = kv.split_once('=') {
-                cmd.env(k, v);
-            }
+        let mac_override = mac_env_override(
+            self.mac_master.as_deref().map(|v| v.as_slice()),
+            self.legacy_plugin_mac,
+            &config.plugin_id,
+        );
+        if mac_override.is_some()
+            && config
+                .env
+                .iter()
+                .any(|kv| kv.starts_with("VYN_JWT_SECRET="))
+        {
+            warn!(
+                plugin_id = %config.plugin_id,
+                "plugin config sets VYN_JWT_SECRET; ignored — the kernel injects a per-plugin key. Remove it from plugins.d"
+            );
+        }
+        for (k, v) in merged_env(&config.env, mac_override) {
+            cmd.env(k, v);
         }
         let max_procs = config
             .max_procs
@@ -349,5 +396,59 @@ impl PluginSupervisor {
         });
 
         Ok(PluginProcess { plugin_id, pid })
+    }
+}
+
+#[cfg(test)]
+mod mac_env_tests {
+    use super::mac_env_override;
+    use super::merged_env;
+    use crate::auth::plugin_key::plugin_mac_secret;
+
+    const M: &[u8] = b"supervisor-test-master-secret-32-bytes!!";
+
+    #[test]
+    fn injects_derived_key_by_default() {
+        assert_eq!(
+            mac_env_override(Some(M), false, "telegram"),
+            Some(plugin_mac_secret(M, "telegram"))
+        );
+    }
+
+    #[test]
+    fn legacy_mode_injects_nothing() {
+        // legacy: operator YAML keeps supplying VYN_JWT_SECRET as before
+        assert_eq!(mac_env_override(Some(M), true, "telegram"), None);
+    }
+
+    #[test]
+    fn no_master_means_no_injection() {
+        assert_eq!(mac_env_override(None, false, "telegram"), None);
+    }
+
+    #[test]
+    fn override_wins_over_operator_env() {
+        let operator_env = vec!["VYN_JWT_SECRET=the-master".to_string(), "X=1".to_string()];
+        let merged = merged_env(&operator_env, mac_env_override(Some(M), false, "p"));
+        let v: Vec<_> = merged
+            .iter()
+            .filter(|(k, _)| k == "VYN_JWT_SECRET")
+            .collect();
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].1, plugin_mac_secret(M, "p"));
+        assert!(merged.iter().any(|(k, v)| k == "X" && v == "1"));
+    }
+
+    #[test]
+    fn no_override_keeps_operator_env_verbatim() {
+        let operator_env = vec!["VYN_JWT_SECRET=the-master".to_string(), "X=1".to_string()];
+        let merged = merged_env(&operator_env, None);
+        assert_eq!(
+            merged,
+            vec![
+                ("VYN_JWT_SECRET".to_string(), "the-master".to_string()),
+                ("X".to_string(), "1".to_string())
+            ]
+        );
     }
 }

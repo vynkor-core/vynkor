@@ -111,6 +111,10 @@ pub struct PluginSupervisor {
     /// `data_dir/plugins/<plugin_id>`, exposed to the plugin as
     /// `VYN_DATA_DIR`. `None` = no data dir granted.
     pub(crate) data_dir: Option<PathBuf>,
+    /// Master jwt_secret + legacy flag, used only to derive each spawned
+    /// plugin's per-plugin MAC key (`VYN_JWT_SECRET`). Never passed through.
+    pub(crate) mac_master: Option<Arc<Vec<u8>>>,
+    pub(crate) legacy_plugin_mac: bool,
     pub(crate) entries: Arc<DashMap<String, PluginEntry>>,
     pub(crate) event_tx: mpsc::Sender<ExitEvent>,
     pub(crate) event_rx: Arc<Mutex<mpsc::Receiver<ExitEvent>>>,
@@ -152,6 +156,14 @@ impl PluginSupervisor {
         self.data_dir = Some(dir);
     }
 
+    /// Hand the supervisor the master jwt_secret so each spawn gets its
+    /// per-plugin frame-MAC key injected as `VYN_JWT_SECRET` (overriding any
+    /// operator-supplied value). `legacy = true` injects nothing.
+    pub fn set_plugin_mac(&mut self, master: Option<Arc<Vec<u8>>>, legacy: bool) {
+        self.mac_master = master;
+        self.legacy_plugin_mac = legacy;
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn with_events(
         socket_path: &str,
@@ -165,6 +177,8 @@ impl PluginSupervisor {
         PluginSupervisor {
             socket_path: socket_path.to_string(),
             data_dir: None,
+            mac_master: None,
+            legacy_plugin_mac: false,
             backoff_base_ms,
             backoff_max_ms,
             entries: Arc::new(DashMap::new()),

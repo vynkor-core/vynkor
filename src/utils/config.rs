@@ -111,6 +111,13 @@ pub struct Config {
     /// any local process can register as any plugin. Must be set deliberately.
     #[serde(default)]
     pub allow_no_auth: bool,
+    /// Migration escape hatch: when true, local plugins MAC their frames with
+    /// the master `jwt_secret` (pre-2026-09-25 behavior) instead of the
+    /// per-plugin key `plugin_mac_secret(jwt_secret, plugin_id)`. Insecure —
+    /// every plugin then holds a secret that can mint any JWT. Remove once all
+    /// externally launched plugins use `vyn token plugin-secret`.
+    #[serde(default)]
+    pub legacy_plugin_mac: bool,
     /// Kernel role (D-06). Host by default; `client` enables the bridge.
     #[serde(default)]
     pub role: Role,
@@ -386,6 +393,7 @@ impl Default for Config {
             socket_path: default_socket_path(),
             jwt_secret: None,
             allow_no_auth: false,
+            legacy_plugin_mac: false,
             role: Role::Host,
             bridge: None,
             device_id: None,

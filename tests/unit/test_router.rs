@@ -819,6 +819,7 @@ async fn poisoned_session_key_cell_still_installs_mac_key() {
         None,
         None,
         Some(Arc::clone(&mac_secret)),
+        false, // legacy_plugin_mac
         None,
         None,
         None,
@@ -1077,6 +1078,7 @@ fn spawn_router_with_jwt_and_config_perms(
         None,
         None,
         None,
+        false, // legacy_plugin_mac
         Some(Arc::new(config_permissions)),
         None,
         None,
@@ -1236,6 +1238,7 @@ async fn unregistered_connection_error_budget_survives_map_prune() {
         None,
         None,
         None,
+        false, // legacy_plugin_mac
         None,
         None,
         None,

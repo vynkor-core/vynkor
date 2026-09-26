@@ -55,6 +55,7 @@ impl MessageRouter {
             None,
             None,
             None,
+            false,
             None,
             None,
             defaults.action_caller_rate_limit_rps,
@@ -80,6 +81,9 @@ impl MessageRouter {
         config_path: Option<String>,
         event_store: Option<Arc<EventStore>>,
         mac_secret: Option<Arc<Vec<u8>>>,
+        // local plugins MAC with the master secret instead of their
+        // per-plugin key (migration only, see Config::legacy_plugin_mac)
+        legacy_plugin_mac: bool,
         // T-04: operator-declared `config.yaml` `permissions:` allowlist per
         // plugin id. Registration clamps JWT/manifest-claimed permissions to
         // this list so a token can't grant more than the operator configured
@@ -264,6 +268,7 @@ impl MessageRouter {
                         config_path.as_deref(),
                         event_store.as_ref(),
                         &mac_secret,
+                        legacy_plugin_mac,
                         config_permissions.as_deref(),
                         action_limiter.as_deref(),
                         action_caller_max_concurrent,
@@ -326,6 +331,7 @@ impl MessageRouter {
         config_path: Option<&str>,
         event_store: Option<&Arc<EventStore>>,
         mac_secret: &Option<Arc<Vec<u8>>>,
+        legacy_plugin_mac: bool,
         config_permissions: Option<&HashMap<String, Vec<String>>>,
         action_limiter: Option<&DefaultKeyedRateLimiter<(String, String)>>,
         action_caller_max_concurrent: Option<u32>,
@@ -409,7 +415,7 @@ impl MessageRouter {
                 // auth-enabled kernel must present an active, unexpired
                 // credential row; the connection's frame-MAC key then derives
                 // from that row's secret instead of the master. Empty device_id
-                // = local plugin, unchanged master-secret path
+                // = local plugin, keyed by plugin_mac_secret(master, plugin_id)
                 let mut device_secret: Option<Vec<u8>> = None;
                 if !reg.device_id.is_empty() && mac_secret.is_some() {
                     if let Some(store) = device_store {
@@ -551,10 +557,20 @@ impl MessageRouter {
                 // after the ack just sent) to start tagging outbound frames
                 if let (Some(secret), true) = (&mac_secret, result.is_ok()) {
                     // E-01: device-scoped connections key the MAC off their own
-                    // credential; everything else keeps the master secret
+                    // credential. Local plugins MAC with a key bound to their
+                    // own plugin_id, never the master secret that signs JWTs
+                    // (legacy_plugin_mac keeps the old behavior for migration)
+                    let plugin_secret;
                     let ikm: &[u8] = match &device_secret {
                         Some(s) => s.as_slice(),
-                        None => secret.as_slice(),
+                        None if legacy_plugin_mac => secret.as_slice(),
+                        None => {
+                            plugin_secret = crate::auth::plugin_key::plugin_mac_secret(
+                                secret.as_slice(),
+                                &plugin_id,
+                            );
+                            plugin_secret.as_bytes()
+                        }
                     };
                     let key =
                         crate::auth::frame_mac::derive_session_key(ikm, &session_nonce, &plugin_id);

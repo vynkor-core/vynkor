@@ -144,8 +144,10 @@ impl Kernel {
 
         let kernel_start = std::time::Instant::now();
         let config_path = config.config_file.clone();
-        // Frame-MAC key material: the same secret used for JWT, or None when
-        // running without auth (then frames are CRC-only, unchanged).
+        // Frame-MAC key material: the JWT secret, or None when running without
+        // auth (then frames are CRC-only, unchanged). The router never MACs a
+        // local plugin with it directly: each gets plugin_mac_secret(this,
+        // plugin_id) unless legacy_plugin_mac is set.
         let mac_secret = config
             .jwt_secret
             .as_ref()
@@ -200,6 +202,7 @@ impl Kernel {
             config_path,
             event_store.clone(),
             mac_secret,
+            config.legacy_plugin_mac,
             Some(config_permissions),
             config.ipc_rate_limit_rps,
             config.action_caller_rate_limit_rps,
@@ -253,6 +256,15 @@ impl Kernel {
             config.restart_backoff_max_ms,
         );
         supervisor.set_data_dir(config.data_dir.clone());
+        // local plugins get plugin_mac_secret(jwt_secret, plugin_id) as
+        // VYN_JWT_SECRET, never the master itself
+        supervisor.set_plugin_mac(
+            config
+                .jwt_secret
+                .as_ref()
+                .map(|s| Arc::new(s.as_bytes().to_vec())),
+            config.legacy_plugin_mac,
+        );
         let supervisor = Arc::new(supervisor);
         let sup_loop = Arc::clone(&supervisor);
         background_handles.push(tokio::spawn(async move { sup_loop.monitor_loop().await }));
