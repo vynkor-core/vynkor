@@ -2,9 +2,9 @@ use super::*;
 
 use crate::ipc::connection::out_frame;
 use crate::ipc::framing::build_frame;
-use crate::proto::vynkor::{envelope, Envelope, Event, PluginShutdown};
+use crate::proto::vynkor::{envelope, Envelope, PluginShutdown};
 use prost::Message;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 use tokio::signal::unix::{signal, SignalKind};
 
 /// Reload config from `config_file` (if set) and apply its log level.
@@ -54,27 +54,22 @@ impl Kernel {
                 Some(e) => e.plugin_id.clone(),
                 None => continue,
             };
+            let payload = crate::events::bus::plugin_lifecycle_payload(&registry, &plugin_id);
 
-            let now_ms = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis();
+            // Unregister before publishing: publish awaits the event store
+            // write, and the id must not stay taken for that long. Guarded by
+            // conn_id — the router may already have evicted this dead entry
+            // and handed the id to a newer connection.
+            if !registry.unregister_conn(&plugin_id, conn_id) {
+                continue;
+            }
+            event_bus.unsubscribe_all(&plugin_id);
             event_bus
                 .publish(
-                    Event {
-                        event_id: format!("sys-left-{plugin_id}-{now_ms}"),
-                        event_type: "system.plugin_left".to_string(),
-                        payload_json: crate::events::bus::plugin_lifecycle_payload(
-                            &registry, &plugin_id,
-                        ),
-                        retry_count: 0,
-                    },
+                    crate::events::bus::plugin_left_event(&plugin_id, payload),
                     &registry,
                 )
                 .await;
-
-            event_bus.unsubscribe_all(&plugin_id);
-            registry.unregister(&plugin_id);
         }
     }
 

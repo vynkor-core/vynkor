@@ -465,6 +465,30 @@ impl MessageRouter {
                     && !reg.device_id.is_empty()
                     && reg.plugin_id == reg.device_id;
 
+                // The previous connection with this id may be dead while the
+                // disconnect loop hasn't processed it yet (a CLI that exits and
+                // reconnects at once). Its write channel is already closed,
+                // so evict it here rather than rejecting the new connection.
+                // A live entry is never touched.
+                let reg_id = if is_mux_device {
+                    &reg.device_id
+                } else {
+                    &plugin_id
+                };
+                if registry.get(reg_id).is_some_and(|e| e.write_tx.is_closed()) {
+                    let payload = crate::events::bus::plugin_lifecycle_payload(registry, reg_id);
+                    if registry.unregister_if_dead(reg_id) {
+                        info!(plugin_id = %reg_id, "evicted stale registration of a closed connection");
+                        event_bus.unsubscribe_all(reg_id);
+                        event_bus
+                            .publish(
+                                crate::events::bus::plugin_left_event(reg_id, payload),
+                                registry,
+                            )
+                            .await;
+                    }
+                }
+
                 let result = if is_mux_device {
                     registry.register_device(
                         reg.device_id.clone(),

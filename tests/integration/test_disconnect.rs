@@ -100,3 +100,64 @@ async fn system_plugin_left_published_on_disconnect() {
 
     let _ = shutdown_tx.send(());
 }
+
+/// A client that exits and immediately reconnects with the same plugin_id
+/// (short-lived CLI tools like vyn-act, PTT scripts) must not be rejected with
+/// "plugin already registered" just because the kernel has not yet processed
+/// the old connection's disconnect.
+#[tokio::test]
+async fn immediate_reregister_after_disconnect_is_accepted() {
+    let (shutdown_tx, registry, _bus) = start_kernel("/tmp/vynkor_integ_rereg.sock", 19206).await;
+
+    for round in 0..20 {
+        let mut client = VynkorClient::connect("/tmp/vynkor_integ_rereg.sock")
+            .await
+            .unwrap();
+        let ack = client
+            .register("rereg", PluginManifest::default())
+            .await
+            .unwrap();
+        assert!(
+            ack.accepted,
+            "round {round}: re-registration rejected: {}",
+            ack.reject_reason
+        );
+        drop(client);
+    }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        registry.get("rereg").is_none(),
+        "last disconnect must still unregister"
+    );
+
+    let _ = shutdown_tx.send(());
+}
+
+/// Eviction of a stale registration must never touch a live one: a second
+/// client claiming the id of a connected plugin is still rejected.
+#[tokio::test]
+async fn live_registration_is_not_evicted_by_same_id() {
+    let (shutdown_tx, registry, _bus) = start_kernel("/tmp/vynkor_integ_hijack.sock", 19207).await;
+
+    let mut owner = VynkorClient::connect("/tmp/vynkor_integ_hijack.sock")
+        .await
+        .unwrap();
+    owner
+        .register("owned", PluginManifest::default())
+        .await
+        .unwrap();
+    let owner_conn = registry.get("owned").unwrap().conn_id;
+
+    let mut intruder = VynkorClient::connect("/tmp/vynkor_integ_hijack.sock")
+        .await
+        .unwrap();
+    let ack = intruder
+        .register("owned", PluginManifest::default())
+        .await
+        .unwrap();
+    assert!(!ack.accepted, "a live plugin's id must not be taken over");
+    assert_eq!(registry.get("owned").unwrap().conn_id, owner_conn);
+
+    drop(owner);
+    let _ = shutdown_tx.send(());
+}

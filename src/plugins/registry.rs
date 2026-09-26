@@ -377,29 +377,53 @@ impl PluginRegistry {
     }
 
     pub fn unregister(&self, plugin_id: &str) {
-        if let Some((_, entry)) = self.by_plugin_id.remove(plugin_id) {
-            self.by_conn_id.remove(&entry.conn_id);
-            self.pong_times.remove(plugin_id);
-            self.clear_action_requirements(plugin_id);
-            // PERF-3: drop this plugin's action→provider index entries
-            for action in &entry.manifest.actions {
-                self.unindex_action(action, plugin_id);
-            }
-            // D-02: a device is offline once none of its plugins remain
-            let device_id = &entry.device_id;
-            let still_registered = self.by_plugin_id.iter().any(|e| e.device_id == *device_id);
-            if !still_registered {
-                if let Some(mut dev) = self.devices.get_mut(device_id) {
-                    dev.state = DeviceState::Offline as i32;
-                }
-            }
-            // CD-07: every removal path (disconnect loop, manager stop,
-            // bridge, shutdown) funnels here — fail in-flight actions now
-            // rather than letting requesters sit out the action timeout.
-            // a request routed in the instant before removal still falls
-            // back to the timeout sweep
-            crate::ipc::protocol::helpers::fail_pending_for_provider(self, plugin_id);
+        self.unregister_if(plugin_id, |_| true);
+    }
+
+    /// Remove `plugin_id` only while it is still held by connection `conn_id`.
+    /// The disconnect loop runs behind the router, so by the time it handles an
+    /// old connection's disconnect the id may already belong to a newer
+    /// connection (see `unregister_if_dead`); that registration must survive.
+    pub fn unregister_conn(&self, plugin_id: &str, conn_id: u64) -> bool {
+        self.unregister_if(plugin_id, |e| e.conn_id == conn_id)
+    }
+
+    /// Remove `plugin_id` if its connection is already gone — its write
+    /// channel closes as soon as the connection ends, before the disconnect
+    /// loop gets to it. Lets a client that exits and reconnects at once
+    /// (vyn-act, PTT scripts) re-register instead of hitting "plugin already
+    /// registered". Never touches a live connection, so an id cannot be taken
+    /// over from a running plugin.
+    pub fn unregister_if_dead(&self, plugin_id: &str) -> bool {
+        self.unregister_if(plugin_id, |e| e.write_tx.is_closed())
+    }
+
+    fn unregister_if(&self, plugin_id: &str, pred: impl Fn(&PluginEntry) -> bool) -> bool {
+        let Some((_, entry)) = self.by_plugin_id.remove_if(plugin_id, |_, e| pred(e)) else {
+            return false;
+        };
+        self.by_conn_id.remove(&entry.conn_id);
+        self.pong_times.remove(plugin_id);
+        self.clear_action_requirements(plugin_id);
+        // PERF-3: drop this plugin's action→provider index entries
+        for action in &entry.manifest.actions {
+            self.unindex_action(action, plugin_id);
         }
+        // D-02: a device is offline once none of its plugins remain
+        let device_id = &entry.device_id;
+        let still_registered = self.by_plugin_id.iter().any(|e| e.device_id == *device_id);
+        if !still_registered {
+            if let Some(mut dev) = self.devices.get_mut(device_id) {
+                dev.state = DeviceState::Offline as i32;
+            }
+        }
+        // CD-07: every removal path (disconnect loop, manager stop,
+        // bridge, shutdown) funnels here — fail in-flight actions now
+        // rather than letting requesters sit out the action timeout.
+        // a request routed in the instant before removal still falls
+        // back to the timeout sweep
+        crate::ipc::protocol::helpers::fail_pending_for_provider(self, plugin_id);
+        true
     }
 
     /// CD-07: evict and return every pending action routed to `provider_id`.
