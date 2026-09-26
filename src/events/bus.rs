@@ -227,6 +227,21 @@ pub async fn run_retry_worker(
 // because device_id/capabilities arrive off the wire unvalidated — a raw
 // format! splice would be a JSON-injection vector. Looked up via the registry
 // because the caller still holds the entry at publish time.
+/// `system.plugin_left` for `plugin_id`; `payload` from
+/// `plugin_lifecycle_payload`, taken while the plugin was still registered.
+pub fn plugin_left_event(plugin_id: &str, payload: Vec<u8>) -> Event {
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    Event {
+        event_id: format!("sys-left-{plugin_id}-{now_ms}"),
+        event_type: "system.plugin_left".to_string(),
+        payload_json: payload,
+        retry_count: 0,
+    }
+}
+
 pub fn plugin_lifecycle_payload(registry: &PluginRegistry, plugin_id: &str) -> Vec<u8> {
     let device_id = registry
         .get(plugin_id)

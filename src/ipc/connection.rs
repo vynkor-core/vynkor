@@ -13,7 +13,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::UnixStream;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
+use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
 /// Default for how long an incomplete fragment set is retained before it is
@@ -104,6 +105,9 @@ pub struct ConnectionHandler {
     session_key: SessionKeyCell,
     fragment_timeout: Duration,
     max_reassembly_streams: usize,
+    /// Stops the write loop when the read side ends; see `run`.
+    write_stop: oneshot::Sender<()>,
+    write_task: JoinHandle<()>,
 }
 
 impl ConnectionHandler {
@@ -135,7 +139,8 @@ impl ConnectionHandler {
         let (read_half, write_half) = stream.into_split();
         let (write_tx, write_rx) = mpsc::channel::<Outbound>(64);
 
-        tokio::spawn(write_loop(write_half, write_rx));
+        let (write_stop, stop_rx) = oneshot::channel();
+        let write_task = tokio::spawn(write_loop(write_half, write_rx, stop_rx));
 
         let handler = ConnectionHandler {
             conn_id,
@@ -146,6 +151,8 @@ impl ConnectionHandler {
             session_key: Arc::new(Mutex::new(None)),
             fragment_timeout,
             max_reassembly_streams,
+            write_stop,
+            write_task,
         };
 
         (handler, write_tx)
@@ -349,6 +356,13 @@ impl ConnectionHandler {
             }
         }
         info!(conn_id = self.conn_id, "connection closed");
+        // End the write loop (flushing any queued error notice) before
+        // signalling the disconnect. That closes every clone of write_tx,
+        // including the registry's, so a same-id re-registration arriving
+        // while the disconnect loop is still busy sees this entry as dead
+        // instead of "plugin already registered".
+        let _ = self.write_stop.send(());
+        let _ = self.write_task.await;
         let _ = self.disconnect_tx.send(self.conn_id).await;
     }
 
@@ -375,36 +389,70 @@ impl ConnectionHandler {
     }
 }
 
-async fn write_loop(mut write_half: OwnedWriteHalf, mut rx: mpsc::Receiver<Outbound>) {
+async fn write_loop(
+    mut write_half: OwnedWriteHalf,
+    mut rx: mpsc::Receiver<Outbound>,
+    mut stop: oneshot::Receiver<()>,
+) {
     let mut key: Option<[u8; 32]> = None;
-    while let Some(item) = rx.recv().await {
-        let mut frame = match item {
-            Outbound::EnableMac(k, cell) => {
-                key = Some(k);
-                *cell.lock().unwrap_or_else(recover_poison) = Some(k);
-                continue;
+    loop {
+        let item = tokio::select! {
+            biased;
+            item = rx.recv() => match item {
+                Some(item) => item,
+                None => return,
+            },
+            // read side is gone (or the handler was dropped): refuse new
+            // frames, flush what is already queued, then exit
+            _ = &mut stop => {
+                rx.close();
+                while let Ok(item) = rx.try_recv() {
+                    if !write_one(&mut write_half, &mut key, item).await {
+                        break;
+                    }
+                }
+                return;
             }
-            Outbound::Frame(frame) => *frame,
         };
-
-        if let Some(k) = &key {
-            // Tag outbound frames once MAC is enabled for this connection.
-            frame.flags |= FLAG_MAC_PRESENT;
-            let header = serialize_header(&frame);
-            frame.mac = Some(compute_tag(k, &header, &frame.payload));
+        if !write_one(&mut write_half, &mut key, item).await {
+            return;
         }
+    }
+}
 
-        match write_frame_raw(&mut write_half, &frame).await {
-            Ok(()) => {}
-            // An oversized frame is a kernel-side fault — drop that frame but keep
-            // the connection; tearing it down would punish the plugin for our bug.
-            Err(VynkorError::PayloadTooLarge(n)) => {
-                warn!(bytes = n, "dropping oversized outbound frame");
-                counter!("ipc_frame_errors_total", "error" => "oversized_outbound").increment(1);
-            }
-            // Real I/O error (peer gone): stop the write loop.
-            Err(_) => break,
+/// Write one outbound item; `false` means the peer is gone.
+async fn write_one(
+    write_half: &mut OwnedWriteHalf,
+    key: &mut Option<[u8; 32]>,
+    item: Outbound,
+) -> bool {
+    let mut frame = match item {
+        Outbound::EnableMac(k, cell) => {
+            *key = Some(k);
+            *cell.lock().unwrap_or_else(recover_poison) = Some(k);
+            return true;
         }
+        Outbound::Frame(frame) => *frame,
+    };
+
+    if let Some(k) = key.as_ref() {
+        // Tag outbound frames once MAC is enabled for this connection.
+        frame.flags |= FLAG_MAC_PRESENT;
+        let header = serialize_header(&frame);
+        frame.mac = Some(compute_tag(k, &header, &frame.payload));
+    }
+
+    match write_frame_raw(write_half, &frame).await {
+        Ok(()) => true,
+        // An oversized frame is a kernel-side fault — drop that frame but keep
+        // the connection; tearing it down would punish the plugin for our bug.
+        Err(VynkorError::PayloadTooLarge(n)) => {
+            warn!(bytes = n, "dropping oversized outbound frame");
+            counter!("ipc_frame_errors_total", "error" => "oversized_outbound").increment(1);
+            true
+        }
+        // Real I/O error (peer gone): stop the write loop.
+        Err(_) => false,
     }
 }
 
@@ -455,7 +503,8 @@ mod tests {
         let (a, b) = UnixStream::pair().unwrap();
         let (_ra, wa) = a.into_split();
         let (tx, rx) = mpsc::channel::<Outbound>(8);
-        tokio::spawn(write_loop(wa, rx));
+        let (_stop, stop_rx) = oneshot::channel();
+        tokio::spawn(write_loop(wa, rx, stop_rx));
 
         let key = derive_session_key(b"s", b"nonce-aaaaaaaaaa", "p");
         let cell: SessionKeyCell = Arc::new(Mutex::new(None));
@@ -762,6 +811,34 @@ mod tests {
         assert!(
             disc_rx.try_recv().is_err(),
             "duplicate fragment resend must not trip the oversize disconnect"
+        );
+    }
+
+    /// The registry holds a clone of the connection's write sender. Once the
+    /// peer is gone that sender must report closed *before* the disconnect is
+    /// signalled, so a same-id re-registration can tell the old entry is dead
+    /// even while the disconnect loop is still busy (persisting plugin_left).
+    #[tokio::test]
+    async fn write_channel_is_closed_by_the_time_disconnect_is_signalled() {
+        let (client, server) = UnixStream::pair().unwrap();
+        let (incoming_tx, _incoming_rx) = mpsc::channel(8);
+        let (disc_tx, mut disc_rx) = mpsc::channel(8);
+
+        let (handler, registry_clone) = ConnectionHandler::new(9, server, incoming_tx, disc_tx);
+        tokio::spawn(handler.run());
+        assert!(
+            !registry_clone.is_closed(),
+            "open connection must accept writes"
+        );
+
+        drop(client);
+        let disc = tokio::time::timeout(std::time::Duration::from_secs(1), disc_rx.recv())
+            .await
+            .expect("must signal disconnect");
+        assert_eq!(disc, Some(9));
+        assert!(
+            registry_clone.is_closed(),
+            "write sender must be closed once the connection is gone"
         );
     }
 }

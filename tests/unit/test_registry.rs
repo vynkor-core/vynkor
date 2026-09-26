@@ -1275,3 +1275,39 @@ fn get_mux_fallback_resolves_device_prefix() {
     );
     assert!(reg.get_mux("unknown").is_none());
 }
+
+#[test]
+fn unregister_if_dead_evicts_only_closed_connections() {
+    let reg = PluginRegistry::new();
+
+    // live connection: receiver still held
+    let (live_tx, _live_rx) = mpsc::channel(1);
+    reg.register("live".into(), 1, dummy_manifest(), live_tx, "", "")
+        .unwrap();
+    assert!(!reg.unregister_if_dead("live"), "live entry must stay");
+    assert!(reg.get("live").is_some());
+
+    // dead connection: receiver dropped (write loop gone)
+    reg.register("dead".into(), 2, dummy_manifest(), dummy_write_tx(), "", "")
+        .unwrap();
+    assert!(reg.unregister_if_dead("dead"));
+    assert!(reg.get("dead").is_none());
+    assert!(reg.get_by_conn_id(2).is_none());
+
+    assert!(!reg.unregister_if_dead("missing"));
+}
+
+#[test]
+fn unregister_conn_ignores_a_newer_registration_of_the_same_id() {
+    let reg = PluginRegistry::new();
+    let (tx, _rx) = mpsc::channel(1);
+    reg.register("p".into(), 7, dummy_manifest(), tx, "", "")
+        .unwrap();
+
+    // late disconnect of an older connection that used the same id
+    assert!(!reg.unregister_conn("p", 3));
+    assert_eq!(reg.get("p").unwrap().conn_id, 7);
+
+    assert!(reg.unregister_conn("p", 7));
+    assert!(reg.get("p").is_none());
+}

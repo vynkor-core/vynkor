@@ -240,6 +240,10 @@ async fn handle_socket(
     }
 
     info!(conn_id = conn_id, "WS client disconnected");
+    // Close the registry's write_tx clone before signalling the disconnect, so
+    // a same-id reconnect racing the disconnect loop sees this entry as dead
+    // (see PluginRegistry::unregister_if_dead).
+    drop(write_rx);
     let _ = disconnect_tx.send(conn_id).await;
 }
 
