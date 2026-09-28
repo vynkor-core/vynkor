@@ -90,6 +90,13 @@ registry, review abuse controls, publish pipeline. Full list:
 - [ ] **vynkor-plugins**: `speech` not verified under `sandbox: true`;
   `email` runs `sandbox: false`.
 
+- [ ] **vynkor-wire**: fix the `ActionResponseChunk` proto comment ("stream
+  is terminated by the existing ActionResponse") — streams end with
+  `SessionClose`; sync to the SDKs with the next wire release.
+- [ ] **vynkor-sdk**: `ws_kernel_integration::ws_sdk_secured_jwt_and_mac_roundtrip`
+  fails locally ("ResetWithoutClosingHandshake") against kernel builds
+  from 2026-09-26 on; CI skips it (no kernel binary). Investigate.
+
 **Testing across repos**
 - [x] **vynkor-client-android**: CI (rust core + JVM unit tests + debug APK),
   vynkor-client-android #7.
@@ -149,7 +156,10 @@ action name (`chat_completion`, stt/tts, quotas) lives in `vynkor-plugins`.
       one strict env policy in Rust (vynkor-sdk #16, **0.0.4** on crates.io),
       C++ (vynkor-sdk-cpp #9) and Python (vynkor-sdk-python #10); Android
       client already on `deviceSecret`.
-- [ ] CD-03 — token streaming + cancel (**vynkor-plugins**; kernel: none).
+- [x] CD-03 — token streaming + cancel (**vynkor-plugins**; kernel: none).
+      DONE 2026-09-28: vynkor-sdk 0.0.5 `ResponseSink` (#18),
+      vynkor-plugins #77, vynkor-client-android #8. The agent route
+      (`goal_start`) does not stream yet — CD-04.
 - [ ] CD-04 — assistant session in `agent`; stt partial transcripts
       (**vynkor-plugins** + client; kernel: none).
 - [x] CD-05 — `caller_plugin_id` stamping regression test for device targets

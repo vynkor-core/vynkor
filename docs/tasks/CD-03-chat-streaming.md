@@ -9,7 +9,19 @@
 > `ai_stream_chunk` is already `reserved` in the proto from the last time.
 > Kernel + SDK plumbing already exists. All work is in `vynkor-plugins`.
 >
-> **Status:** kernel — no change. Open in `vynkor-plugins`.
+> **Status (2026-09-28): DONE** — kernel: no change. vynkor-sdk 0.0.5
+> (`ResponseSink` for `ConcurrentHandler`, #18), vynkor-plugins #77
+> (`network` streaming `http_request`, `ai` streamed `chat_completion` with
+> cancel), vynkor-client-android #8 (live bubble, Stop ends generation).
+> Contract: `plugins/ai/README.md` → "Streaming (CD-03)".
+>
+> **Correction to "Already Exists":** the SDK plumbing existed only on the
+> raw client; `ConcurrentHandler` could reply once, at the end — hence
+> `ResponseSink`. And a stream ends with `SessionClose`, not with a second
+> `ActionResponse`: the kernel keeps an accepted session on every further
+> `ACTION_OK` (`registry.rs::resolve_action_response`). The
+> `ActionResponseChunk` comment in the proto still says otherwise — fix it
+> in the next wire release.
 
 ## Goal
 
