@@ -69,17 +69,31 @@ All repos live in `vynkor-core`. The wire protocol in [`vynkor-wire`](https://gi
 ## Get started in 60 seconds
 
 ```bash
+curl -fsSL https://github.com/vynkor-core/vynkor/releases/latest/download/install.sh | bash
+vyn start --config ~/.config/vyn/config.yaml
+vyn status
+vynm install ai network database               # signed plugins from the registry
+vyn device connect --name my-phone             # → QR, scan with the Android app
+```
+
+The installer fetches static `vyn`, `vyn-pair` and `vynm` binaries (Linux
+x86_64/aarch64) from GitHub Releases, verifies them against the release's
+`SHA256SUMS`, installs into `~/.local/bin` and writes
+`~/.config/vyn/config.yaml` with a random `jwt_secret` (an existing config is
+never overwritten). No sudo; re-run it to update. `--help` lists the options
+(`--version v0.1.3`, `--no-vynm`, `--port`, `--dry-run`). Release archives also
+carry a build-provenance attestation: `gh attestation verify <archive> -R vynkor-core/vynkor`.
+
+### Build from source
+
+Any other platform, or to hack on the kernel:
+
+```bash
 git clone https://github.com/vynkor-core/vynkor && cd vynkor
-cargo build --release                 # → target/release/vyn
-./target/release/vyn start --foreground --debug  # foreground blocks; use another shell for next commands
-# in another shell:
-./target/release/vyn status
-# vynm is the plugin manager (separate repo):
+cargo build --release                 # → target/release/vyn  (needs protoc)
+./target/release/vyn start --foreground --debug
 git clone https://github.com/vynkor-core/vynkor-manager && cd vynkor-manager
 cargo build --release                 # → target/release/vynm
-./target/release/vynm search ai
-./target/release/vynm install ai network database
-./target/release/vyn device connect --name my-phone    # → QR, scan with Android app
 ```
 
 **Next:** open `vyn device list`, then from any plugin:
