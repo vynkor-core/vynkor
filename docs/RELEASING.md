@@ -78,7 +78,9 @@ installer fetches both, and the kernel release is what users hit.
 4. **Watch** `gh run watch -R vynkor-core/vynkor`. Jobs: `check-version` →
    `build` ×2 (static check + `--version` smoke test) → `publish`
    (checksums, attestations, `gh release create --generate-notes`).
-5. **Verify** on a clean machine or container:
+5. **Bump site copy**: `vynkor-web` `src/components/Header.tsx` badge and the
+   `--version` example in `GettingStarted.tsx` (hardcoded for now).
+6. **Verify** on a clean machine or container:
    ```bash
    docker run --rm ubuntu:24.04 bash -c 'apt-get update -qq && apt-get install -y -qq curl ca-certificates >/dev/null &&
      curl -fsSL https://github.com/vynkor-core/vynkor/releases/latest/download/install.sh | bash &&
@@ -116,3 +118,12 @@ installer fetches both, and the kernel release is what users hit.
 - AUR `PKGBUILD` (V-19.3) — should consume the release archives, not rebuild.
 - macOS builds: the kernel's sandbox is Linux-only; decide whether a
   no-sandbox macOS `vyn` is worth shipping before adding a target.
+- Scheduled installer smoke test (weekly, clean container, public one-liner)
+  so a broken `latest` is noticed without waiting for a user report.
+- Write release procedures for `vynkor-sdk` (crates.io) and
+  `vynkor-sdk-python` (PyPI); publish `vynkor-manager` to crates.io.
+- Curated release notes: `--generate-notes` only lists PR titles.
+- Site version strings (`vynkor-web` Header badge, GettingStarted example)
+  are hardcoded — part of the release checklist until they are generated.
+
+Tracked in `ROADMAP.md` → "Distribution — REL-01" and "Ecosystem backlog".
