@@ -29,6 +29,78 @@
 - [ ] Bump release actions off Node 20 (upload/download-artifact,
   attest-build-provenance) — exercise publish with an `-rc` tag.
 - [ ] AUR `PKGBUILD` from the release archives (V-19.3).
+- [ ] **Scheduled installer smoke test** — weekly workflow: clean
+  `ubuntu:24.04` → public one-liner → `vyn start` → `vyn status` →
+  `vynm search`. Catches a broken latest release, registry or installer
+  between tags (today this is only checked by hand, `docs/RELEASING.md` §5).
+- [ ] **macOS decision** — sandbox is Linux-only; ship a no-sandbox `vyn`
+  for macOS or keep "build from source"? Decide before adding a target.
+- [ ] **Curated release notes / CHANGELOG** — releases use
+  `--generate-notes` (PR titles only); only vynkor-wire keeps a CHANGELOG.
+
+## Ecosystem backlog (recorded 2026-09-28)
+
+Open work outside this repo's phases, so it is not lost between sessions.
+Owner repo in bold.
+
+**Distribution**
+- [ ] **vynkor-manager**: bump `vynkor-wire` 0.0.2 → 0.0.4 (kernel is on
+  proto 1.7 / wire 0.0.4; manager still parses manifests with the old crate).
+- [ ] **vynkor-manager**: publish 0.1.x to crates.io (README no longer
+  promises it; `cargo install --git` is the documented fallback).
+- [ ] **vynkor-sdk / vynkor-sdk-python**: write down the release procedure
+  (none exists; wire has one in its README), ideally tag-driven
+  (`cargo publish` / PyPI trusted publishing).
+- [ ] **vynkor-client-android**: signed APK in GitHub Releases + F-Droid
+  metadata — tracked as D-16 in `docs/REMOTE_DEVICES_ROADMAP.md`.
+
+**Product (plugins; kernel: none)** — CD-00, CD-03 (token streaming +
+cancel), CD-04 (assistant session), CD-09 (quotas) in Phase 15 above. These
+make the phone/AI demo feel alive; do them before announcing.
+
+**Web (vynkor-web)** — deploy checklist (domain, D1, GitHub OAuth app,
+privacy/terms), /docs pages, og-image, ratings on cards, permissions from the
+registry, review abuse controls, publish pipeline. Full list:
+`../vynkor-web/ROADMAP.md`.
+
+**Launch**
+- [ ] 60-second demo video/GIF: install → `vyn start` → pair phone (QR) →
+  ask the AI something answered via `my-phone.*` — for README, site, posts.
+- [ ] Announcement (HN / Reddit / Rust forums) — only after the site is
+  deployed and the demo exists.
+
+**Community hygiene**
+- [ ] `CONTRIBUTING.md` in the other repos — only the kernel has one on its
+  default branch (vynkor-plugins has one on `main`, not on `develop`). A short
+  file per repo linking `docs/ENGINEERING_WORKFLOW.md` is enough.
+- [ ] Issue templates missing in vynkor-sdk-cpp, vynkor-sdk-python,
+  vynkor-web, vynkor-client-android (present in the other five).
+- [ ] PR template (`.github/pull_request_template.md`) with the
+  Why / What / Verification / Not verified sections from
+  `docs/ENGINEERING_WORKFLOW.md` §3 — no repo has one.
+
+**Correctness / security (before announcing)** — recorded 2026-09-28
+- [x] **vynkor**: revocation reaches live sessions — an open device WS
+  re-checks its row every `ws_device_recheck_secs` and closes on
+  revoke/remove/expiry (#107). The ed25519 half of D-18 stays open.
+- [ ] **vynkor**: duplicate action names across plugins — `stt`, `tts` and
+  `speech` declare the same actions; registry behavior is unverified. Decide
+  (reject at registration vs. last-wins), add a test; mark `stt`/`tts`
+  deprecated in the registry.
+- [ ] **vynkor-plugins**: `speech` not verified under `sandbox: true`;
+  `email` runs `sandbox: false`.
+
+**Testing across repos**
+- [x] **vynkor-client-android**: CI (rust core + JVM unit tests + debug APK),
+  vynkor-client-android #7.
+- [ ] **vynkor-wire**: golden frames (bytes + expected decode) shared by all
+  three SDKs' CI — checks codec behavior, not just byte-identical `.proto`.
+- [ ] End-to-end: released kernel → `vynm install` → plugin → action call
+  (extend the scheduled installer smoke test).
+
+**Plugin developer experience**
+- [ ] `vynm new <lang>` / `cargo generate` template (plugin.json, CI, test).
+- [ ] SDK ↔ kernel protocol compatibility matrix in one place.
 
 ## Carried over — Phase 14
 
