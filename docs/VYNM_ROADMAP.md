@@ -515,16 +515,19 @@ lives in the manager repo and any format change is deliberate.
      update. The earlier source-building script (removed 99cd25f) diverged
      from the vynkor-web copy — the site now 302s `/install.sh` to the
      latest release asset (never a mutable branch), so there is one copy
-     and curl|bash only runs tagged code. Remaining: first tagged releases.
+     and curl|bash only runs tagged code. First releases published
+     2026-09-28: kernel v0.1.3, vynm v0.1.0 (runbook: docs/RELEASING.md).
   2. ◐ Docs sweep across repos: README/roadmaps/audit largely speak vynkor;
      residual old-name mentions kept only as history.
   3. ☐ AUR PKGBUILD ships `/usr/bin/vyn` + `/usr/bin/vynm`; pacman owns
      updates (NO self-update by policy); completions ride V-16 later.
   - Acceptance: fresh machine + package install → `vyn start` → `vynm
     install database` works touching only XDG dirs under `~/.config/vyn`.
-    (Verified 2026-09-28 in a clean ubuntu:24.04 container against locally
-    built release archives: install → `vyn start` → `vyn status` running;
-    tampered archive → checksum mismatch, nothing installed.)
+    (Verified 2026-09-28 in a clean ubuntu:24.04 container with the public
+    one-liner against the published v0.1.3/v0.1.0 releases: sha256 ok →
+    `vyn start` → `vyn status` running → `vynm search` lists the official
+    registry; `gh attestation verify` passes. Tampered archive → checksum
+    mismatch, nothing installed.)
 
 - [x] **V-20 — `vynm new <name>`: plugin scaffolding.** ✅ DONE & verified
     2026-08-22 (`include_str!` templates, identifier gate, acceptance build

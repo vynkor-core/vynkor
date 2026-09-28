@@ -19,6 +19,17 @@
 
 ---
 
+## Distribution — REL-01 (2026-09-28)
+
+- [x] **REL-01 — tag-driven binary releases + installer.** Kernel `v0.1.3`
+  and vynm `v0.1.0` are the first tagged releases: static musl archives
+  (x86_64/aarch64), `SHA256SUMS`, provenance attestations, `install.sh` as a
+  release asset (#103, #105; vynkor-manager #37, #38). Runbook and lessons:
+  `docs/RELEASING.md`. Process: `docs/ENGINEERING_WORKFLOW.md`.
+- [ ] Bump release actions off Node 20 (upload/download-artifact,
+  attest-build-provenance) — exercise publish with an `-rc` tag.
+- [ ] AUR `PKGBUILD` from the release archives (V-19.3).
+
 ## Carried over — Phase 14
 
 - [ ] **K-06 — Decouple API drain window from `default_grace_seconds`.**

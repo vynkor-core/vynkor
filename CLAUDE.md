@@ -57,6 +57,10 @@ that lives in plugins. Active drift-fix tracking: `docs/DUMB_CORE_AUDIT.md`.
 
 **SDKs (for plugin developers):** sibling repos — `vynkor-sdk` (Rust), `vynkor-sdk-cpp`, `vynkor-sdk-python` (checked out at `../vynkor-sdk-*` for tests/CI)
 
+**Distribution:**
+- `install.sh` — binary installer (published as a release asset; never served from a branch)
+- `.github/workflows/release.yml` — tag `vX.Y.Z` → static musl `vyn`/`vyn-pair` for x86_64 + aarch64, `SHA256SUMS`, attestations
+
 **Protocol & Docs:**
 - `../vynkor-wire/proto/vynkor_protocol.proto` — IPC message schema (single source of truth)
 - `docs/FRAMING.md` — Frame format, flag bits (single source of truth for flags)
@@ -93,7 +97,9 @@ that lives in plugins. Active drift-fix tracking: `docs/DUMB_CORE_AUDIT.md`.
 - **`src/kernel/orchestrator/`** (mod.rs + shutdown.rs) ← Component wiring & shutdown sequencing
 - **`src/plugins/supervisor/`** (mod.rs, spawn.rs, watchdog.rs) ← Process supervision & resource limits
 - **`src/ipc/protocol/`** ← Message routing
-- **`Cargo.toml`** ← Dependencies & test targets
+- **`Cargo.toml`** ← Dependencies & test targets (version = release tag)
+- **`install.sh`, `.github/workflows/release.yml`** ← what every user runs; dry-run before merging (`docs/RELEASING.md`)
+- **`src/plugins/seccomp.rs`** ← any new `libc::SYS_*` must build on both musl targets (aarch64 musl libc is incomplete)
 
 ## HOW
 
@@ -138,6 +144,18 @@ cargo fmt --check
 | IPC hangs | `src/ipc/protocol/router.rs` — timeout handling? Message framing? |
 | Auth fails | `src/auth/jwt.rs` — token expiry? Permissions in `permissions.rs`? |
 
+### Process: branches, PRs, releases
+
+- **Workflow** (branch per change, PR template with a "Not verified" line,
+  verification bar incl. mutation checks for security code, merge style per
+  repo, stacked PRs): `docs/ENGINEERING_WORKFLOW.md`
+- **Releases** (tag → assets, installer, dry run, failed-release recovery,
+  lessons): `docs/RELEASING.md`
+- Default branch here is `develop`; merges use merge commits; the org
+  refuses merging a branch that is behind `develop` → `gh pr update-branch`.
+- Nothing fake on public surfaces (site, README): no mock reviews, prices,
+  badges — hide a feature until it is real.
+
 ### When to Raise Questions
 
 - Modifying IPC protocol (`../vynkor-wire/proto/vynkor_protocol.proto`)
@@ -150,4 +168,5 @@ cargo fmt --check
 - **Protocol:** `../vynkor-wire/proto/vynkor_protocol.proto`
 - **Architecture:** `docs/archive/VYNKOR_ARCHITECTURE.md` (historical) · `README.md` (current)
 - **Roadmap:** `ROADMAP.md`
+- **Process:** `docs/ENGINEERING_WORKFLOW.md` · `docs/RELEASING.md` · `CONTRIBUTING.md`
 - **Config:** `config.yaml`
