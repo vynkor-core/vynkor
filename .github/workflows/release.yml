@@ -22,6 +22,9 @@ name: release
 on:
   push:
     tags: ['v[0-9]+.[0-9]+.[0-9]+*']
+  # dry run from any branch: builds + smoke-tests every target, publishes
+  # nothing (check-version and publish only run for tags)
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -37,6 +40,7 @@ env:
 
 jobs:
   check-version:
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -52,8 +56,11 @@ jobs:
 
   build:
     needs: check-version
+    # tag push: gated on check-version; manual dry run: skipped, still build
+    if: ${{ !cancelled() && (needs.check-version.result == 'success' || needs.check-version.result == 'skipped') }}
     strategy:
-      fail-fast: true
+      # one arch failing must not hide the other's result
+      fail-fast: false
       matrix:
         include:
           # native runners for both arches: no cross/qemu, and the C deps
@@ -110,6 +117,7 @@ jobs:
 
   publish:
     needs: build
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
       contents: write
