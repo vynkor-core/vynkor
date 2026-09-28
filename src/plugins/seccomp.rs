@@ -32,16 +32,21 @@ use std::env::consts::ARCH;
 fn denied() -> Vec<(i64, Vec<SeccompRule>)> {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     use libc::SYS_modify_ldt;
+    // libc's musl/aarch64 table has no kexec_file_load; aarch64 uses the
+    // asm-generic number, the same 294 libc ships for gnu/aarch64
+    #[cfg(all(target_arch = "aarch64", target_env = "musl"))]
+    const SYS_kexec_file_load: libc::c_long = 294;
+    #[cfg(not(all(target_arch = "aarch64", target_env = "musl")))]
+    use libc::SYS_kexec_file_load;
     use libc::{
         SYS_acct, SYS_add_key, SYS_bpf, SYS_chroot, SYS_delete_module, SYS_fanotify_init,
         SYS_finit_module, SYS_fsconfig, SYS_fsopen, SYS_fspick, SYS_init_module,
-        SYS_io_uring_enter, SYS_io_uring_register, SYS_io_uring_setup, SYS_kcmp,
-        SYS_kexec_file_load, SYS_kexec_load, SYS_keyctl, SYS_lookup_dcookie, SYS_mount,
-        SYS_mount_setattr, SYS_move_mount, SYS_name_to_handle_at, SYS_open_by_handle_at,
-        SYS_open_tree, SYS_perf_event_open, SYS_pivot_root, SYS_process_vm_readv,
-        SYS_process_vm_writev, SYS_ptrace, SYS_quotactl, SYS_reboot, SYS_request_key,
-        SYS_setdomainname, SYS_sethostname, SYS_setns, SYS_swapoff, SYS_swapon, SYS_syslog,
-        SYS_umount2, SYS_userfaultfd, SYS_vhangup,
+        SYS_io_uring_enter, SYS_io_uring_register, SYS_io_uring_setup, SYS_kcmp, SYS_kexec_load,
+        SYS_keyctl, SYS_lookup_dcookie, SYS_mount, SYS_mount_setattr, SYS_move_mount,
+        SYS_name_to_handle_at, SYS_open_by_handle_at, SYS_open_tree, SYS_perf_event_open,
+        SYS_pivot_root, SYS_process_vm_readv, SYS_process_vm_writev, SYS_ptrace, SYS_quotactl,
+        SYS_reboot, SYS_request_key, SYS_setdomainname, SYS_sethostname, SYS_setns, SYS_swapoff,
+        SYS_swapon, SYS_syslog, SYS_umount2, SYS_userfaultfd, SYS_vhangup,
     };
     vec![
         (SYS_ptrace, vec![]),
