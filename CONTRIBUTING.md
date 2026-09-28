@@ -68,6 +68,10 @@ cargo fmt --check
   what. Audit tags like `T-04` or `R9-03` are indexed in
   `docs/COMMENT_TAGS.md`.
 
+Full process — PR template, verification bar, merge style per repo, stacked
+PRs: [`docs/ENGINEERING_WORKFLOW.md`](docs/ENGINEERING_WORKFLOW.md). Cutting
+a release: [`docs/RELEASING.md`](docs/RELEASING.md).
+
 ## Security issues
 
 Never in a public issue — see [SECURITY.md](SECURITY.md).
