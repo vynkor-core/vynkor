@@ -506,19 +506,25 @@ lives in the manager repo and any format change is deliberate.
     empty → stable at parse time since PR #24.
 
 - [ ] **V-19 — stage 4/C: installer, docs sweep, packaging.** ◐ PARTIAL
-  1. ☐ Installer: the curl-pipe `install.sh` was REMOVED (kernel root and
-     the diverged vynkor-web copy) — distribution is `cargo install
-     vynkor-manager` (0.1.0 crates.io prep) plus a future AUR PKGBUILD.
-     The script already targeted `~/.config/vyn/`, so no path migration
-     was lost with it.
+  1. ◐ Installer (2026-09-28, REL-01): `install.sh` is back as a BINARY
+     installer — no source build. Tag-driven `release.yml` in vynkor and
+     vynkor-manager publish static musl archives (x86_64/aarch64) +
+     `SHA256SUMS` + build-provenance attestations; the script downloads,
+     verifies sha256, installs to `~/.local/bin`, seeds the shared config
+     via `vynm init` and appends kernel keys. Still no self-update: re-run =
+     update. The earlier source-building script (removed 99cd25f) diverged
+     from the vynkor-web copy — the site now 302s `/install.sh` to the
+     latest release asset (never a mutable branch), so there is one copy
+     and curl|bash only runs tagged code. Remaining: first tagged releases.
   2. ◐ Docs sweep across repos: README/roadmaps/audit largely speak vynkor;
      residual old-name mentions kept only as history.
   3. ☐ AUR PKGBUILD ships `/usr/bin/vyn` + `/usr/bin/vynm`; pacman owns
      updates (NO self-update by policy); completions ride V-16 later.
   - Acceptance: fresh machine + package install → `vyn start` → `vynm
     install database` works touching only XDG dirs under `~/.config/vyn`.
-    (Install-from-source path verified manually; binary-package acceptance
-    blocked on AUR.)
+    (Verified 2026-09-28 in a clean ubuntu:24.04 container against locally
+    built release archives: install → `vyn start` → `vyn status` running;
+    tampered archive → checksum mismatch, nothing installed.)
 
 - [x] **V-20 — `vynm new <name>`: plugin scaffolding.** ✅ DONE & verified
     2026-08-22 (`include_str!` templates, identifier gate, acceptance build
