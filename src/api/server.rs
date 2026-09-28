@@ -45,6 +45,7 @@ pub struct RouterConfig {
     pub ws_handshake_timeout_secs: u64,
     pub max_ws_connections: usize,
     pub ws_register_timeout_secs: u64,
+    pub ws_device_recheck_secs: u64,
 }
 
 /// The built router plus its keyed rate limiter (`Some` once JWT auth is on).
@@ -75,6 +76,7 @@ pub fn create_router(
         ws_handshake_timeout_secs: 5,
         max_ws_connections: 1024,
         ws_register_timeout_secs: 10,
+        ws_device_recheck_secs: 10,
     })
     .app
 }
@@ -157,6 +159,7 @@ pub fn create_router_full(config: RouterConfig) -> BuiltRouter {
             open_conns: Arc::new(AtomicU64::new(0)),
             max_connections: config.max_ws_connections,
             register_timeout_secs: config.ws_register_timeout_secs,
+            device_recheck_secs: config.ws_device_recheck_secs,
         });
         let ws_sub = Router::new()
             .route("/ws", get(ws_handler))
@@ -201,6 +204,7 @@ pub struct ApiServer {
     ws_handshake_timeout_secs: u64,
     max_ws_connections: usize,
     ws_register_timeout_secs: u64,
+    ws_device_recheck_secs: u64,
 }
 
 impl ApiServer {
@@ -240,6 +244,7 @@ impl ApiServer {
             ws_handshake_timeout_secs,
             max_ws_connections,
             ws_register_timeout_secs,
+            ws_device_recheck_secs: 10,
             pairing: None,
         }
     }
@@ -248,6 +253,13 @@ impl ApiServer {
     /// positional arg to `new`).
     pub fn with_pairing(mut self, pairing: Option<Arc<PairingService>>) -> Self {
         self.pairing = pairing;
+        self
+    }
+
+    /// Live-connection credential re-check period; builder step for the same
+    /// reason as `with_pairing`.
+    pub fn with_device_recheck_secs(mut self, secs: u64) -> Self {
+        self.ws_device_recheck_secs = secs;
         self
     }
 
@@ -272,6 +284,7 @@ impl ApiServer {
             ws_handshake_timeout_secs: self.ws_handshake_timeout_secs,
             max_ws_connections: self.max_ws_connections,
             ws_register_timeout_secs: self.ws_register_timeout_secs,
+            ws_device_recheck_secs: self.ws_device_recheck_secs,
         });
         // named binding on purpose: `let _` would drop (and detach) instantly,
         // while `_prune_task` keeps the evictor alive until run() returns

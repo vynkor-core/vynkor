@@ -56,6 +56,7 @@ fn router(pairing: Arc<PairingService>) -> axum::Router {
         ws_handshake_timeout_secs: 5,
         max_ws_connections: 1024,
         ws_register_timeout_secs: 10,
+        ws_device_recheck_secs: 10,
     })
     .app
 }

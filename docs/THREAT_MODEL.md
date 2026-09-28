@@ -53,6 +53,10 @@ Denied by:
 - Register-or-drop: an authenticated WS connection that does not finish
   registration within `ws_register_timeout_secs` (default 10) is dropped
   (D-07), closing the pre-MAC window.
+- Revocation reaches live sessions: a paired device's open WS connection
+  re-reads its credential row every `ws_device_recheck_secs` (default 10) and
+  is closed once the row is revoked, expired or removed — `vyn device revoke`
+  does not wait for the device to reconnect.
 - Bind policy: loopback unless `role: host` + auth configured; local `vyn`
   clients pin the exact served cert.
 - Rate limits (`max_ws_connections` default 1024, error-budget throttling,

@@ -327,6 +327,7 @@ async fn stop_supervised_plugin_returns_200_and_cleans_up() {
         ws_handshake_timeout_secs: 5,
         max_ws_connections: 1024,
         ws_register_timeout_secs: 10,
+        ws_device_recheck_secs: 10,
     })
     .app;
 
@@ -684,6 +685,7 @@ async fn rate_limit_applies_only_to_verified_sub_not_forged_tokens() {
         ws_handshake_timeout_secs: 5,
         max_ws_connections: 1024,
         ws_register_timeout_secs: 10,
+        ws_device_recheck_secs: 10,
     })
     .app;
 
@@ -728,6 +730,7 @@ async fn rate_limit_enforced_per_verified_sub() {
         ws_handshake_timeout_secs: 5,
         max_ws_connections: 1024,
         ws_register_timeout_secs: 10,
+        ws_device_recheck_secs: 10,
     })
     .app;
 
@@ -860,6 +863,7 @@ async fn start_plugin_spawns_process_declared_in_config() {
         ws_handshake_timeout_secs: 5,
         max_ws_connections: 1024,
         ws_register_timeout_secs: 10,
+        ws_device_recheck_secs: 10,
     })
     .app;
 
@@ -897,6 +901,7 @@ async fn start_unknown_plugin_returns_404() {
         ws_handshake_timeout_secs: 5,
         max_ws_connections: 1024,
         ws_register_timeout_secs: 10,
+        ws_device_recheck_secs: 10,
     })
     .app;
 
@@ -950,6 +955,7 @@ async fn start_plugin_rejects_manifest_requesting_ungranted_permission() {
         ws_handshake_timeout_secs: 5,
         max_ws_connections: 1024,
         ws_register_timeout_secs: 10,
+        ws_device_recheck_secs: 10,
     })
     .app;
 
@@ -995,6 +1001,7 @@ async fn start_already_running_plugin_returns_conflict() {
         ws_handshake_timeout_secs: 5,
         max_ws_connections: 1024,
         ws_register_timeout_secs: 10,
+        ws_device_recheck_secs: 10,
     })
     .app;
 
