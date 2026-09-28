@@ -15,6 +15,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
+use crate::auth::device_store::DeviceStore;
 use crate::auth::frame_mac::{compute_tag, verify_tag};
 use crate::auth::jwt::JwtValidator;
 use crate::ipc::connection::{Outbound, SessionKeyCell};
@@ -42,6 +43,27 @@ pub struct WsGateway {
     /// registration within this window is dropped — a client that never
     /// registers never gets a session frame-MAC key.
     pub register_timeout_secs: u64,
+    /// How often a paired device's live connection re-checks its credential
+    /// row. The upgrade/registration gates only stop *new* sessions; without
+    /// this, `vyn device revoke`/`remove` leaves an open socket working until
+    /// the device reconnects on its own. 0 = off.
+    pub device_recheck_secs: u64,
+}
+
+/// A paired device's connection keeps re-reading its row; the socket closes
+/// once the row is revoked, expired or removed.
+struct DeviceWatch {
+    store: Arc<DeviceStore>,
+    device_id: String,
+    every: Duration,
+}
+
+impl DeviceWatch {
+    /// `Ok(None)` means removed: the row existed at upgrade, so a missing row
+    /// now is a withdrawal, not a local client.
+    fn still_active(&self) -> bool {
+        matches!(self.store.active_secret(&self.device_id), Ok(Some(_)))
+    }
 }
 
 /// Extract JWT from `Sec-WebSocket-Protocol: vynkor, <jwt>`.
@@ -60,6 +82,7 @@ pub async fn ws_handler(
     headers: HeaderMap,
     State(state): State<Arc<WsGateway>>,
 ) -> Response {
+    let mut device_watch = None;
     if let Some(validator) = &state.jwt_validator {
         let token = extract_ws_token(&headers);
         match validator.validate(token) {
@@ -68,12 +91,22 @@ pub async fn ws_handler(
                 // devices die here, before any socket exists. Unknown subs pass
                 // (local clients and pre-pairing tokens).
                 if let Some(store) = &state.device_store {
-                    if let Err(e) = store.active_secret(&claims.sub) {
-                        warn!("WS: device rejected at upgrade");
-                        let _ = e; // don't log token contents or device state details
-                        counter!("ws_connections_rejected_total", "reason" => "device")
-                            .increment(1);
-                        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+                    match store.active_secret(&claims.sub) {
+                        Ok(Some(_)) if state.device_recheck_secs > 0 => {
+                            device_watch = Some(DeviceWatch {
+                                store: Arc::clone(store),
+                                device_id: claims.sub,
+                                every: Duration::from_secs(state.device_recheck_secs),
+                            });
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            warn!("WS: device rejected at upgrade");
+                            let _ = e; // don't log token contents or device state details
+                            counter!("ws_connections_rejected_total", "reason" => "device")
+                                .increment(1);
+                            return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+                        }
                     }
                 }
             }
@@ -112,7 +145,15 @@ pub async fn ws_handler(
 
     ws.protocols(["vynkor"])
         .on_upgrade(move |socket| async move {
-            handle_socket(socket, conn_id, router_tx, disconnect_tx, register_timeout).await;
+            handle_socket(
+                socket,
+                conn_id,
+                router_tx,
+                disconnect_tx,
+                register_timeout,
+                device_watch,
+            )
+            .await;
             open_conns.fetch_sub(1, Ordering::Relaxed);
         })
 }
@@ -123,6 +164,7 @@ async fn handle_socket(
     router_tx: mpsc::Sender<IncomingMessage>,
     disconnect_tx: mpsc::Sender<u64>,
     register_timeout_secs: u64,
+    device_watch: Option<DeviceWatch>,
 ) {
     info!(conn_id = conn_id, "WS client connected");
 
@@ -138,6 +180,10 @@ async fn handle_socket(
     let deadline = (register_timeout_secs > 0)
         .then(|| tokio::time::Instant::now() + Duration::from_secs(register_timeout_secs));
     let mut registered = false;
+    // first tick one period in, not immediately: the upgrade just checked
+    let mut recheck = device_watch
+        .as_ref()
+        .map(|w| tokio::time::interval_at(tokio::time::Instant::now() + w.every, w.every));
 
     loop {
         tokio::select! {
@@ -235,6 +281,22 @@ async fn handle_socket(
                     "WS: client never registered within {register_timeout_secs}s — closing"
                 );
                 break;
+            }
+            _ = async {
+                match recheck.as_mut() {
+                    Some(t) => { t.tick().await; }
+                    None => std::future::pending::<()>().await,
+                }
+            } => {
+                if let Some(w) = &device_watch {
+                    if !w.still_active() {
+                        warn!(conn_id, "WS: device credential withdrawn — closing");
+                        counter!("ws_connections_closed_total", "reason" => "device_withdrawn")
+                            .increment(1);
+                        let _ = socket.send(Message::Close(None)).await;
+                        break;
+                    }
+                }
             }
         }
     }

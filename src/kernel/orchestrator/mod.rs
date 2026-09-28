@@ -322,7 +322,8 @@ impl Kernel {
             config.max_ws_connections,
             config.ws_register_timeout_secs,
         )
-        .with_pairing(pairing);
+        .with_pairing(pairing)
+        .with_device_recheck_secs(config.ws_device_recheck_secs);
         // K-04: kept outside the spawned task so graceful_shutdown can signal
         // it (axum-server's Handle is the drain/stop switch for the listener).
         let api_shutdown_handle = axum_server::Handle::new();

@@ -206,6 +206,11 @@ pub struct Config {
     /// frame-MAC" gap). Registering arms the session MAC key.
     #[serde(default = "default_ws_register_timeout_secs")]
     pub ws_register_timeout_secs: u64,
+    /// Seconds between credential re-checks on a paired device's open WS
+    /// connection: `vyn device revoke`/`remove` closes a live session within
+    /// this bound, not only at the next reconnect. 0 disables.
+    #[serde(default = "default_ws_device_recheck_secs")]
+    pub ws_device_recheck_secs: u64,
     // registry_url / marketplace_public_key / registry_cache_ttl_secs moved
     // to vynm with the marketplace (V-07); vynm reads them from this same
     // file. no deny_unknown_fields here, so old configs keep loading.
@@ -366,6 +371,9 @@ fn default_ws_handshake_timeout_secs() -> u64 {
 fn default_ws_register_timeout_secs() -> u64 {
     10
 }
+fn default_ws_device_recheck_secs() -> u64 {
+    10
+}
 fn default_tls() -> bool {
     true
 }
@@ -416,6 +424,7 @@ impl Default for Config {
             jwt_audience: None,
             bind: None,
             ws_register_timeout_secs: default_ws_register_timeout_secs(),
+            ws_device_recheck_secs: default_ws_device_recheck_secs(),
             tmp_dir: default_tmp_dir(),
             action_timeout_ms: default_action_timeout_ms(),
             restart_backoff_base_ms: default_restart_backoff_base_ms(),

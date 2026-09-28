@@ -62,6 +62,10 @@ allow_no_auth: true
 # gateway drops it (D-07, closes the "never registers -> no frame-MAC" gap).
 # ws_register_timeout_secs: 10
 #
+# Seconds between credential re-checks on a paired device's open WS connection:
+# `vyn device revoke`/`remove` closes a live session within this bound. 0 = off.
+# ws_device_recheck_secs: 10
+#
 # Per-device JWT minting (offline, reads jwt_secret from this file):
 #   vyn token mint --device phone-1 [--permissions PERMISSION_IPC_SEND] [--ttl-seconds 86400]
 

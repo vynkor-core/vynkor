@@ -1,5 +1,6 @@
 //! E-01 end-to-end over the real WS gateway: pair → connect → MAC'd ping →
-//! revoke → rejected → expired → rejected.
+//! revoke → rejected → expired → rejected; revoke/remove also close a session
+//! that is already open.
 //!
 //! The store writes here go through the same `DeviceStore` the CLI uses, onto
 //! the kernel's data_dir — and because the kernel re-reads the store on every
@@ -17,7 +18,7 @@ use vynkor::auth::device_store::DeviceStore;
 use vynkor::auth::frame_mac::{compute_tag, derive_session_key};
 use vynkor::proto::vynkor::{envelope, Envelope, Ping, PluginManifest, PluginRegister};
 
-use crate::helpers::start_kernel_secured_with_data_dir;
+use crate::helpers::{start_kernel_secured_with_data_dir, start_kernel_with_config, test_config};
 
 const MASTER: &str = "e01-ws-integration-secret-32-bytes!!";
 
@@ -236,6 +237,128 @@ async fn expired_device_is_rejected_at_upgrade() {
     .expect("connect attempt resolves")
     .expect_err("expired device must be rejected at WS upgrade");
     assert!(err.to_string().contains("401"), "got: {err}");
+}
+
+/// Secured kernel with a 1s live-credential re-check, so the tests below see
+/// a revoke land on an open socket without waiting out the 10s default.
+async fn start_fast_recheck_kernel(
+    socket: &str,
+    port: u16,
+    data_dir: &std::path::Path,
+) -> (
+    tokio::sync::oneshot::Sender<()>,
+    std::sync::Arc<vynkor::plugins::registry::PluginRegistry>,
+    std::sync::Arc<vynkor::events::bus::EventBus>,
+) {
+    let mut cfg = test_config(socket, port);
+    cfg.allow_no_auth = false;
+    cfg.jwt_secret = Some(MASTER.to_string());
+    cfg.data_dir = data_dir.to_path_buf();
+    cfg.ws_device_recheck_secs = 1;
+    start_kernel_with_config(cfg).await
+}
+
+/// Upgrade + register as `{device_id}.geo`; returns the socket and its
+/// session key.
+async fn connect_registered(port: u16, device_id: &str, device_secret: &str) -> (Ws, [u8; 32]) {
+    let token = mint(device_id);
+    let mut ws = timeout(Duration::from_secs(2), ws_connect(port, &token))
+        .await
+        .expect("upgrade within 2s")
+        .expect("upgrade must succeed for a paired device");
+    let plugin_id = format!("{device_id}.geo");
+    send_frame(
+        &mut ws,
+        build_frame("kernel", &register_env(&plugin_id, device_id, &token), None),
+    )
+    .await;
+    let msg = timeout(Duration::from_secs(2), ws.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let Some(envelope::Payload::PluginRegisterAck(ack)) =
+        Envelope::decode(parse_payload(&msg).as_slice())
+            .unwrap()
+            .payload
+    else {
+        panic!("expected ack");
+    };
+    assert!(ack.accepted, "{}", ack.reject_reason);
+    let key = derive_session_key(device_secret.as_bytes(), &ack.session_nonce, &plugin_id);
+    (ws, key)
+}
+
+async fn ping_pongs(ws: &mut Ws, key: &[u8; 32]) {
+    let ping = Envelope {
+        payload: Some(envelope::Payload::Ping(Ping { timestamp: 7 })),
+        ..Default::default()
+    };
+    let mut payload = Vec::new();
+    ping.encode(&mut payload).unwrap();
+    send_frame(ws, build_frame("kernel", &payload, Some(key))).await;
+    let reply = timeout(Duration::from_secs(2), ws.next())
+        .await
+        .expect("pong within 2s")
+        .expect("socket open")
+        .expect("no ws error");
+    let env = Envelope::decode(parse_payload(&reply).as_slice()).unwrap();
+    assert!(matches!(env.payload, Some(envelope::Payload::Pong(_))));
+}
+
+/// The socket must end (close frame, EOF or error) within `within`.
+async fn assert_closed_within(ws: &mut Ws, within: Duration) {
+    let ended = timeout(within, async {
+        loop {
+            match ws.next().await {
+                None | Some(Err(_)) | Some(Ok(WsMsg::Close(_))) => return,
+                Some(Ok(_)) => continue,
+            }
+        }
+    })
+    .await;
+    assert!(
+        ended.is_ok(),
+        "live connection survived credential withdrawal"
+    );
+}
+
+#[tokio::test]
+async fn revoke_closes_an_open_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_shutdown, _reg, _bus) =
+        start_fast_recheck_kernel("/tmp/vynkor_e01c.sock", 19612, dir.path()).await;
+    let store = DeviceStore::new(dir.path(), MASTER);
+    let secret = store.issue("lost-phone", "lost", 3600).unwrap();
+
+    let (mut ws, key) = connect_registered(19612, "lost-phone", &secret).await;
+    // past at least one re-check tick: an active row must not be dropped
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    ping_pongs(&mut ws, &key).await;
+
+    DeviceStore::new(dir.path(), MASTER)
+        .set_revoked("lost-phone", true)
+        .unwrap();
+    assert_closed_within(&mut ws, Duration::from_secs(3)).await;
+}
+
+#[tokio::test]
+async fn remove_closes_an_open_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_shutdown, _reg, _bus) =
+        start_fast_recheck_kernel("/tmp/vynkor_e01d.sock", 19613, dir.path()).await;
+    let store = DeviceStore::new(dir.path(), MASTER);
+    let secret = store.issue("sold-phone", "sold", 3600).unwrap();
+
+    let (mut ws, key) = connect_registered(19613, "sold-phone", &secret).await;
+    ping_pongs(&mut ws, &key).await;
+
+    // a removed row reads as "unknown" — which passes the upgrade gate for
+    // local clients, so the watch must treat it as withdrawn, not unknown
+    DeviceStore::new(dir.path(), MASTER)
+        .remove("sold-phone")
+        .unwrap();
+    assert_closed_within(&mut ws, Duration::from_secs(3)).await;
 }
 
 fn parse_payload(msg: &WsMsg) -> Vec<u8> {
