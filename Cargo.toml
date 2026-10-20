@@ -42,7 +42,7 @@ tower-http = { version = "0.7.0", features = ["timeout"] }
 
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-tracing-opentelemetry = { version = "0.33", optional = true }
+tracing-opentelemetry = { version = "0.34", optional = true }
 opentelemetry        = { version = "0.32", features = ["trace"], optional = true }
 opentelemetry_sdk    = { version = "0.32", features = ["rt-tokio"], optional = true }
 opentelemetry-otlp   = { version = "0.32", features = ["grpc-tonic"], optional = true }
