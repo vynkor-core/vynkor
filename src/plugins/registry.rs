@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
+use tracing::warn;
 
 // D-03: registry now stores the wire DeviceInfo/DeviceState/DeviceOs (proto
 // v1.6) directly — re-exported so callers keep the registry:: path
@@ -540,6 +541,11 @@ impl PluginRegistry {
         if let Some(mut ids) = self.ambiguous_actions.get_mut(action) {
             if !ids.iter().any(|id| id == plugin_id) {
                 ids.push(plugin_id.to_string());
+                warn!(
+                    action,
+                    providers = ?*ids,
+                    "action declared by multiple providers; calls to it will be refused"
+                );
             }
             return;
         }
@@ -550,6 +556,13 @@ impl PluginRegistry {
                     return;
                 }
                 let existing = occ.remove();
+                // at registration, not only per call: otherwise the operator
+                // learns about the collision only when something calls it
+                warn!(
+                    action,
+                    providers = ?[&existing, plugin_id],
+                    "action declared by multiple providers; calls to it will be refused"
+                );
                 self.ambiguous_actions
                     .insert(action.to_string(), vec![existing, plugin_id.to_string()]);
             }
@@ -790,4 +803,31 @@ pub fn validate_plugin_id(id: &str) -> Result<(), VynkorError> {
         return Err(VynkorError::InvalidPluginId(format!("'{id}' is reserved")));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn register_with(reg: &PluginRegistry, id: &str, conn_id: u64, actions: &[&str]) {
+        let (tx, _rx) = mpsc::channel(1);
+        let manifest = PluginManifest {
+            actions: actions.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        };
+        reg.register(id.to_string(), conn_id, manifest, tx, "", "")
+            .unwrap();
+    }
+
+    #[tracing_test::traced_test]
+    #[test]
+    fn colliding_action_warns_at_registration() {
+        let reg = PluginRegistry::new();
+        register_with(&reg, "stt", 1, &["transcribe"]);
+        assert!(!logs_contain("declared by multiple providers"));
+
+        register_with(&reg, "speech", 2, &["transcribe"]);
+        assert!(logs_contain("declared by multiple providers"));
+        assert!(logs_contain("transcribe"));
+    }
 }

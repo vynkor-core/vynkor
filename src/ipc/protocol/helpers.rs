@@ -1,5 +1,5 @@
 use crate::plugins::registry::PendingAction;
-use crate::plugins::registry::PluginRegistry;
+use crate::plugins::registry::{ActionLookup, PluginRegistry};
 use crate::proto::vynkor::ActionStreamAbort;
 use crate::proto::vynkor::{envelope, Envelope};
 use crate::proto::vynkor::{ActionStatus, DeviceState};
@@ -234,6 +234,23 @@ pub(crate) fn offline_device_reason(registry: &PluginRegistry, action: &str) -> 
     match DeviceState::try_from(state) {
         Ok(DeviceState::Offline) => Some(format!("device {device_id} offline")),
         Ok(DeviceState::Revoked) => Some(format!("device {device_id} revoked")),
+        _ => None,
+    }
+}
+
+/// honest reason for an ACTION_NOT_FOUND caused by two or more providers
+/// declaring the same action — otherwise the caller sees "action not found"
+/// for an action that is very much installed. Ids sorted so the text does
+/// not depend on registration order
+pub(crate) fn ambiguous_action_reason(registry: &PluginRegistry, action: &str) -> Option<String> {
+    match registry.find_action_provider(action) {
+        ActionLookup::Ambiguous(mut providers) => {
+            providers.sort();
+            Some(format!(
+                "action {action} is ambiguous: declared by {}",
+                providers.join(", ")
+            ))
+        }
         _ => None,
     }
 }

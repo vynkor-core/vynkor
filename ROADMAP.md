@@ -83,9 +83,14 @@ registry, review abuse controls, publish pipeline. Full list:
 - [x] **vynkor**: revocation reaches live sessions — an open device WS
   re-checks its row every `ws_device_recheck_secs` and closes on
   revoke/remove/expiry (#107). The ed25519 half of D-18 stays open.
-- [ ] **vynkor**: duplicate action names across plugins — `stt`, `tts` and
-  `speech` declare the same actions; registry behavior is unverified. Decide
-  (reject at registration vs. last-wins), add a test; mark `stt`/`tts`
+- [x] **vynkor**: duplicate action names across plugins — neither reject nor
+  last-wins: the registry already moved colliding actions to
+  `ambiguous_actions` and the router refused them (tested), but the caller
+  only saw "action not found". Now the response `error` names the providers
+  (`action X is ambiguous: declared by a, b`, status still
+  `ACTION_NOT_FOUND`, no wire change) and the registry warns at registration.
+- [ ] **vynkor-plugins**: `stt`, `tts` and `speech` declare the same actions —
+  installing two of them makes those actions uncallable. Mark `stt`/`tts`
   deprecated in the registry.
 - [ ] **vynkor-plugins**: `speech` not verified under `sandbox: true`;
   `email` runs `sandbox: false`.
