@@ -83,8 +83,8 @@ zstd = "0.13"
 dashmap = "6"
 governor = "0.8"
 
-metrics = "0.23"
-metrics-exporter-prometheus = "0.15"
+metrics = "0.24"
+metrics-exporter-prometheus = "0.18"
 
 rusqlite = { version = "0.40", features = ["bundled"] }
 
