@@ -37,6 +37,16 @@ jobs:
           diff -u ../vynkor-wire/proto/vynkor_protocol.proto ../vynkor-sdk-cpp/proto/vynkor_protocol.proto
           diff -u ../vynkor-wire/proto/vynkor_protocol.proto ../vynkor-sdk-python/proto/vynkor_protocol.proto
 
+      # the sdk's declared deps, not whatever the runner image ships: ubuntu-26.04
+      # has apt protobuf 4.21, which can't load pb2 generated for protobuf >= 6
+      - name: Install Python SDK deps
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python SDK package deps
+        run: python -m pip install ../vynkor-sdk-python
+
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
