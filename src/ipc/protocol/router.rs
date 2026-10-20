@@ -28,10 +28,10 @@ use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
 use super::helpers::{
-    abort_stream, action_status_message, check_protocol_version, envelope_message_id,
-    is_throttle_exempt, notify_forced_termination, offline_device_reason, send_envelope,
-    send_error, send_register_reject, try_send_envelope, ProtocolCheck, ACTION_CORRELATION_SEQ,
-    EVENT_PUBLISH_SEQ,
+    abort_stream, action_status_message, ambiguous_action_reason, check_protocol_version,
+    envelope_message_id, is_throttle_exempt, notify_forced_termination, offline_device_reason,
+    send_envelope, send_error, send_register_reject, try_send_envelope, ProtocolCheck,
+    ACTION_CORRELATION_SEQ, EVENT_PUBLISH_SEQ,
 };
 use crate::ipc::connection::out_frame;
 use crate::ipc::framing::target_as_str;
@@ -846,6 +846,7 @@ impl MessageRouter {
                     let error = match status {
                         ActionStatus::ActionNotFound => {
                             offline_device_reason(registry, &req.action)
+                                .or_else(|| ambiguous_action_reason(registry, &req.action))
                         }
                         _ => None,
                     }

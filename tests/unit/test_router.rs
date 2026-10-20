@@ -2462,6 +2462,52 @@ async fn test_offline_device_fails_fast() {
 }
 
 #[tokio::test]
+async fn ambiguous_action_names_the_colliding_providers() {
+    use vynkor::proto::vynkor::ActionStatus;
+    let reg = Arc::new(PluginRegistry::new());
+    let (caller_tx, mut caller_rx) = make_write_pair();
+    reg.register(
+        "caller".to_string(),
+        1,
+        dummy_manifest(),
+        caller_tx.clone(),
+        "",
+        "",
+    )
+    .unwrap();
+    // registered out of alphabetical order: the reason must not depend on it
+    for (id, conn) in [("stt", 2), ("speech", 3)] {
+        let (tx, _rx) = make_write_pair();
+        reg.register(
+            id.to_string(),
+            conn,
+            action_manifest(vec!["transcribe"]),
+            tx,
+            "",
+            "",
+        )
+        .unwrap();
+    }
+
+    let router_tx = spawn_router(Arc::clone(&reg), Arc::new(EventBus::new()));
+    router_tx
+        .send(incoming(
+            1,
+            kernel_frame(action_request_env("a1", "transcribe")),
+            caller_tx,
+        ))
+        .await
+        .unwrap();
+    let resp = recv_action_response(&mut caller_rx).await;
+    // same status as before (no wire change), honest reason
+    assert_eq!(resp.status, ActionStatus::ActionNotFound as i32);
+    assert_eq!(
+        resp.error,
+        "action transcribe is ambiguous: declared by speech, stt"
+    );
+}
+
+#[tokio::test]
 async fn in_flight_action_fails_fast_when_provider_disconnects() {
     use vynkor::proto::vynkor::ActionStatus;
     let reg = Arc::new(PluginRegistry::new());
