@@ -72,7 +72,10 @@ fn ensure_self_signed(
     }
 
     let hostname = std::env::var("HOSTNAME").unwrap_or_else(|_| "localhost".to_string());
-    let rcgen::CertifiedKey { cert, key_pair } = rcgen::generate_simple_self_signed(vec![
+    let rcgen::CertifiedKey {
+        cert,
+        signing_key: key_pair,
+    } = rcgen::generate_simple_self_signed(vec![
         "localhost".to_string(),
         "127.0.0.1".to_string(),
         hostname,
@@ -197,7 +200,7 @@ mod tests {
         ensure_self_signed(&dir, &cert, &key).unwrap();
         // splice in a key from a different pair — what a racing writer left
         let other = rcgen::generate_simple_self_signed(vec!["x".to_string()]).unwrap();
-        std::fs::write(&key, other.key_pair.serialize_pem()).unwrap();
+        std::fs::write(&key, other.signing_key.serialize_pem()).unwrap();
         assert!(!pair_is_consistent(&cert, &key));
 
         ensure_self_signed(&dir, &cert, &key).unwrap();
