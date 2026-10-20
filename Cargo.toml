@@ -96,7 +96,7 @@ futures-util = "0.3"
 # D-07: self-signed cert generation when TLS is on by default and the operator
 # provided no tls_cert_path/tls_key_path
 rustls = { version = "0.23", features = ["aws_lc_rs"] }
-rcgen = "0.13"
+rcgen = "0.14"
 
 # D-14/K-05: `vyn-pair` (src/bin/vyn-pair.rs) renders the pairing QR (terminal
 # UTF-8 / SVG) — not used by the `vyn` lib/bin, see the vyn-pair [[bin]] above
