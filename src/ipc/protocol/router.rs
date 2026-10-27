@@ -827,11 +827,13 @@ impl MessageRouter {
                         Some(ActionStatus::ActionQuotaExceeded)
                     }
                     // R6-03: rate limit — keyed by (caller, provider), same governor
-                    // crate/pattern as the existing per-conn ipc_limiter
+                    // crate/pattern as the existing per-conn ipc_limiter. Keyed on
+                    // the authenticated sender, never the device-scoped caller: a
+                    // device could mint a fresh bucket per claimed plugin name
                     ActionLookup::Found(ref provider)
                         if action_limiter.is_some_and(|limiter| {
                             limiter
-                                .check_key(&(caller_id.clone(), provider.plugin_id.clone()))
+                                .check_key(&(sender_id.clone(), provider.plugin_id.clone()))
                                 .is_err()
                         }) =>
                     {

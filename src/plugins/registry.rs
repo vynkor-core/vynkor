@@ -158,6 +158,7 @@ impl PluginRegistry {
         use dashmap::mapref::entry::Entry;
 
         validate_plugin_id(&plugin_id)?;
+        validate_device_scope(&plugin_id, &meta.device_id)?;
 
         // AUDIT M-08: reserve both slots via `entry()` — which holds the
         // shard lock for the call — rather than a separate contains_key then
@@ -268,6 +269,7 @@ impl PluginRegistry {
         use dashmap::mapref::entry::Entry;
 
         validate_plugin_id(&device_id)?;
+        validate_device_scope(&device_id, &device_id)?;
 
         let conn_slot = match self.by_conn_id.entry(conn_id) {
             Entry::Occupied(_) => {
@@ -805,6 +807,28 @@ pub fn validate_plugin_id(id: &str) -> Result<(), VynkorError> {
     Ok(())
 }
 
+/// '.' is the kernel's device separator: `<device>.<cap>` routing and the
+/// `<device>.<plugin>` caller ids stamped for device calls (D-06). Only a
+/// registration that *is* that device may hold a dotted id under its own
+/// prefix — otherwise a local plugin named `laptop.daemon` could pose as a
+/// device's plugin to providers that trust caller_plugin_id.
+fn validate_device_scope(plugin_id: &str, device_id: &str) -> Result<(), VynkorError> {
+    if device_id.contains('.') {
+        return Err(VynkorError::InvalidPluginId(format!(
+            "device id '{device_id}': '.' is reserved as the device separator"
+        )));
+    }
+    let Some((prefix, _)) = plugin_id.split_once('.') else {
+        return Ok(());
+    };
+    if device_id.is_empty() || prefix != device_id {
+        return Err(VynkorError::InvalidPluginId(format!(
+            "'{plugin_id}': dotted ids are reserved for <device>.<name> of the registering device"
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -829,5 +853,48 @@ mod tests {
         register_with(&reg, "speech", 2, &["transcribe"]);
         assert!(logs_contain("declared by multiple providers"));
         assert!(logs_contain("transcribe"));
+    }
+
+    #[test]
+    fn dotted_ids_are_reserved_for_device_names() {
+        // a local plugin named like a device's plugin could pose as
+        // `laptop.daemon` to providers that trust caller_plugin_id
+        let reg = PluginRegistry::new();
+        let (tx, _rx) = mpsc::channel(1);
+        for (id, device) in [("laptop.daemon", ""), ("laptop.daemon", "phone")] {
+            assert!(
+                reg.register(
+                    id.into(),
+                    1,
+                    PluginManifest::default(),
+                    tx.clone(),
+                    device,
+                    ""
+                )
+                .is_err(),
+                "{id} as device {device:?}"
+            );
+        }
+        // the device itself keeps its legacy per-cap `<device>.<cap>` ids
+        assert!(reg
+            .register(
+                "phone.geo".into(),
+                3,
+                PluginManifest::default(),
+                tx.clone(),
+                "phone",
+                ""
+            )
+            .is_ok());
+        assert!(reg
+            .register_device(
+                "lap.top".into(),
+                2,
+                vec![],
+                PluginManifest::default(),
+                tx,
+                DeviceMeta::default(),
+            )
+            .is_err());
     }
 }
