@@ -121,6 +121,7 @@ fn spawn_router_with_store(
         60,
         device_store,
         None,
+        None, // device_callers
     ));
     tx
 }

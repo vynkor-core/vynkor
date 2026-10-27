@@ -33,8 +33,9 @@ use tracing::{info, warn};
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 /// conn_ids for bridge connections: above the WS gateway's base so the two
-/// id spaces never collide in the registry's by_conn_id map.
-const BRIDGE_CONN_ID_BASE: u64 = 2_000_000_000;
+/// id spaces never collide in the registry's by_conn_id map. The router
+/// looks the host entry up by this id to relay unknown actions upstream.
+pub(crate) const BRIDGE_CONN_ID_BASE: u64 = 2_000_000_000;
 
 const BRIDGE_MAX_BACKOFF: Duration = Duration::from_secs(30);
 
