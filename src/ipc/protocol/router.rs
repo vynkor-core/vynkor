@@ -3,7 +3,7 @@ use crate::auth::permissions::{
     check_ipc_send, check_ipc_target, check_permission, normalize_permission,
     required_permission_for_action,
 };
-use crate::bridge::BridgeHandle;
+use crate::bridge::{BridgeHandle, BRIDGE_CONN_ID_BASE};
 use crate::events::bus::EventBus;
 use crate::events::store::EventStore;
 use crate::ipc::connection::Outbound;
@@ -30,8 +30,8 @@ use tracing::{debug, info, warn};
 use super::helpers::{
     abort_stream, action_status_message, ambiguous_action_reason, check_protocol_version,
     envelope_message_id, is_throttle_exempt, notify_forced_termination, offline_device_reason,
-    send_envelope, send_error, send_register_reject, try_send_envelope, ProtocolCheck,
-    ACTION_CORRELATION_SEQ, EVENT_PUBLISH_SEQ,
+    send_envelope, send_error, send_register_reject, try_send_envelope, DeviceCaller,
+    ProtocolCheck, ACTION_CORRELATION_SEQ, EVENT_PUBLISH_SEQ,
 };
 use crate::ipc::connection::out_frame;
 use crate::ipc::framing::target_as_str;
@@ -65,6 +65,7 @@ impl MessageRouter {
             defaults.max_tracked_error_conns,
             defaults.session_idle_timeout_secs,
             defaults.prune_interval_secs,
+            None,
             None,
             None,
         )
@@ -110,6 +111,9 @@ impl MessageRouter {
         // D-06: relay for `role: client` kernels — frames whose target is not
         // in the local registry fall through to the remote host
         bridge: Option<BridgeHandle>,
+        // D-06 (host): per-device allowlist of local plugins that may call
+        // host actions (Config::device_callers). None = no filtering
+        device_callers: Option<Arc<HashMap<String, Vec<String>>>>,
     ) {
         // per-connection protocol-error budget. A connection that produces a burst
         // of malformed/denied/unhandled messages (which each generate an error
@@ -274,6 +278,8 @@ impl MessageRouter {
                         action_caller_max_concurrent,
                         action_timeout_ms,
                         device_store.as_deref(),
+                        bridge.as_ref(),
+                        device_callers.as_deref(),
                     )
                     .await
                 }
@@ -337,6 +343,8 @@ impl MessageRouter {
         action_caller_max_concurrent: Option<u32>,
         action_timeout_ms: u32,
         device_store: Option<&crate::auth::device_store::DeviceStore>,
+        bridge: Option<&BridgeHandle>,
+        device_callers: Option<&HashMap<String, Vec<String>>>,
     ) -> bool {
         let envelope = match Envelope::decode(msg.frame.payload.as_ref()) {
             Ok(e) => e,
@@ -729,6 +737,22 @@ impl MessageRouter {
                     .map(|e| e.plugin_id.clone())
                     .unwrap_or_default();
 
+                // D-06: calls over a device connection carry the device's
+                // local plugin name; providers see `<device>.<plugin>` and
+                // device_callers (when configured) decides who may call at all.
+                // T-19 permission checks below stay on the device itself — the
+                // device's grants are the ceiling for all of its plugins
+                let device_caller = registry
+                    .get_device(&sender_id)
+                    .map(|_| DeviceCaller::new(&sender_id, &req.caller_plugin_id));
+                let caller_id = device_caller
+                    .as_ref()
+                    .map_or_else(|| sender_id.clone(), |c| c.scoped.clone());
+                let caller_denied = match (&device_caller, device_callers) {
+                    (Some(c), Some(rules)) => !c.allowed_by(&sender_id, rules),
+                    _ => false,
+                };
+
                 // R5-07 (option b): route to a plugin that declared this action in
                 // its manifest — "declared it" is the entire authorization model
                 // for actions with no v2 action_requirement.
@@ -747,7 +771,26 @@ impl MessageRouter {
                 // unaffected: the provider-declares-authorization model still
                 // applies to them as-is
                 let not_found_status = match registry.find_action_provider(&req.action) {
-                    ActionLookup::NotFound => Some(ActionStatus::ActionNotFound),
+                    _ if caller_denied => {
+                        warn!(caller = %caller_id, action = %req.action, "device caller not allowed");
+                        counter!("device_caller_denied_total").increment(1);
+                        Some(ActionStatus::ActionPermissionDeny)
+                    }
+                    ActionLookup::NotFound => {
+                        if Self::relay_action_to_host(
+                            &msg,
+                            registry,
+                            bridge,
+                            &envelope.message_id,
+                            &req,
+                            &sender_id,
+                            action_timeout_ms,
+                        ) {
+                            None
+                        } else {
+                            Some(ActionStatus::ActionNotFound)
+                        }
+                    }
                     ActionLookup::Ambiguous(providers) => {
                         warn!(
                             action = %req.action,
@@ -788,7 +831,7 @@ impl MessageRouter {
                     ActionLookup::Found(ref provider)
                         if action_limiter.is_some_and(|limiter| {
                             limiter
-                                .check_key(&(sender_id.clone(), provider.plugin_id.clone()))
+                                .check_key(&(caller_id.clone(), provider.plugin_id.clone()))
                                 .is_err()
                         }) =>
                     {
@@ -830,9 +873,11 @@ impl MessageRouter {
                                 streaming: req.streaming,
                                 // stamped from the authenticated sender_id, never
                                 // from req.caller_plugin_id — the inbound value
-                                // (if any) is discarded here, making this field
-                                // unspoofable by the caller
-                                caller_plugin_id: sender_id.clone(),
+                                // is discarded here, making this field
+                                // unspoofable by the caller. A device's claim
+                                // only ever lands under its own `<device>.`
+                                // prefix (DeviceCaller)
+                                caller_plugin_id: caller_id.clone(),
                             })),
                             ..Default::default()
                         };
@@ -847,6 +892,9 @@ impl MessageRouter {
                         ActionStatus::ActionNotFound => {
                             offline_device_reason(registry, &req.action)
                                 .or_else(|| ambiguous_action_reason(registry, &req.action))
+                        }
+                        ActionStatus::ActionPermissionDeny if caller_denied => {
+                            Some(format!("caller {caller_id} not allowed by device_callers"))
                         }
                         _ => None,
                     }
@@ -1141,6 +1189,75 @@ impl MessageRouter {
                 true
             }
         }
+    }
+
+    /// D-06: a `role: client` kernel hands an action no local plugin declares
+    /// to the host instead of failing it — the provider (agent, ai, ...) may
+    /// live there. Same pending-action correlation as a local provider: the
+    /// bridge entry is the "provider", so the host's ActionResponse (arriving
+    /// on the bridge conn) resolves through the ordinary response arm.
+    /// Returns false when nothing was relayed and the caller should fail.
+    #[allow(clippy::too_many_arguments)]
+    fn relay_action_to_host(
+        msg: &IncomingMessage,
+        registry: &PluginRegistry,
+        bridge: Option<&BridgeHandle>,
+        message_id: &str,
+        req: &ActionRequest,
+        sender_id: &str,
+        action_timeout_ms: u32,
+    ) -> bool {
+        // a host-originated request that misses locally must fail back to
+        // the host, never bounce up again
+        if bridge.is_none() || msg.conn_id == BRIDGE_CONN_ID_BASE {
+            return false;
+        }
+        let Some(host) = registry.get_by_conn_id(BRIDGE_CONN_ID_BASE) else {
+            return false;
+        };
+        let internal_id = format!(
+            "kact-{}",
+            ACTION_CORRELATION_SEQ.fetch_add(1, Ordering::Relaxed)
+        );
+        let effective_timeout_ms = if req.timeout_ms == 0 {
+            action_timeout_ms
+        } else {
+            req.timeout_ms
+        };
+        registry.register_pending_action(
+            internal_id.clone(),
+            PendingAction {
+                requester_write_tx: msg.write_tx.clone(),
+                original_action_id: req.action_id.clone(),
+                requester_id: sender_id.to_string(),
+                deadline: Instant::now() + Duration::from_millis(effective_timeout_ms as u64),
+                provider_id: host.plugin_id.clone(),
+                streaming: req.streaming,
+                session_accepted: false,
+                last_activity: Instant::now(),
+            },
+        );
+        // the host stamps caller_plugin_id from its own authenticated sender
+        // (the device), so the local caller's name is informational only
+        let relayed = Envelope {
+            message_id: message_id.to_string(),
+            payload: Some(envelope::Payload::ActionRequest(ActionRequest {
+                action_id: internal_id.clone(),
+                action: req.action.clone(),
+                params_json: req.params_json.clone(),
+                timeout_ms: req.timeout_ms,
+                streaming: req.streaming,
+                caller_plugin_id: sender_id.to_string(),
+            })),
+            ..Default::default()
+        };
+        if !try_send_envelope(&host.write_tx, relayed) {
+            registry.take_pending_action(&internal_id);
+            return false;
+        }
+        counter!("actions_relayed_to_host_total").increment(1);
+        debug!(action = %req.action, sender_id = %sender_id, "action relayed to host");
+        true
     }
 
     async fn forward(
