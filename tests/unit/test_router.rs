@@ -831,6 +831,7 @@ async fn poisoned_session_key_cell_still_installs_mac_key() {
         60,
         None, // device_store
         None,
+        None, // device_callers
     ));
 
     let (write_tx, mut write_rx) = make_write_pair();
@@ -1090,6 +1091,7 @@ fn spawn_router_with_jwt_and_config_perms(
         60,
         None, // device_store
         None,
+        None, // device_callers
     ));
     tx
 }
@@ -1250,6 +1252,7 @@ async fn unregistered_connection_error_budget_survives_map_prune() {
         60,
         None, // device_store
         None,
+        None, // device_callers
     ));
 
     let (tx, mut rx_out) = mpsc::channel::<Outbound>(64);
@@ -2595,4 +2598,291 @@ async fn forged_caller_plugin_id_is_overwritten_for_device_targets() {
         }
         other => panic!("expected forwarded ActionRequest, got {other:?}"),
     }
+}
+
+// ── D-06: client kernel relays unknown actions to the host ──────────────────
+
+// mirrors bridge::BRIDGE_CONN_ID_BASE (crate-private): the conn the bridge
+// registers the host-facing device entry under
+const BRIDGE_CONN_ID: u64 = 2_000_000_000;
+
+fn spawn_client_router(registry: Arc<PluginRegistry>) -> mpsc::Sender<IncomingMessage> {
+    spawn_router_with(registry, Some(vynkor::bridge::BridgeHandle::new()), None)
+}
+
+fn spawn_router_with(
+    registry: Arc<PluginRegistry>,
+    bridge: Option<vynkor::bridge::BridgeHandle>,
+    device_callers: Option<std::collections::HashMap<String, Vec<String>>>,
+) -> mpsc::Sender<IncomingMessage> {
+    let defaults = vynkor::utils::config::Config::default();
+    let (tx, rx) = mpsc::channel::<IncomingMessage>(64);
+    tokio::spawn(MessageRouter::run_with_context(
+        rx,
+        registry,
+        Arc::new(EventBus::new()),
+        None,
+        std::time::Instant::now(),
+        None,
+        None,
+        None,
+        false,
+        None,
+        None,
+        defaults.action_caller_rate_limit_rps,
+        defaults.action_caller_max_concurrent,
+        defaults.action_timeout_ms,
+        defaults.max_conn_errors,
+        defaults.max_tracked_error_conns,
+        defaults.session_idle_timeout_secs,
+        defaults.prune_interval_secs,
+        None,
+        bridge,
+        device_callers.map(Arc::new),
+    ));
+    tx
+}
+
+#[tokio::test]
+async fn client_relays_unknown_action_to_host_and_routes_reply_back() {
+    use vynkor::proto::vynkor::ActionStatus;
+    let reg = Arc::new(PluginRegistry::new());
+    let (caller_tx, mut caller_rx) = make_write_pair();
+    reg.register(
+        "daemon".to_string(),
+        1,
+        dummy_manifest(),
+        caller_tx.clone(),
+        "",
+        "",
+    )
+    .unwrap();
+    let (host_tx, mut host_rx) = make_write_pair();
+    reg.register(
+        "laptop".to_string(),
+        BRIDGE_CONN_ID,
+        dummy_manifest(),
+        host_tx.clone(),
+        "",
+        "",
+    )
+    .unwrap();
+
+    let router_tx = spawn_client_router(Arc::clone(&reg));
+    router_tx
+        .send(incoming(
+            1,
+            kernel_frame(action_request_env("a1", "goal_start")),
+            caller_tx,
+        ))
+        .await
+        .unwrap();
+
+    // the request goes up the bridge under a kernel-assigned id
+    let internal_id = match decode_envelope(&recv_frame(&mut host_rx).await).payload {
+        Some(envelope::Payload::ActionRequest(req)) => {
+            assert_eq!(req.action, "goal_start");
+            assert_ne!(req.action_id, "a1", "caller's id must not leak upstream");
+            req.action_id
+        }
+        other => panic!("expected relayed ActionRequest, got {other:?}"),
+    };
+
+    // the host answers on the bridge conn; the caller gets its own id back
+    let reply = Envelope {
+        payload: Some(envelope::Payload::ActionResponse(ActionResp {
+            action_id: internal_id,
+            status: ActionStatus::ActionOk as i32,
+            data_json: br#"{"answer":"ok"}"#.to_vec(),
+            error: String::new(),
+        })),
+        ..Default::default()
+    };
+    router_tx
+        .send(incoming(BRIDGE_CONN_ID, kernel_frame(reply), host_tx))
+        .await
+        .unwrap();
+    let resp = recv_action_response(&mut caller_rx).await;
+    assert_eq!(resp.action_id, "a1");
+    assert_eq!(resp.status, ActionStatus::ActionOk as i32);
+    assert_eq!(resp.data_json, br#"{"answer":"ok"}"#.to_vec());
+}
+
+#[tokio::test]
+async fn client_does_not_bounce_host_requests_back_to_host() {
+    use vynkor::proto::vynkor::ActionStatus;
+    let reg = Arc::new(PluginRegistry::new());
+    let (host_tx, mut host_rx) = make_write_pair();
+    reg.register(
+        "laptop".to_string(),
+        BRIDGE_CONN_ID,
+        dummy_manifest(),
+        host_tx.clone(),
+        "",
+        "",
+    )
+    .unwrap();
+
+    let router_tx = spawn_client_router(Arc::clone(&reg));
+    router_tx
+        .send(incoming(
+            BRIDGE_CONN_ID,
+            kernel_frame(action_request_env("h1", "nobody_has_this")),
+            host_tx,
+        ))
+        .await
+        .unwrap();
+
+    // a miss on a host-originated request fails back, it is not relayed
+    let resp = recv_action_response(&mut host_rx).await;
+    assert_eq!(resp.action_id, "h1");
+    assert_eq!(resp.status, ActionStatus::ActionNotFound as i32);
+}
+
+// ── D-06: host scopes device callers and applies device_callers ─────────────
+
+fn register_laptop(reg: &PluginRegistry, conn_id: u64) -> mpsc::Sender<Outbound> {
+    use vynkor::plugins::registry::DeviceMeta;
+    let (dev_tx, dev_rx) = make_write_pair();
+    // the receiver half is unused: replies are read from the caller's channel
+    std::mem::forget(dev_rx);
+    reg.register_device(
+        "laptop".to_string(),
+        conn_id,
+        vec![],
+        dummy_manifest(),
+        dev_tx.clone(),
+        DeviceMeta {
+            device_id: "laptop".to_string(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    dev_tx
+}
+
+fn claimed_request(action_id: &str, action: &str, claimed: &str) -> Envelope {
+    let mut env = action_request_env(action_id, action);
+    if let Some(envelope::Payload::ActionRequest(req)) = env.payload.as_mut() {
+        req.caller_plugin_id = claimed.to_string();
+    }
+    env
+}
+
+async fn forwarded_caller(rx: &mut mpsc::Receiver<Outbound>) -> String {
+    match decode_envelope(&recv_frame(rx).await).payload {
+        Some(envelope::Payload::ActionRequest(req)) => req.caller_plugin_id,
+        other => panic!("expected forwarded ActionRequest, got {other:?}"),
+    }
+}
+
+fn host_with_agent() -> (Arc<PluginRegistry>, mpsc::Receiver<Outbound>) {
+    let reg = Arc::new(PluginRegistry::new());
+    let (agent_tx, agent_rx) = make_write_pair();
+    reg.register(
+        "agent".to_string(),
+        7,
+        action_manifest(vec!["goal_start"]),
+        agent_tx,
+        "",
+        "",
+    )
+    .unwrap();
+    (reg, agent_rx)
+}
+
+#[tokio::test]
+async fn host_stamps_device_caller_under_the_device_prefix() {
+    let (reg, mut agent_rx) = host_with_agent();
+    let (dev_tx, mut dev_rx) = make_write_pair();
+    let _keep = register_laptop(&reg, 20);
+    let router_tx = spawn_router_with(Arc::clone(&reg), None, None);
+
+    for (claim, want) in [
+        ("daemon", "laptop.daemon"),
+        ("", "laptop"),
+        // a dotted claim must not escape into another device's namespace
+        ("phone.daemon", "laptop"),
+    ] {
+        router_tx
+            .send(incoming(
+                20,
+                kernel_frame(claimed_request("a1", "goal_start", claim)),
+                dev_tx.clone(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            forwarded_caller(&mut agent_rx).await,
+            want,
+            "claim {claim:?}"
+        );
+    }
+    assert!(dev_rx.try_recv().is_err(), "no error replies expected");
+}
+
+#[tokio::test]
+async fn host_local_plugin_cannot_claim_a_device_identity() {
+    let (reg, mut agent_rx) = host_with_agent();
+    let (caller_tx, _caller_rx) = make_write_pair();
+    reg.register(
+        "notes".to_string(),
+        1,
+        dummy_manifest(),
+        caller_tx.clone(),
+        "",
+        "",
+    )
+    .unwrap();
+    let router_tx = spawn_router_with(Arc::clone(&reg), None, None);
+    router_tx
+        .send(incoming(
+            1,
+            kernel_frame(claimed_request("a1", "goal_start", "laptop.daemon")),
+            caller_tx,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(forwarded_caller(&mut agent_rx).await, "notes");
+}
+
+#[tokio::test]
+async fn host_device_callers_denies_unlisted_plugins() {
+    use vynkor::proto::vynkor::ActionStatus;
+    let (reg, mut agent_rx) = host_with_agent();
+    let (dev_tx, mut dev_rx) = make_write_pair();
+    let _keep = register_laptop(&reg, 20);
+    let rules = [("laptop".to_string(), vec!["daemon".to_string()])].into();
+    let router_tx = spawn_router_with(Arc::clone(&reg), None, Some(rules));
+
+    router_tx
+        .send(incoming(
+            20,
+            kernel_frame(claimed_request("ok", "goal_start", "daemon")),
+            dev_tx.clone(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(forwarded_caller(&mut agent_rx).await, "laptop.daemon");
+
+    router_tx
+        .send(incoming(
+            20,
+            kernel_frame(claimed_request("no", "goal_start", "clipboard")),
+            dev_tx,
+        ))
+        .await
+        .unwrap();
+    let resp = recv_action_response(&mut dev_rx).await;
+    assert_eq!(resp.action_id, "no");
+    assert_eq!(resp.status, ActionStatus::ActionPermissionDeny as i32);
+    assert!(
+        resp.error.contains("laptop.clipboard"),
+        "error: {}",
+        resp.error
+    );
+    assert!(
+        agent_rx.try_recv().is_err(),
+        "denied call must not reach the provider"
+    );
 }
