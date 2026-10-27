@@ -124,6 +124,13 @@ pub struct Config {
     /// Bridge settings, required when `role: client`.
     #[serde(default)]
     pub bridge: Option<BridgeConfig>,
+    /// D-06 (host): which local plugins of each bridged device may call host
+    /// actions, keyed by device id — e.g. `laptop: [daemon]`, `phone: ["*"]`.
+    /// A device's relayed calls are stamped `<device>.<plugin>`; `"*"` also
+    /// admits the device's own unnamed calls. Unset = no filtering (stamping
+    /// still applies); set = default-deny for any device not listed.
+    #[serde(default)]
+    pub device_callers: Option<std::collections::HashMap<String, Vec<String>>>,
     /// Stable device identifier advertised to the host. Defaults to `$HOSTNAME`.
     #[serde(default)]
     pub device_id: Option<String>,
@@ -404,6 +411,7 @@ impl Default for Config {
             legacy_plugin_mac: false,
             role: Role::Host,
             bridge: None,
+            device_callers: None,
             device_id: None,
             plugins: vec![],
             plugins_dir: None,

@@ -66,6 +66,15 @@ allow_no_auth: true
 # `vyn device revoke`/`remove` closes a live session within this bound. 0 = off.
 # ws_device_recheck_secs: 10
 #
+# Host side of D-06: which local plugins of each bridged device (a laptop in
+# `role: client`, a phone) may call host actions. Their calls reach providers
+# as `caller_plugin_id: <device>.<plugin>` (e.g. `laptop.daemon`); `"*"` admits
+# every plugin plus the device's own unnamed calls. Unset = no filtering;
+# set = any device not listed is denied (ACTION_PERMISSION_DENY).
+# device_callers:
+#   laptop: [daemon]
+#   phone-1: ["*"]
+#
 # Per-device JWT minting (offline, reads jwt_secret from this file):
 #   vyn token mint --device phone-1 [--permissions PERMISSION_IPC_SEND] [--ttl-seconds 86400]
 

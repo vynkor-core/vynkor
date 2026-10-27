@@ -214,6 +214,7 @@ impl Kernel {
             config.prune_interval_secs,
             device_store.clone(),
             bridge_handle,
+            config.device_callers.clone().map(Arc::new),
         )));
 
         // disconnect handler: unregister plugin + publish system.plugin_left
