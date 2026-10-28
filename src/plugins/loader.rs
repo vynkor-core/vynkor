@@ -2,8 +2,9 @@ use crate::auth::permissions::normalize_permission;
 use crate::events::bus::EventBus;
 use crate::plugins::lazy_manifest::action_specs_from_manifest_json;
 use crate::plugins::manager::PluginManager;
-use crate::plugins::registry::{ActionLookup, DormantPlugin};
+use crate::plugins::registry::DormantPlugin;
 use crate::plugins::supervisor::{PluginConfig, RestartPolicy};
+use crate::proto::vynkor::ActionSpec;
 use crate::utils::config::PluginDef;
 use crate::utils::errors::VynkorError;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -85,6 +86,7 @@ impl PluginLoader {
         // Validate manifests up front and collect dependency info.
         let mut manifests: HashMap<&str, Option<InstallManifest>> = HashMap::new();
         let mut refused: HashSet<&str> = HashSet::new();
+        let mut lazy_specs: HashMap<&str, Vec<ActionSpec>> = HashMap::new();
 
         for def in defs {
             match validate_plugin_def(def) {
@@ -107,6 +109,12 @@ impl PluginLoader {
                                 .registry()
                                 .set_action_requirements(def.id.clone(), requirements);
                         }
+                    }
+                    if def.lazy {
+                        let specs = read_raw_manifest(def)
+                            .map(|raw| action_specs_from_manifest_json(&raw))
+                            .unwrap_or_default();
+                        lazy_specs.insert(&def.id, specs);
                     }
                     manifests.insert(&def.id, m);
                 }
@@ -177,11 +185,29 @@ impl PluginLoader {
             let config = Self::config_from_def(def);
             if def.lazy {
                 let manifest = manifests.get(def.id.as_str()).and_then(|m| m.as_ref());
+                let specs = lazy_specs.remove(def.id.as_str()).unwrap_or_default();
                 if manifest.is_some_and(|m| m.events.as_ref().is_some_and(|e| !e.is_empty())) {
                     // a dormant plugin would silently miss bus events
                     warn!(id = %def.id, "lazy plugin declares events — starting eagerly");
+                } else if specs.is_empty() {
+                    // nothing could ever route a wake-up call to it
+                    warn!(id = %def.id, "lazy plugin declares no actions — starting eagerly");
                 } else {
-                    Self::register_lazy(def, manager, lazy_idle_stop_secs);
+                    let declared: HashMap<&str, Vec<String>> = defs
+                        .iter()
+                        .filter(|d| !refused.contains(d.id.as_str()))
+                        .filter_map(|d| {
+                            let m = manifests.get(d.id.as_str())?.as_ref()?;
+                            let names = m.actions.as_ref()?.iter();
+                            Some((d.id.as_str(), names.map(|a| a.name().to_string()).collect()))
+                        })
+                        .collect();
+                    let names: Vec<&str> = specs.iter().map(|s| s.name.as_str()).collect();
+                    for (action, other) in action_collisions(&def.id, &names, &declared) {
+                        // routing would be ambiguous on first call otherwise
+                        warn!(id = %def.id, action, other, "lazy plugin declares an action another plugin also declares");
+                    }
+                    Self::register_lazy(def, manager, specs, lazy_idle_stop_secs);
                     lazy_configs.insert(def.id.clone(), config);
                     continue;
                 }
@@ -212,30 +238,43 @@ impl PluginLoader {
         }
         lazy_configs
     }
-}
 
-impl PluginLoader {
-    fn register_lazy(def: &PluginDef, manager: &Arc<PluginManager>, default_idle_stop_secs: u64) {
-        let registry = manager.registry();
-        let action_specs = read_raw_manifest(def)
-            .map(|raw| action_specs_from_manifest_json(&raw))
-            .unwrap_or_default();
-        for spec in &action_specs {
-            if let ActionLookup::Found(_) | ActionLookup::Dormant(_) | ActionLookup::Ambiguous(_) =
-                registry.find_action_provider(&spec.name)
-            {
-                // routing stays ambiguous until first call otherwise
-                warn!(id = %def.id, action = %spec.name, "lazy plugin declares an action another plugin already provides");
-            }
-        }
+    fn register_lazy(
+        def: &PluginDef,
+        manager: &Arc<PluginManager>,
+        action_specs: Vec<ActionSpec>,
+        default_idle_stop_secs: u64,
+    ) {
         let idle_stop = Duration::from_secs(def.idle_stop_secs.unwrap_or(default_idle_stop_secs));
         info!(id = %def.id, actions = action_specs.len(), "registering lazy plugin as dormant");
-        registry.register_dormant(DormantPlugin {
+        manager.registry().register_dormant(DormantPlugin {
             plugin_id: def.id.clone(),
             action_specs,
             idle_stop,
         });
     }
+}
+
+/// (action, other plugin id) pairs where `other` also declares an action of
+/// `lazy_id`. independent of start order, unlike a registry lookup at load time.
+fn action_collisions(
+    lazy_id: &str,
+    lazy_actions: &[&str],
+    declared: &HashMap<&str, Vec<String>>,
+) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for (other, names) in declared {
+        if *other == lazy_id {
+            continue;
+        }
+        for a in lazy_actions {
+            if names.iter().any(|n| n == a) {
+                out.push((a.to_string(), other.to_string()));
+            }
+        }
+    }
+    out.sort();
+    out
 }
 
 fn read_raw_manifest(def: &PluginDef) -> Option<serde_json::Value> {
@@ -361,4 +400,23 @@ pub fn validate_plugin_def(def: &PluginDef) -> Result<Option<InstallManifest>, V
     }
 
     Ok(Some(manifest))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn collisions_found_against_any_declarer_but_self() {
+        let declared: HashMap<&str, Vec<String>> = HashMap::from([
+            ("lazy", vec!["a".to_string(), "b".to_string()]),
+            ("eager", vec!["b".to_string(), "c".to_string()]),
+            ("other", vec!["z".to_string()]),
+        ]);
+        assert_eq!(
+            action_collisions("lazy", &["a", "b"], &declared),
+            vec![("b".to_string(), "eager".to_string())]
+        );
+        assert!(action_collisions("lazy", &["a"], &declared).is_empty());
+    }
 }

@@ -106,3 +106,21 @@ async fn lazy_with_events_loads_eagerly() {
     assert!(!cfgs.contains_key("lazy-ev"));
     manager.stop("lazy-ev").await.ok();
 }
+
+#[tokio::test]
+async fn lazy_without_actions_loads_eagerly() {
+    let tmp = tempfile::tempdir().unwrap();
+    let def = lazy_def(
+        tmp.path(),
+        "lazy-na",
+        manifest("lazy-na", serde_json::json!({"actions": []})),
+    );
+    let manager = make_manager();
+    let cfgs = PluginLoader::load_all(&[def], &manager, None, 300).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    assert!(manager.is_supervised("lazy-na"), "unwakeable, so eager");
+    assert!(manager.registry().get_dormant("lazy-na").is_none());
+    assert!(!cfgs.contains_key("lazy-na"));
+    manager.stop("lazy-na").await.ok();
+}
