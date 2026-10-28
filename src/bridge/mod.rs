@@ -5,6 +5,8 @@
 //! bridge passes bytes; the local router resolves targets. See
 //! docs/REMOTE_DEVICES_ROADMAP.md (D-06) and docs/DUMB_CORE_AUDIT.md (F3).
 
+mod tls;
+
 use crate::api::websocket::frame_to_bytes;
 use crate::auth::frame_mac::{compute_tag, derive_session_key, verify_tag};
 use crate::ipc::connection::{out_frame, Outbound, SessionKeyCell};
@@ -27,7 +29,9 @@ use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
-use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
+use tokio_tungstenite::{
+    connect_async, connect_async_tls_with_config, Connector, MaybeTlsStream, WebSocketStream,
+};
 use tracing::{info, warn};
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
@@ -187,9 +191,17 @@ impl Bridge {
         let value =
             HeaderValue::from_str(&protocol).map_err(|e| BridgeError::Connect(e.to_string()))?;
         req.headers_mut().insert("sec-websocket-protocol", value);
-        let (ws, _resp) = connect_async(req)
-            .await
-            .map_err(|e| BridgeError::Connect(e.to_string()))?;
+        let connected = if url.starts_with("wss://") {
+            // no ca_cert_path -> None connector = webpki roots (host with a real CA cert)
+            let connector = match &self.config.ca_cert_path {
+                Some(path) => Some(Connector::Rustls(Arc::new(tls::load_pinned_config(path)?))),
+                None => None,
+            };
+            connect_async_tls_with_config(req, None, false, connector).await
+        } else {
+            connect_async(req).await
+        };
+        let (ws, _resp) = connected.map_err(|e| BridgeError::Connect(e.to_string()))?;
         let (mut ws_write, mut ws_read) = ws.split();
 
         // register the device itself, unauthenticated at the frame level (MAC
@@ -559,6 +571,7 @@ mod tests {
                 token: Some("test-token".to_string()),
                 secret: Some(String::from_utf8(host_secret.clone()).unwrap()),
                 mirror: vec!["geo".to_string()],
+                ca_cert_path: None,
             },
             "device-1".to_string(),
             Arc::clone(&registry),
@@ -734,5 +747,114 @@ mod tests {
 
         drop(ws_write);
         bridge_task.abort();
+    }
+
+    /// rcgen cert for "vynkor-host": (cert pem, tls acceptor)
+    fn tls_acceptor() -> (String, tokio_rustls::TlsAcceptor) {
+        let ck = rcgen::generate_simple_self_signed(vec!["vynkor-host".to_string()]).unwrap();
+        let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
+        let cfg = rustls::ServerConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_no_client_auth()
+            .with_single_cert(
+                vec![ck.cert.der().clone()],
+                rustls::pki_types::PrivateKeyDer::try_from(ck.signing_key.serialize_der()).unwrap(),
+            )
+            .unwrap();
+        (
+            ck.cert.pem(),
+            tokio_rustls::TlsAcceptor::from(Arc::new(cfg)),
+        )
+    }
+
+    fn wss_bridge(port: u16, ca_pem: &str, dir: &tempfile::TempDir) -> Bridge {
+        let ca = dir.path().join("host-cert.pem");
+        std::fs::write(&ca, ca_pem).unwrap();
+        let (router_tx, _router_rx) = mpsc::channel::<IncomingMessage>(64);
+        Bridge::new(
+            BridgeConfig {
+                host_url: format!("https://127.0.0.1:{port}"),
+                token: Some("test-token".to_string()),
+                secret: None,
+                mirror: vec!["geo".to_string()],
+                ca_cert_path: Some(ca),
+            },
+            "device-1".to_string(),
+            Arc::new(PluginRegistry::new()),
+            router_tx,
+            BridgeHandle::new(),
+        )
+    }
+
+    #[tokio::test]
+    // accept_hdr_async pins the large tungstenite::Error in the fake-host callback's Result
+    #[allow(clippy::result_large_err)]
+    async fn wss_bridge_registers_with_pinned_cert() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (pem, acceptor) = tls_acceptor();
+        let dir = tempfile::tempdir().unwrap();
+        let bridge = wss_bridge(port, &pem, &dir);
+        let bridge_task = tokio::spawn(bridge.run());
+
+        let (stream, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept())
+            .await
+            .expect("no connection")
+            .unwrap();
+        let tls = acceptor.accept(stream).await.expect("tls handshake");
+        let mut ws = tokio_tungstenite::accept_hdr_async(
+            tls,
+            |_: &tokio_tungstenite::tungstenite::handshake::server::Request,
+             mut resp: tokio_tungstenite::tungstenite::handshake::server::Response| {
+                resp.headers_mut()
+                    .insert("sec-websocket-protocol", HeaderValue::from_static("vynkor"));
+                Ok(resp)
+            },
+        )
+        .await
+        .unwrap();
+        let msg = tokio::time::timeout(Duration::from_secs(5), ws.next())
+            .await
+            .expect("register frame timeout")
+            .unwrap()
+            .unwrap();
+        let bytes = match msg {
+            WsMessage::Binary(b) => b,
+            other => panic!("expected binary register, got {other:?}"),
+        };
+        let frame = parse_frame(&bytes).await.unwrap();
+        let env = Envelope::decode(frame.payload.as_ref()).unwrap();
+        let reg = match env.payload {
+            Some(envelope::Payload::PluginRegister(r)) => r,
+            other => panic!("expected PluginRegister, got {other:?}"),
+        };
+        assert_eq!(reg.plugin_id, "device-1");
+        assert_eq!(reg.capabilities, vec!["geo"]);
+        bridge_task.abort();
+    }
+
+    #[tokio::test]
+    async fn wss_rejects_unpinned_cert() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (_served_pem, acceptor) = tls_acceptor();
+        let (other_pem, _) = tls_acceptor();
+        let dir = tempfile::tempdir().unwrap();
+        let bridge = wss_bridge(port, &other_pem, &dir);
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            // client aborts the handshake; the error is expected here
+            let _ = acceptor.accept(stream).await;
+        });
+        match bridge.one_cycle().await {
+            Err(BridgeError::Connect(msg)) => {
+                assert!(
+                    msg.contains("pinned") || msg.contains("certificate"),
+                    "{msg}"
+                )
+            }
+            other => panic!("expected Connect error, got {other:?}"),
+        }
     }
 }
