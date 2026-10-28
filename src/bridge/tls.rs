@@ -3,6 +3,7 @@
 
 use super::BridgeError;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{CertificateError, DigitallySignedStruct, SignatureScheme};
 use std::path::Path;
@@ -10,7 +11,9 @@ use std::sync::Arc;
 
 /// trust = byte-equality of the end-entity cert with a pinned one, under any
 /// name: the host is usually reached by a DHCP/tailnet ip that is not in the
-/// cert's SANs. handshake signatures are still verified against the cert key.
+/// cert's SANs. validity dates are ignored too (same as the android app), so
+/// rotation = replace the pem. handshake signatures are still verified against
+/// the cert key.
 #[derive(Debug)]
 struct PinnedCertVerifier {
     pinned: Vec<CertificateDer<'static>>,
@@ -94,7 +97,7 @@ impl std::error::Error for PinMismatch {}
 
 pub(crate) fn pinned_client_config(pem: &str) -> Result<rustls::ClientConfig, BridgeError> {
     let mut pinned = Vec::new();
-    for cert in rustls_pemfile::certs(&mut std::io::Cursor::new(pem.as_bytes())) {
+    for cert in CertificateDer::pem_slice_iter(pem.as_bytes()) {
         pinned.push(cert.map_err(|e| BridgeError::Connect(format!("bad cert pem: {e}")))?);
     }
     if pinned.is_empty() {
@@ -163,5 +166,75 @@ mod tests {
             .verify_server_cert(b.cert.der(), &[], &name, &[], now)
             .unwrap_err();
         assert!(err.to_string().contains("pinned"), "{err}");
+    }
+
+    #[derive(Debug)]
+    struct FixedCert(Arc<rustls::sign::CertifiedKey>);
+
+    impl rustls::server::ResolvesServerCert for FixedCert {
+        fn resolve(
+            &self,
+            _: rustls::server::ClientHello<'_>,
+        ) -> Option<Arc<rustls::sign::CertifiedKey>> {
+            Some(self.0.clone())
+        }
+    }
+
+    /// handshake where the server serves `cert` but signs with `signing`;
+    /// client pins `cert`. returns whether the client accepted.
+    async fn handshake(
+        cert: &rcgen::CertifiedKey<rcgen::KeyPair>,
+        signing: &rcgen::CertifiedKey<rcgen::KeyPair>,
+        version: &'static rustls::SupportedProtocolVersion,
+    ) -> Result<(), String> {
+        let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
+        let key = provider
+            .key_provider
+            .load_private_key(
+                rustls::pki_types::PrivateKeyDer::try_from(signing.signing_key.serialize_der())
+                    .unwrap(),
+            )
+            .unwrap();
+        let certified = rustls::sign::CertifiedKey::new(vec![cert.cert.der().clone()], key);
+        let server = rustls::ServerConfig::builder_with_provider(provider.clone())
+            .with_protocol_versions(&[version])
+            .unwrap()
+            .with_no_client_auth()
+            .with_cert_resolver(Arc::new(FixedCert(Arc::new(certified))));
+        let verifier = PinnedCertVerifier {
+            pinned: vec![cert.cert.der().clone()],
+            provider: provider.clone(),
+        };
+        let client = rustls::ClientConfig::builder_with_provider(provider)
+            .with_protocol_versions(&[version])
+            .unwrap()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(verifier))
+            .with_no_client_auth();
+        let (c, s) = tokio::io::duplex(16 * 1024);
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(server));
+        tokio::spawn(async move {
+            let _ = acceptor.accept(s).await;
+        });
+        tokio_rustls::TlsConnector::from(Arc::new(client))
+            .connect(ServerName::try_from("anything.example").unwrap(), c)
+            .await
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    #[tokio::test]
+    async fn handshake_signatures_are_verified() {
+        let a = self_signed("vynkor-host");
+        let b = self_signed("vynkor-host");
+        for v in [&rustls::version::TLS12, &rustls::version::TLS13] {
+            // cert signed by its own key: accepted
+            handshake(&a, &a, v).await.expect("genuine handshake");
+            // pinned cert presented, but the signature is from another key
+            assert!(
+                handshake(&a, &b, v).await.is_err(),
+                "forged signature accepted"
+            );
+        }
     }
 }

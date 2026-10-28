@@ -849,10 +849,7 @@ mod tests {
         });
         match bridge.one_cycle().await {
             Err(BridgeError::Connect(msg)) => {
-                assert!(
-                    msg.contains("pinned") || msg.contains("certificate"),
-                    "{msg}"
-                )
+                assert!(msg.contains("does not match the pinned"), "{msg}")
             }
             other => panic!("expected Connect error, got {other:?}"),
         }

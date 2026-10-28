@@ -82,7 +82,7 @@ allow_no_auth: true
 #   secret: <host jwt_secret>
 #   mirror: [daemon]
 #   # PEM of the host's served cert (the one in its pairing link). When set,
-#   # wss:// trusts exactly this cert under any name; unset = system/webpki roots.
+#   # wss:// trusts exactly this cert under any name; unset = bundled webpki roots only.
 #   # ca_cert_path: /home/me/.config/vyn-client/tls/host-cert.pem
 #
 # Per-device JWT minting (offline, reads jwt_secret from this file):

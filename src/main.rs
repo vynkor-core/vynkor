@@ -259,6 +259,15 @@ fn validate_bridge_config(cfg: &Config) -> Result<()> {
             bridge.host_url
         );
     }
+    // a pin on a plaintext url would silently pin nothing
+    if bridge.ca_cert_path.is_some()
+        && (bridge.host_url.starts_with("ws://") || bridge.host_url.starts_with("http://"))
+    {
+        anyhow::bail!(
+            "bridge.ca_cert_path is set but host_url '{}' is plaintext: use https:// or wss://",
+            bridge.host_url
+        );
+    }
     if bridge.mirror.is_empty() {
         anyhow::bail!(
             "role: client requires at least one mirrored plugin (`bridge.mirror` or --bridge-mirror)"
@@ -553,6 +562,27 @@ mod tests {
     use super::*;
     use std::io::Write as _;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn ca_cert_path_with_plaintext_host_url_is_rejected() {
+        let mut cfg = Config {
+            role: Role::Client,
+            bridge: Some(BridgeConfig {
+                host_url: "http://h:8888".into(),
+                mirror: vec!["geo".into()],
+                ca_cert_path: Some("/x/host-cert.pem".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let err = validate_bridge_config(&cfg).unwrap_err().to_string();
+        assert!(
+            err.contains("ca_cert_path") && err.contains("plaintext"),
+            "{err}"
+        );
+        cfg.bridge.as_mut().unwrap().host_url = "ws://h:8888/ws".into();
+        assert!(validate_bridge_config(&cfg).is_err());
+    }
 
     // K-01: a configured `default_grace_seconds: 15` must make the CLI wait
     // past the old hardcoded 10s window before escalating to SIGKILL.

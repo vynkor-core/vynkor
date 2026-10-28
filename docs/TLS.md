@@ -126,7 +126,9 @@ pairing link, or `<private runtime dir>/vyn-tls/` on the host). The bridge then
 trusts exactly that certificate, under any name or IP, like the phone app, and
 refuses any other cert with a "does not match the pinned ca_cert_path" error;
 the reconnect loop keeps retrying. A missing or empty file is an error naming
-the path. Rotating the host cert means copying the new PEM over.
+the path. The pin ignores validity dates and names, like the Android app; rotate by
+replacing the PEM. Setting `ca_cert_path` with a plaintext `http://`/`ws://`
+`host_url` is a boot error.
 
 Leave `ca_cert_path` unset for a host behind a publicly-trusted certificate
 (section 3): the bridge then verifies against the bundled webpki roots.
