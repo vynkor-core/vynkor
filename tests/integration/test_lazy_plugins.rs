@@ -8,7 +8,7 @@ use tokio::sync::Notify;
 use vynkor::events::bus::EventBus;
 use vynkor::ipc::protocol::MessageRouter;
 use vynkor::ipc::server::UdsServer;
-use vynkor::plugins::lazy::{LazyStarter, PluginStarter};
+use vynkor::plugins::lazy::{LazyStarter, PluginStarter, SweepHandle};
 use vynkor::plugins::loader::PluginLoader;
 use vynkor::plugins::manager::PluginManager;
 use vynkor::plugins::registry::DormantPlugin;
@@ -159,6 +159,14 @@ struct Opts {
     stop_delay: Duration,
     /// permission `lazy_echo` requires of callers
     required: Option<PermissionType>,
+    /// dormant record's idle_stop
+    idle_stop: Duration,
+    /// `stop` drops the running plugin's connection, like a real stop
+    stop_kills: bool,
+    /// the plugin receives requests but never answers
+    silent: bool,
+    /// the plugin answers after this long
+    respond_delay: Duration,
 }
 
 impl Default for Opts {
@@ -172,6 +180,10 @@ impl Default for Opts {
             poll_interval: None,
             stop_delay: Duration::ZERO,
             required: None,
+            idle_stop: Duration::from_secs(300),
+            stop_kills: false,
+            silent: false,
+            respond_delay: Duration::ZERO,
         }
     }
 }
@@ -225,6 +237,10 @@ impl PluginStarter for TestStarter {
                             _ = kill.notified() => break,
                         };
                         if let Some(envelope::Payload::ActionRequest(r)) = env.payload {
+                            if opts.silent {
+                                continue;
+                            }
+                            tokio::time::sleep(opts.respond_delay).await;
                             let resp = Envelope {
                                 message_id: env.message_id,
                                 payload: Some(envelope::Payload::ActionResponse(ActionResponse {
@@ -248,6 +264,9 @@ impl PluginStarter for TestStarter {
         Box::pin(async move {
             self.in_stop.store(true, Ordering::SeqCst);
             tokio::time::sleep(self.opts.stop_delay).await;
+            if self.opts.stop_kills {
+                self.kill.notify_one();
+            }
             self.stops.fetch_add(1, Ordering::SeqCst);
             self.in_stop.store(false, Ordering::SeqCst);
             Ok(())
@@ -259,6 +278,7 @@ struct Harness {
     sock: String,
     starter: Arc<TestStarter>,
     registry: Arc<PluginRegistry>,
+    sweep: SweepHandle,
     _dir: tempfile::TempDir,
 }
 
@@ -266,6 +286,9 @@ struct Harness {
 /// recorded dormant
 async fn harness(opts: Opts) -> Harness {
     let dir = tempfile::tempdir().unwrap();
+    // another test's socket bind briefly sets umask 0o177 process-wide, which
+    // can leave this dir without its x bit
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     let sock = dir.path().join("k.sock").to_string_lossy().into_owned();
     let registry = Arc::new(PluginRegistry::new());
     registry.register_dormant(DormantPlugin {
@@ -274,7 +297,7 @@ async fn harness(opts: Opts) -> Harness {
             name: "lazy_echo".to_string(),
             ..Default::default()
         }],
-        idle_stop: Duration::from_secs(300),
+        idle_stop: opts.idle_stop,
     });
     if let Some(perm) = opts.required {
         registry.set_action_requirements(
@@ -330,11 +353,13 @@ async fn harness(opts: Opts) -> Harness {
     if let Some(p) = opts.poll_interval {
         lazy = lazy.with_poll_interval(p);
     }
+    let sweep = lazy.sweep_handle();
     tokio::spawn(lazy.run(lazy_rx));
     Harness {
         sock,
         starter,
         registry,
+        sweep,
         _dir: dir,
     }
 }
@@ -611,4 +636,212 @@ async fn wake_queue_is_capped() {
     assert_eq!(r.action_id, "a64");
     assert_eq!(r.status, ActionStatus::ActionError as i32);
     assert_eq!(r.error, "lazy start queue full");
+}
+
+// ── idle stop ───────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn idle_lazy_plugin_is_stopped_and_back_to_dormant() {
+    let h = harness(Opts {
+        idle_stop: Duration::from_secs(1),
+        stop_kills: true,
+        ..Opts::default()
+    })
+    .await;
+    let mut c = caller(&h).await;
+    call(&mut c, "a1", "{}").await;
+    assert_eq!(reply(&mut c).await.status, ActionStatus::ActionOk as i32);
+    assert_eq!(h.starter.starts.load(Ordering::SeqCst), 1);
+
+    // an explicit clock two seconds on, instead of sleeping
+    h.sweep
+        .sweep_idle(Instant::now() + Duration::from_secs(2))
+        .await;
+    wait_until("idle stop", || h.starter.stops.load(Ordering::SeqCst) == 1).await;
+    wait_until("plugin to unregister", || {
+        h.registry.unregister_if_dead(LAZY_ID);
+        h.registry.get(LAZY_ID).is_none()
+    })
+    .await;
+    assert!(matches!(
+        h.registry.find_action_provider("lazy_echo"),
+        ActionLookup::Dormant(id) if id == LAZY_ID
+    ));
+
+    call(&mut c, "a2", "{\"again\":1}").await;
+    let r = reply(&mut c).await;
+    assert_eq!(
+        r.status,
+        ActionStatus::ActionOk as i32,
+        "error: {}",
+        r.error
+    );
+    assert_eq!(r.data_json, b"{\"again\":1}");
+    assert_eq!(h.starter.starts.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn recently_used_lazy_plugin_is_not_idle_stopped() {
+    let h = harness(Opts {
+        idle_stop: Duration::from_secs(60),
+        ..Opts::default()
+    })
+    .await;
+    let mut c = caller(&h).await;
+    call(&mut c, "a1", "{}").await;
+    reply(&mut c).await;
+
+    h.sweep
+        .sweep_idle(Instant::now() + Duration::from_secs(2))
+        .await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(h.starter.stops.load(Ordering::SeqCst), 0);
+    assert!(h.registry.get(LAZY_ID).is_some());
+}
+
+#[tokio::test]
+async fn call_straight_to_live_lazy_plugin_counts_as_use() {
+    // silent plugin, so only the router's Found path can touch on the second
+    // call (no wake, no response)
+    let h = harness(Opts {
+        silent: true,
+        ..Opts::default()
+    })
+    .await;
+    let mut c = caller(&h).await;
+    call(&mut c, "a1", "{}").await;
+    wait_until("first call pending", || {
+        h.registry.count_pending_actions_for("caller", LAZY_ID) == 1
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    let before = h.registry.idle_for(LAZY_ID).unwrap();
+    assert!(before >= Duration::from_secs(1), "idle {before:?}");
+
+    call(&mut c, "a2", "{}").await;
+    wait_until("second call pending", || {
+        h.registry.count_pending_actions_for("caller", LAZY_ID) == 2
+    })
+    .await;
+    let after = h.registry.idle_for(LAZY_ID).unwrap();
+    assert!(after < Duration::from_millis(500), "idle {after:?}");
+}
+
+#[tokio::test]
+async fn response_from_lazy_plugin_counts_as_use() {
+    // the plugin answers 1.3 s after the call; the answer must reset the clock
+    let h = harness(Opts {
+        respond_delay: Duration::from_millis(1300),
+        ..Opts::default()
+    })
+    .await;
+    let mut c = caller(&h).await;
+    call(&mut c, "a1", "{}").await;
+    assert_eq!(reply(&mut c).await.status, ActionStatus::ActionOk as i32);
+    let idle = h.registry.idle_for(LAZY_ID).unwrap();
+    assert!(idle < Duration::from_millis(500), "idle {idle:?}");
+}
+
+#[tokio::test]
+async fn idle_sweep_skips_plugin_with_pending_action() {
+    let h = harness(Opts {
+        idle_stop: Duration::from_secs(1),
+        silent: true,
+        ..Opts::default()
+    })
+    .await;
+    let mut c = caller(&h).await;
+    call(&mut c, "a1", "{}").await;
+    wait_until("call to be pending", || {
+        h.registry.has_pending_for_provider(LAZY_ID)
+    })
+    .await;
+
+    h.sweep
+        .sweep_idle(Instant::now() + Duration::from_secs(5))
+        .await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(h.starter.stops.load(Ordering::SeqCst), 0);
+    assert!(h.registry.get(LAZY_ID).is_some());
+}
+
+#[tokio::test]
+async fn idle_sweep_skips_plugin_with_streaming_session() {
+    let h = harness(Opts {
+        idle_stop: Duration::from_secs(1),
+        ..Opts::default()
+    })
+    .await;
+    let mut c = caller(&h).await;
+    call(&mut c, "a1", "{}").await;
+    reply(&mut c).await;
+    // an accepted streaming session: no deadline, pending until it ends
+    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    h.registry.register_pending_action(
+        "kact-stream".to_string(),
+        vynkor::plugins::registry::PendingAction {
+            requester_write_tx: tx,
+            original_action_id: "s1".to_string(),
+            requester_id: "caller".to_string(),
+            deadline: Instant::now() + Duration::from_secs(3600),
+            provider_id: LAZY_ID.to_string(),
+            streaming: true,
+            session_accepted: true,
+            last_activity: Instant::now(),
+        },
+    );
+
+    h.sweep
+        .sweep_idle(Instant::now() + Duration::from_secs(5))
+        .await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(h.starter.stops.load(Ordering::SeqCst), 0);
+    assert!(h.registry.get(LAZY_ID).is_some());
+}
+
+#[tokio::test]
+async fn eager_plugins_are_never_idle_stopped() {
+    let h = harness(Opts {
+        idle_stop: Duration::from_secs(1),
+        ..Opts::default()
+    })
+    .await;
+    // a plain registered plugin with no dormant record
+    let _eager = caller_as(&h, "eager", &[]).await;
+    h.registry.touch_used("eager");
+
+    h.sweep
+        .sweep_idle(Instant::now() + Duration::from_secs(3600))
+        .await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(h.starter.stops.load(Ordering::SeqCst), 0);
+    assert!(h.registry.get("eager").is_some());
+}
+
+#[tokio::test]
+async fn call_during_idle_stop_queues_and_rewakes_after_it() {
+    let h = harness(Opts {
+        idle_stop: Duration::from_secs(1),
+        stop_kills: true,
+        stop_delay: Duration::from_millis(300),
+        ..Opts::default()
+    })
+    .await;
+    let mut c = caller(&h).await;
+    call(&mut c, "a1", "{}").await;
+    reply(&mut c).await;
+
+    h.sweep
+        .sweep_idle(Instant::now() + Duration::from_secs(2))
+        .await;
+    call(&mut c, "a2", "{\"x\":2}").await;
+    let r = reply(&mut c).await;
+    assert_eq!(
+        r.status,
+        ActionStatus::ActionOk as i32,
+        "error: {}",
+        r.error
+    );
+    assert_eq!(h.starter.starts.load(Ordering::SeqCst), 2);
+    assert!(!h.starter.overlapped.load(Ordering::SeqCst));
 }

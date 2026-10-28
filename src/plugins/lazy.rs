@@ -19,8 +19,8 @@ use prost::Message;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::mpsc;
-use tracing::{debug, warn};
+use tokio::sync::{mpsc, oneshot};
+use tracing::{debug, info, warn};
 
 pub trait PluginStarter: Send + Sync {
     fn start<'a>(&'a self, plugin_id: &'a str) -> BoxFuture<'a, Result<(), VynkorError>>;
@@ -90,12 +90,36 @@ struct Waking {
     stopping: bool,
 }
 
+/// how often idle lazy plugins are looked for
+const SWEEP_INTERVAL: Duration = Duration::from_secs(30);
+
+type SweepRequest = (Instant, oneshot::Sender<()>);
+
+/// asks a running `LazyStarter` for an idle sweep
+#[derive(Clone)]
+pub struct SweepHandle {
+    tx: mpsc::UnboundedSender<SweepRequest>,
+}
+
+impl SweepHandle {
+    /// run one sweep as of `now` and return once it has decided what to stop
+    /// (the stops themselves finish in the background)
+    pub async fn sweep_idle(&self, now: Instant) {
+        let (done_tx, done_rx) = oneshot::channel();
+        if self.tx.send((now, done_tx)).is_ok() {
+            let _ = done_rx.await;
+        }
+    }
+}
+
 pub struct LazyStarter {
     registry: Arc<PluginRegistry>,
     starter: Arc<dyn PluginStarter>,
     router_tx: mpsc::Sender<IncomingMessage>,
     start_timeout: Duration,
     poll_interval: Duration,
+    sweep_tx: mpsc::UnboundedSender<SweepRequest>,
+    sweep_rx: Option<mpsc::UnboundedReceiver<SweepRequest>>,
 }
 
 impl LazyStarter {
@@ -105,12 +129,21 @@ impl LazyStarter {
         router_tx: mpsc::Sender<IncomingMessage>,
         start_timeout: Duration,
     ) -> Self {
+        let (sweep_tx, sweep_rx) = mpsc::unbounded_channel();
         Self {
             registry,
             starter,
             router_tx,
             start_timeout,
             poll_interval: POLL_INTERVAL,
+            sweep_tx,
+            sweep_rx: Some(sweep_rx),
+        }
+    }
+
+    pub fn sweep_handle(&self) -> SweepHandle {
+        SweepHandle {
+            tx: self.sweep_tx.clone(),
         }
     }
 
@@ -120,7 +153,7 @@ impl LazyStarter {
         self
     }
 
-    pub async fn run(self, mut rx: mpsc::Receiver<WakeRequest>) {
+    pub async fn run(mut self, mut rx: mpsc::Receiver<WakeRequest>) {
         let mut waking: HashMap<String, Waking> = HashMap::new();
         // `starter.start`/`stop` can take a while; they run off-loop so other
         // wake requests keep queueing, and report back here
@@ -128,6 +161,10 @@ impl LazyStarter {
         let (stopped_tx, mut stopped_rx) = mpsc::unbounded_channel::<String>();
         let mut poll = tokio::time::interval(self.poll_interval);
         poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut sweep =
+            tokio::time::interval_at(tokio::time::Instant::now() + SWEEP_INTERVAL, SWEEP_INTERVAL);
+        sweep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut sweep_rx = self.sweep_rx.take().expect("run consumes the starter");
 
         loop {
             tokio::select! {
@@ -143,6 +180,13 @@ impl LazyStarter {
                 }
                 _ = poll.tick() => {
                     self.poll_waking(&mut waking, &stopped_tx).await;
+                }
+                _ = sweep.tick() => {
+                    self.sweep_idle(Instant::now(), &mut waking, &stopped_tx);
+                }
+                Some((now, done)) = sweep_rx.recv() => {
+                    self.sweep_idle(now, &mut waking, &stopped_tx);
+                    let _ = done.send(());
                 }
             }
         }
@@ -191,6 +235,8 @@ impl LazyStarter {
             return;
         }
         debug!(plugin_id, "waking lazy plugin");
+        // start the idle clock: the plugin may register before any call is routed
+        self.registry.touch_used(&plugin_id);
         self.registry.lazy_gate_hold(&plugin_id);
         let mut w = Waking {
             queue: vec![msg],
@@ -232,7 +278,7 @@ impl LazyStarter {
         let id = plugin_id.to_string();
         tokio::spawn(async move {
             if let Err(e) = starter.stop(&id).await {
-                warn!(plugin_id = %id, error = %e, "stopping half-started lazy plugin failed");
+                warn!(plugin_id = %id, error = %e, "stopping lazy plugin failed");
             }
             let _ = tx.send(id);
         });
@@ -278,6 +324,8 @@ impl LazyStarter {
         w.want_stop = false;
         if w.queue.is_empty() {
             waking.remove(&id);
+            // idle stop holds the gate; nothing is waiting, so let go
+            self.registry.lazy_gate_release(&id);
         } else {
             // calls arrived during the stop: start afresh now that it is done
             self.registry.lazy_gate_hold(&id);
@@ -326,6 +374,43 @@ impl LazyStarter {
             if !waking.contains_key(&id) && self.registry.lazy_gate_trim(&id, ALLOW_TTL) {
                 self.registry.lazy_gate_release(&id);
             }
+        }
+    }
+
+    /// stop live lazy plugins idle past their `idle_stop`, through the same
+    /// serialized stop as a timed-out wake: the gate sends calls arriving
+    /// meanwhile to the queue, and `on_stopped` re-wakes them. a plugin with
+    /// a pending action (a streaming session included) is never stopped
+    fn sweep_idle(
+        &self,
+        now: Instant,
+        waking: &mut HashMap<String, Waking>,
+        stopped_tx: &mpsc::UnboundedSender<String>,
+    ) {
+        for d in self.registry.list_dormant() {
+            let id = d.plugin_id;
+            if waking.contains_key(&id) || self.registry.get(&id).is_none() {
+                continue;
+            }
+            let Some(idle) = self.registry.idle_for_at(&id, now) else {
+                // live but never used (registered on its own): start its clock
+                self.registry.touch_used(&id);
+                continue;
+            };
+            if idle < d.idle_stop || self.registry.has_pending_for_provider(&id) {
+                continue;
+            }
+            info!(plugin_id = %id, idle = ?idle, "stopping idle lazy plugin");
+            self.registry.lazy_gate_hold(&id);
+            let mut w = Waking {
+                queue: Vec::new(),
+                since: now,
+                starting: false,
+                want_stop: false,
+                stopping: false,
+            };
+            self.spawn_stop(&id, &mut w, stopped_tx);
+            waking.insert(id, w);
         }
     }
 

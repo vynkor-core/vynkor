@@ -127,6 +127,9 @@ pub struct PluginRegistry {
     /// instead, so a call arriving after registration cannot overtake the
     /// ones queued during the wake
     lazy_gates: DashMap<String, HashMap<usize, Instant>>,
+    /// lazy plugin id → last call routed to it or answered by it; the idle
+    /// sweeper reads it. Only ids with a dormant record are tracked
+    last_used: DashMap<String, Instant>,
 }
 
 impl PluginRegistry {
@@ -143,6 +146,7 @@ impl PluginRegistry {
             dormant: DashMap::new(),
             dormant_actions: DashMap::new(),
             lazy_gates: DashMap::new(),
+            last_used: DashMap::new(),
         }
     }
 
@@ -606,6 +610,32 @@ impl PluginRegistry {
 
     pub fn is_lazy(&self, plugin_id: &str) -> bool {
         self.dormant.contains_key(plugin_id)
+    }
+
+    /// record use of a lazy plugin now; a no-op for eager plugins
+    pub fn touch_used(&self, plugin_id: &str) {
+        if self.dormant.contains_key(plugin_id) {
+            self.last_used.insert(plugin_id.to_string(), Instant::now());
+        }
+    }
+
+    /// time since the lazy plugin was last used; None if never touched
+    pub fn idle_for(&self, plugin_id: &str) -> Option<Duration> {
+        self.idle_for_at(plugin_id, Instant::now())
+    }
+
+    /// `idle_for` against an explicit clock, so the sweeper is testable
+    pub fn idle_for_at(&self, plugin_id: &str, now: Instant) -> Option<Duration> {
+        self.last_used
+            .get(plugin_id)
+            .map(|t| now.saturating_duration_since(*t))
+    }
+
+    /// any in-flight action (streaming sessions included) routed to this provider
+    pub fn has_pending_for_provider(&self, provider_id: &str) -> bool {
+        self.pending_actions
+            .iter()
+            .any(|e| e.provider_id == provider_id)
     }
 
     /// start gating calls to `plugin_id` (see `lazy_gates`)

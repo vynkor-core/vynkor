@@ -930,6 +930,7 @@ impl MessageRouter {
                             ..Default::default()
                         };
                         send_envelope(&provider.write_tx, forwarded);
+                        registry.touch_used(&provider.plugin_id);
                         None
                     }
                 };
@@ -988,6 +989,7 @@ impl MessageRouter {
 
                 match taken {
                     Some(pending) => {
+                        registry.touch_used(&pending.provider_id);
                         let response = Envelope {
                             message_id: envelope.message_id.clone(),
                             payload: Some(envelope::Payload::ActionResponse(ActionResponse {
