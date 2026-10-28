@@ -75,6 +75,16 @@ allow_no_auth: true
 #   laptop: [daemon]
 #   phone-1: ["*"]
 #
+# Client side of D-06 (`role: client`): connect out to a host kernel.
+# bridge:
+#   host_url: https://100.80.85.81:8888
+#   token: <jwt from `vyn token mint --device <id>`>
+#   secret: <host jwt_secret>
+#   mirror: [daemon]
+#   # PEM of the host's served cert (the one in its pairing link). When set,
+#   # wss:// trusts exactly this cert under any name; unset = bundled webpki roots only.
+#   # ca_cert_path: /home/me/.config/vyn-client/tls/host-cert.pem
+#
 # Per-device JWT minting (offline, reads jwt_secret from this file):
 #   vyn token mint --device phone-1 [--permissions PERMISSION_IPC_SEND] [--ttl-seconds 86400]
 

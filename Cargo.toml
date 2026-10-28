@@ -90,7 +90,7 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 
 # D-06: bridge WS client (role: client) — the kernel connects outward to the
 # host gateway like any SDK plugin
-tokio-tungstenite = "0.24"
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 
 # D-07: self-signed cert generation when TLS is on by default and the operator
@@ -124,5 +124,6 @@ vynkor-sdk = "0.0.4"
 tower = "0.5"
 mockito = "1"
 tempfile = "3"
+tokio-rustls = "0.26"
 tracing-test = "0.2"
 temp-env = "0.3.6"
