@@ -175,6 +175,9 @@ action name (`chat_completion`, stt/tts, quotas) lives in `vynkor-plugins`.
       7e0a4a1).
 - [x] CD-08 — TLS docs + fingerprint (**kernel**, 30dc367): `docs/TLS.md`,
       `vyn tls status`; explicit `--host wss://` survives `tls: false`.
+- [x] Lazy plugins (**kernel**) — 2026-10-28: `lazy: true` plugins start on the
+      first call, are stopped after `idle_stop_secs` idle (30 s sweep), and show
+      as `dormant` in `list_plugins` / `get_manifest`.
 - [ ] CD-09 — per-caller `chat_completion` quota (**vynkor-plugins**;
       kernel: none — existing generic `action_caller_*` limits stay).
 

@@ -10,6 +10,7 @@ use crate::ipc::connection::Outbound;
 use crate::ipc::framing::{Frame, FLAG_RAW_BINARY};
 use crate::ipc::messages::IncomingMessage;
 use crate::kernel::commands::{CommandHandler, CommandOutcome};
+use crate::plugins::lazy::WakeRequest;
 use crate::plugins::registry::{ActionLookup, DeviceMeta, PendingAction, PluginRegistry};
 use crate::proto::vynkor::{
     envelope, ActionRequest, ActionRequestChunk, ActionResponse, ActionResponseChunk, ActionStatus,
@@ -68,6 +69,7 @@ impl MessageRouter {
             None,
             None,
             None,
+            None,
         )
         .await
     }
@@ -114,6 +116,8 @@ impl MessageRouter {
         // D-06 (host): per-device allowlist of local plugins that may call
         // host actions (Config::device_callers). None = no filtering
         device_callers: Option<Arc<HashMap<String, Vec<String>>>>,
+        // lazy plugins: dormant-action calls are queued here to be woken
+        lazy_tx: Option<mpsc::Sender<WakeRequest>>,
     ) {
         // per-connection protocol-error budget. A connection that produces a burst
         // of malformed/denied/unhandled messages (which each generate an error
@@ -280,6 +284,7 @@ impl MessageRouter {
                         device_store.as_deref(),
                         bridge.as_ref(),
                         device_callers.as_deref(),
+                        lazy_tx.as_ref(),
                     )
                     .await
                 }
@@ -345,6 +350,7 @@ impl MessageRouter {
         device_store: Option<&crate::auth::device_store::DeviceStore>,
         bridge: Option<&BridgeHandle>,
         device_callers: Option<&HashMap<String, Vec<String>>>,
+        lazy_tx: Option<&mpsc::Sender<WakeRequest>>,
     ) -> bool {
         let envelope = match Envelope::decode(msg.frame.payload.as_ref()) {
             Ok(e) => e,
@@ -770,7 +776,28 @@ impl MessageRouter {
                 // to *invoke* it. Actions with no required permission are
                 // unaffected: the provider-declares-authorization model still
                 // applies to them as-is
-                let not_found_status = match registry.find_action_provider(&req.action) {
+                // lazy: while a wake is draining, calls for a live lazy plugin
+                // go via the waker so they stay behind the queued ones
+                let lookup = match registry.find_action_provider(&req.action) {
+                    ActionLookup::Found(p)
+                        if !registry.lazy_gate_passes(
+                            &p.plugin_id,
+                            Arc::as_ptr(&msg.frame.payload) as *const u8 as usize,
+                        ) =>
+                    {
+                        ActionLookup::Dormant(p.plugin_id.clone())
+                    }
+                    other => other,
+                };
+                // lazy: a dormant provider has no live entry yet, so only the
+                // requester side of the permission check can run before the wake
+                let (provider_id, provider_live) = match &lookup {
+                    ActionLookup::Found(p) => (p.plugin_id.clone(), true),
+                    ActionLookup::Dormant(id) => (id.clone(), false),
+                    _ => (String::new(), false),
+                };
+                let mut lazy_unavailable = false;
+                let not_found_status = match lookup {
                     _ if caller_denied => {
                         warn!(caller = %caller_id, action = %req.action, "device caller not allowed");
                         counter!("device_caller_denied_total").increment(1);
@@ -802,12 +829,13 @@ impl MessageRouter {
                     // F5: v2 action_requirement is the single source of truth.
                     // required_permission_for_action always returns None now —
                     // kept only for its one-time deprecation warning.
-                    ActionLookup::Found(provider)
+                    ActionLookup::Found(_) | ActionLookup::Dormant(_)
                         if registry
-                            .action_requirement(&provider.plugin_id, &req.action)
+                            .action_requirement(&provider_id, &req.action)
                             .or_else(|| required_permission_for_action(&req.action))
                             .is_some_and(|perm| {
-                                check_permission(registry, &provider.plugin_id, perm).is_err()
+                                (provider_live
+                                    && check_permission(registry, &provider_id, perm).is_err())
                                     || check_permission(registry, &sender_id, perm).is_err()
                             }) =>
                     {
@@ -816,10 +844,9 @@ impl MessageRouter {
                     // R6-03: concurrency cap — checked before the rate limit since it's
                     // the direct fix for "one caller holds N provider slots open" and is
                     // cheaper (a DashMap scan, no token-bucket state touch) to fail fast on
-                    ActionLookup::Found(ref provider)
+                    ActionLookup::Found(_) | ActionLookup::Dormant(_)
                         if action_caller_max_concurrent.is_some_and(|cap| {
-                            registry.count_pending_actions_for(&sender_id, &provider.plugin_id)
-                                >= cap
+                            registry.count_pending_actions_for(&sender_id, &provider_id) >= cap
                         }) =>
                     {
                         counter!("action_quota_denied_total", "reason" => "concurrency")
@@ -830,15 +857,34 @@ impl MessageRouter {
                     // crate/pattern as the existing per-conn ipc_limiter. Keyed on
                     // the authenticated sender, never the device-scoped caller: a
                     // device could mint a fresh bucket per claimed plugin name
-                    ActionLookup::Found(ref provider)
+                    ActionLookup::Found(_) | ActionLookup::Dormant(_)
                         if action_limiter.is_some_and(|limiter| {
                             limiter
-                                .check_key(&(sender_id.clone(), provider.plugin_id.clone()))
+                                .check_key(&(sender_id.clone(), provider_id.clone()))
                                 .is_err()
                         }) =>
                     {
                         counter!("action_quota_denied_total", "reason" => "rate").increment(1);
                         Some(ActionStatus::ActionQuotaExceeded)
+                    }
+                    // lazy: hand the call to the waker, which re-injects it once
+                    // the plugin registers (then it takes the Found path). the
+                    // quota guards above ran for this pass and run again on
+                    // re-injection, so a woken call spends two rate tokens
+                    ActionLookup::Dormant(plugin_id) => {
+                        let queued = lazy_tx.is_some_and(|tx| {
+                            tx.try_send(WakeRequest {
+                                plugin_id,
+                                msg: msg.clone(),
+                            })
+                            .is_ok()
+                        });
+                        if queued {
+                            None
+                        } else {
+                            lazy_unavailable = true;
+                            Some(ActionStatus::ActionError)
+                        }
                     }
                     ActionLookup::Found(provider) => {
                         let internal_id = format!(
@@ -884,6 +930,7 @@ impl MessageRouter {
                             ..Default::default()
                         };
                         send_envelope(&provider.write_tx, forwarded);
+                        registry.touch_used(&provider.plugin_id);
                         None
                     }
                 };
@@ -897,6 +944,9 @@ impl MessageRouter {
                         }
                         ActionStatus::ActionPermissionDeny if caller_denied => {
                             Some(format!("caller {caller_id} not allowed by device_callers"))
+                        }
+                        ActionStatus::ActionError if lazy_unavailable => {
+                            Some("lazy start queue unavailable".to_string())
                         }
                         _ => None,
                     }
@@ -939,6 +989,7 @@ impl MessageRouter {
 
                 match taken {
                     Some(pending) => {
+                        registry.touch_used(&pending.provider_id);
                         let response = Envelope {
                             message_id: envelope.message_id.clone(),
                             payload: Some(envelope::Payload::ActionResponse(ActionResponse {

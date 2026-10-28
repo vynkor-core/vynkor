@@ -9,6 +9,7 @@ mod test_disconnect;
 mod test_event_store_integration;
 mod test_events;
 mod test_kernel_commands;
+mod test_lazy_plugins;
 mod test_mac;
 mod test_metrics_counters;
 mod test_ping;

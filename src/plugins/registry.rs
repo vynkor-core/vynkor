@@ -40,6 +40,17 @@ pub enum ActionLookup {
     Found(Arc<PluginEntry>),
     /// Colliding plugin ids, for the caller to log.
     Ambiguous(Vec<String>),
+    /// Plugin id of a lazy provider that is not registered right now.
+    Dormant(String),
+}
+
+/// A lazy plugin that is configured but not running: its manifest actions stay
+/// routable so the first call can wake it. Survives `unregister` (idle stop).
+#[derive(Debug, Clone)]
+pub struct DormantPlugin {
+    pub plugin_id: String,
+    pub action_specs: Vec<crate::proto::vynkor::ActionSpec>,
+    pub idle_stop: Duration,
 }
 
 /// A kernel-routed action awaiting the provider's reply. Keyed in
@@ -106,6 +117,19 @@ pub struct PluginRegistry {
     /// action name → colliding provider ids (≥2). Split from `action_index` so
     /// the common unambiguous lookup stays a single map read.
     ambiguous_actions: DashMap<String, Vec<String>>,
+    /// lazy plugins by id; kept across unregister so an idle-stopped plugin
+    /// can be woken again
+    dormant: DashMap<String, DormantPlugin>,
+    /// action name → dormant declarer ids, consulted only after the live index
+    dormant_actions: DashMap<String, Vec<String>>,
+    /// lazy plugin id → payload addresses the router may route straight to the
+    /// live plugin. While a gate exists, calls to that plugin go to the waker
+    /// instead, so a call arriving after registration cannot overtake the
+    /// ones queued during the wake
+    lazy_gates: DashMap<String, HashMap<usize, Instant>>,
+    /// lazy plugin id → last call routed to it or answered by it; the idle
+    /// sweeper reads it. Only ids with a dormant record are tracked
+    last_used: DashMap<String, Instant>,
 }
 
 impl PluginRegistry {
@@ -119,6 +143,10 @@ impl PluginRegistry {
             action_requirements: DashMap::new(),
             action_index: DashMap::new(),
             ambiguous_actions: DashMap::new(),
+            dormant: DashMap::new(),
+            dormant_actions: DashMap::new(),
+            lazy_gates: DashMap::new(),
+            last_used: DashMap::new(),
         }
     }
 
@@ -408,9 +436,9 @@ impl PluginRegistry {
         self.by_conn_id.remove(&entry.conn_id);
         self.pong_times.remove(plugin_id);
         // action requirements are config-derived and outlive the connection:
-        // clearing them here let a supervisor-restarted plugin be called
-        // without the permission check until the kernel restarted. only
-        // `clear_action_requirements` removes them, for a plugin truly gone
+        // clearing them here let a restarted plugin (or a woken lazy one) be
+        // called without the permission check. only `clear_action_requirements`
+        // removes them, for a plugin that is truly gone
         // PERF-3: drop this plugin's action→provider index entries
         for action in &entry.manifest.actions {
             self.unindex_action(action, plugin_id);
@@ -525,15 +553,150 @@ impl PluginRegistry {
         if let Some(ids) = self.ambiguous_actions.get(action) {
             return ActionLookup::Ambiguous(ids.clone());
         }
-        match self.action_index.get(action) {
-            Some(provider_id) => match self.by_plugin_id.get(provider_id.as_str()) {
+        let live = match self.action_index.get(action) {
+            Some(provider_id) => self
+                .by_plugin_id
+                .get(provider_id.as_str())
                 // index entry whose provider already unregistered — dangling
-                // index rows are impossible (unregister clears them), so this
-                // arm is defensive only
-                Some(entry) => ActionLookup::Found(entry.clone()),
-                None => ActionLookup::NotFound,
+                // index rows are impossible (unregister clears them), so the
+                // None case is defensive only
+                .map(|entry| entry.clone()),
+            None => None,
+        };
+        // dormant declarers are merged at lookup so live registration and
+        // dormant registration can happen in either order
+        let dormant = self
+            .dormant_actions
+            .get(action)
+            .map(|ids| ids.clone())
+            .unwrap_or_default();
+        match live {
+            Some(entry) => {
+                if dormant.iter().all(|id| *id == entry.plugin_id) {
+                    return ActionLookup::Found(entry);
+                }
+                let mut ids = vec![entry.plugin_id.clone()];
+                ids.extend(dormant.into_iter().filter(|id| *id != entry.plugin_id));
+                ActionLookup::Ambiguous(ids)
+            }
+            None => match dormant.len() {
+                0 => ActionLookup::NotFound,
+                1 => ActionLookup::Dormant(dormant[0].clone()),
+                _ => ActionLookup::Ambiguous(dormant),
             },
-            None => ActionLookup::NotFound,
+        }
+    }
+
+    /// record a lazy plugin and index its actions as dormant. Re-registering
+    /// the same id replaces the old record (config reload).
+    pub fn register_dormant(&self, d: DormantPlugin) {
+        self.drop_dormant_actions(&d.plugin_id);
+        for spec in &d.action_specs {
+            let mut ids = self.dormant_actions.entry(spec.name.clone()).or_default();
+            if !ids.contains(&d.plugin_id) {
+                ids.push(d.plugin_id.clone());
+            }
+        }
+        self.dormant.insert(d.plugin_id.clone(), d);
+    }
+
+    pub fn get_dormant(&self, plugin_id: &str) -> Option<DormantPlugin> {
+        self.dormant.get(plugin_id).map(|d| d.clone())
+    }
+
+    pub fn list_dormant(&self) -> Vec<DormantPlugin> {
+        self.dormant.iter().map(|d| d.clone()).collect()
+    }
+
+    pub fn is_lazy(&self, plugin_id: &str) -> bool {
+        self.dormant.contains_key(plugin_id)
+    }
+
+    /// record use of a lazy plugin now; a no-op for eager plugins
+    pub fn touch_used(&self, plugin_id: &str) {
+        if self.dormant.contains_key(plugin_id) {
+            self.last_used.insert(plugin_id.to_string(), Instant::now());
+        }
+    }
+
+    /// time since the lazy plugin was last used; None if never touched
+    pub fn idle_for(&self, plugin_id: &str) -> Option<Duration> {
+        self.idle_for_at(plugin_id, Instant::now())
+    }
+
+    /// `idle_for` against an explicit clock, so the sweeper is testable
+    pub fn idle_for_at(&self, plugin_id: &str, now: Instant) -> Option<Duration> {
+        self.last_used
+            .get(plugin_id)
+            .map(|t| now.saturating_duration_since(*t))
+    }
+
+    /// any in-flight action (streaming sessions included) routed to this provider
+    pub fn has_pending_for_provider(&self, provider_id: &str) -> bool {
+        self.pending_actions
+            .iter()
+            .any(|e| e.provider_id == provider_id)
+    }
+
+    /// start gating calls to `plugin_id` (see `lazy_gates`)
+    pub fn lazy_gate_hold(&self, plugin_id: &str) {
+        self.lazy_gates.entry(plugin_id.to_string()).or_default();
+    }
+
+    pub fn lazy_gate_release(&self, plugin_id: &str) {
+        self.lazy_gates.remove(plugin_id);
+    }
+
+    /// let one re-injected frame (identified by its payload address) through
+    pub fn lazy_gate_allow(&self, plugin_id: &str, frame_addr: usize) {
+        if let Some(mut g) = self.lazy_gates.get_mut(plugin_id) {
+            g.insert(frame_addr, Instant::now());
+        }
+    }
+
+    /// router side: may this frame go straight to the live plugin? true when
+    /// there is no gate, or the frame was allowed (consumed on use)
+    pub fn lazy_gate_passes(&self, plugin_id: &str, frame_addr: usize) -> bool {
+        // read lock first: this runs for every action call, gate or not
+        if !self.lazy_gates.contains_key(plugin_id) {
+            return true;
+        }
+        match self.lazy_gates.get_mut(plugin_id) {
+            None => true,
+            Some(mut g) => g.remove(&frame_addr).is_some(),
+        }
+    }
+
+    pub fn has_lazy_gates(&self) -> bool {
+        !self.lazy_gates.is_empty()
+    }
+
+    pub fn lazy_gate_ids(&self) -> Vec<String> {
+        self.lazy_gates.iter().map(|g| g.key().clone()).collect()
+    }
+
+    /// drop allowances older than `max_age` (frame never reached the router's
+    /// Found path) and report whether the gate is now empty
+    pub fn lazy_gate_trim(&self, plugin_id: &str, max_age: Duration) -> bool {
+        match self.lazy_gates.get_mut(plugin_id) {
+            None => true,
+            Some(mut g) => {
+                g.retain(|_, at| at.elapsed() < max_age);
+                g.is_empty()
+            }
+        }
+    }
+
+    fn drop_dormant_actions(&self, plugin_id: &str) {
+        let Some((_, old)) = self.dormant.remove(plugin_id) else {
+            return;
+        };
+        for spec in &old.action_specs {
+            if let Some(mut ids) = self.dormant_actions.get_mut(&spec.name) {
+                ids.retain(|id| id != plugin_id);
+            }
+            self.dormant_actions
+                .remove_if(&spec.name, |_, ids| ids.is_empty());
         }
     }
 

@@ -29,6 +29,13 @@ pub struct PluginDef {
     /// sandboxed ones.
     #[serde(default)]
     pub max_vmem_mb: Option<u64>,
+    /// Do not spawn at boot; the first action call to this plugin starts it.
+    #[serde(default)]
+    pub lazy: bool,
+    /// Seconds idle before a lazy plugin is stopped again. Unset =
+    /// `Config.lazy_idle_stop_secs`.
+    #[serde(default)]
+    pub idle_stop_secs: Option<u64>,
     /// Permissions granted to this plugin by the operator. Any permission declared
     /// in plugin.json but absent here causes the kernel to refuse to load the plugin.
     /// Empty list means "allow all declared permissions" (no restriction).
@@ -283,6 +290,12 @@ pub struct Config {
     /// Max number of entries an installed archive may contain.
     #[serde(default = "default_max_archive_entries")]
     pub max_archive_entries: usize,
+    /// Default idle seconds before a lazy plugin is stopped.
+    #[serde(default = "default_lazy_idle_stop_secs")]
+    pub lazy_idle_stop_secs: u64,
+    /// How long a first call to a lazy plugin waits for it to register.
+    #[serde(default = "default_lazy_start_timeout_ms")]
+    pub lazy_start_timeout_ms: u64,
     /// Path this config was loaded from — used by reload_config kernel command.
     #[serde(skip)]
     pub config_file: Option<String>,
@@ -397,6 +410,12 @@ fn default_max_archive_bytes() -> u64 {
 fn default_max_extracted_bytes() -> u64 {
     1024 * 1024 * 1024
 }
+fn default_lazy_idle_stop_secs() -> u64 {
+    600
+}
+fn default_lazy_start_timeout_ms() -> u64 {
+    10_000
+}
 fn default_max_archive_entries() -> usize {
     10_000
 }
@@ -454,6 +473,8 @@ impl Default for Config {
             max_archive_bytes: default_max_archive_bytes(),
             max_extracted_bytes: default_max_extracted_bytes(),
             max_archive_entries: default_max_archive_entries(),
+            lazy_idle_stop_secs: default_lazy_idle_stop_secs(),
+            lazy_start_timeout_ms: default_lazy_start_timeout_ms(),
             config_file: None,
         }
     }

@@ -12,6 +12,7 @@ use crate::events::bus::{run_retry_worker, EventBus};
 use crate::events::store::EventStore;
 use crate::ipc::protocol::MessageRouter;
 use crate::ipc::server::UdsServer;
+use crate::plugins::lazy::{LazyStarter, ManagerStarter};
 use crate::plugins::loader::PluginLoader;
 use crate::plugins::manager::PluginManager;
 use crate::plugins::registry::PluginRegistry;
@@ -28,6 +29,9 @@ mod shutdown;
 /// are already shut off.
 pub(super) struct ShutdownHandles {
     pub(super) uds_accept: tokio::task::JoinHandle<()>,
+    /// the lazy waker, if any lazy plugin is configured; aborted with the
+    /// accept loop so nothing is woken once teardown begins
+    pub(super) lazy: Option<tokio::task::JoinHandle<()>>,
     pub(super) api_shutdown_handle: axum_server::Handle<std::net::SocketAddr>,
     pub(super) api_task: tokio::task::JoinHandle<()>,
     pub(super) background: Vec<tokio::task::JoinHandle<()>>,
@@ -193,6 +197,9 @@ impl Kernel {
         } else {
             None
         };
+        // lazy plugins: the router queues first calls here; the LazyStarter
+        // (spawned once the plugin manager exists) wakes the plugin
+        let (lazy_tx, lazy_rx) = mpsc::channel(64);
         background_handles.push(tokio::spawn(MessageRouter::run_with_context(
             router_rx,
             Arc::clone(&registry),
@@ -215,6 +222,7 @@ impl Kernel {
             device_store.clone(),
             bridge_handle,
             config.device_callers.clone().map(Arc::new),
+            Some(lazy_tx),
         )));
 
         // disconnect handler: unregister plugin + publish system.plugin_left
@@ -282,7 +290,28 @@ impl Kernel {
 
         let shutdown_supervisor = Arc::clone(&supervisor);
         let manager = Arc::new(PluginManager::new(supervisor, Arc::clone(&registry)));
-        PluginLoader::load_all(&config.plugins, &manager, Some(&event_bus)).await;
+        let lazy_configs = PluginLoader::load_all(
+            &config.plugins,
+            &manager,
+            Some(&event_bus),
+            config.lazy_idle_stop_secs,
+        )
+        .await;
+        // no lazy plugins configured: nothing can be dormant, so no waker task
+        // (dropping lazy_rx makes any wake request fail fast)
+        let lazy_handle = if lazy_configs.is_empty() {
+            None
+        } else {
+            Some(tokio::spawn(
+                LazyStarter::new(
+                    Arc::clone(&registry),
+                    Arc::new(ManagerStarter::new(Arc::clone(&manager), lazy_configs)),
+                    ws_router_tx.clone(),
+                    std::time::Duration::from_millis(config.lazy_start_timeout_ms),
+                )
+                .run(lazy_rx),
+            ))
+        };
         // CD-01: ticket pairing shares the device store; needs jwt_secret to
         // sign device tokens, so it exists exactly when the store does
         let pairing = match (&device_store, &config.jwt_secret) {
@@ -345,6 +374,7 @@ impl Kernel {
             config.default_grace_seconds,
             ShutdownHandles {
                 uds_accept: uds_accept_handle,
+                lazy: lazy_handle,
                 api_shutdown_handle,
                 api_task,
                 background: background_handles,
