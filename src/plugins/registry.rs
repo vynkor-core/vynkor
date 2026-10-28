@@ -40,6 +40,17 @@ pub enum ActionLookup {
     Found(Arc<PluginEntry>),
     /// Colliding plugin ids, for the caller to log.
     Ambiguous(Vec<String>),
+    /// Plugin id of a lazy provider that is not registered right now.
+    Dormant(String),
+}
+
+/// A lazy plugin that is configured but not running: its manifest actions stay
+/// routable so the first call can wake it. Survives `unregister` (idle stop).
+#[derive(Debug, Clone)]
+pub struct DormantPlugin {
+    pub plugin_id: String,
+    pub action_specs: Vec<crate::proto::vynkor::ActionSpec>,
+    pub idle_stop: Duration,
 }
 
 /// A kernel-routed action awaiting the provider's reply. Keyed in
@@ -106,6 +117,11 @@ pub struct PluginRegistry {
     /// action name → colliding provider ids (≥2). Split from `action_index` so
     /// the common unambiguous lookup stays a single map read.
     ambiguous_actions: DashMap<String, Vec<String>>,
+    /// lazy plugins by id; kept across unregister so an idle-stopped plugin
+    /// can be woken again
+    dormant: DashMap<String, DormantPlugin>,
+    /// action name → dormant declarer ids, consulted only after the live index
+    dormant_actions: DashMap<String, Vec<String>>,
 }
 
 impl PluginRegistry {
@@ -119,6 +135,8 @@ impl PluginRegistry {
             action_requirements: DashMap::new(),
             action_index: DashMap::new(),
             ambiguous_actions: DashMap::new(),
+            dormant: DashMap::new(),
+            dormant_actions: DashMap::new(),
         }
     }
 
@@ -522,15 +540,75 @@ impl PluginRegistry {
         if let Some(ids) = self.ambiguous_actions.get(action) {
             return ActionLookup::Ambiguous(ids.clone());
         }
-        match self.action_index.get(action) {
-            Some(provider_id) => match self.by_plugin_id.get(provider_id.as_str()) {
+        let live = match self.action_index.get(action) {
+            Some(provider_id) => self
+                .by_plugin_id
+                .get(provider_id.as_str())
                 // index entry whose provider already unregistered — dangling
-                // index rows are impossible (unregister clears them), so this
-                // arm is defensive only
-                Some(entry) => ActionLookup::Found(entry.clone()),
-                None => ActionLookup::NotFound,
+                // index rows are impossible (unregister clears them), so the
+                // None case is defensive only
+                .map(|entry| entry.clone()),
+            None => None,
+        };
+        // dormant declarers are merged at lookup so live registration and
+        // dormant registration can happen in either order
+        let dormant = self
+            .dormant_actions
+            .get(action)
+            .map(|ids| ids.clone())
+            .unwrap_or_default();
+        match live {
+            Some(entry) => {
+                if dormant.iter().all(|id| *id == entry.plugin_id) {
+                    return ActionLookup::Found(entry);
+                }
+                let mut ids = vec![entry.plugin_id.clone()];
+                ids.extend(dormant.into_iter().filter(|id| *id != entry.plugin_id));
+                ActionLookup::Ambiguous(ids)
+            }
+            None => match dormant.len() {
+                0 => ActionLookup::NotFound,
+                1 => ActionLookup::Dormant(dormant[0].clone()),
+                _ => ActionLookup::Ambiguous(dormant),
             },
-            None => ActionLookup::NotFound,
+        }
+    }
+
+    /// record a lazy plugin and index its actions as dormant. Re-registering
+    /// the same id replaces the old record (config reload).
+    pub fn register_dormant(&self, d: DormantPlugin) {
+        self.drop_dormant_actions(&d.plugin_id);
+        for spec in &d.action_specs {
+            let mut ids = self.dormant_actions.entry(spec.name.clone()).or_default();
+            if !ids.contains(&d.plugin_id) {
+                ids.push(d.plugin_id.clone());
+            }
+        }
+        self.dormant.insert(d.plugin_id.clone(), d);
+    }
+
+    pub fn get_dormant(&self, plugin_id: &str) -> Option<DormantPlugin> {
+        self.dormant.get(plugin_id).map(|d| d.clone())
+    }
+
+    pub fn list_dormant(&self) -> Vec<DormantPlugin> {
+        self.dormant.iter().map(|d| d.clone()).collect()
+    }
+
+    pub fn is_lazy(&self, plugin_id: &str) -> bool {
+        self.dormant.contains_key(plugin_id)
+    }
+
+    fn drop_dormant_actions(&self, plugin_id: &str) {
+        let Some((_, old)) = self.dormant.remove(plugin_id) else {
+            return;
+        };
+        for spec in &old.action_specs {
+            if let Some(mut ids) = self.dormant_actions.get_mut(&spec.name) {
+                ids.retain(|id| id != plugin_id);
+            }
+            self.dormant_actions
+                .remove_if(&spec.name, |_, ids| ids.is_empty());
         }
     }
 

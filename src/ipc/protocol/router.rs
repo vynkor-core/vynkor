@@ -791,6 +791,8 @@ impl MessageRouter {
                             Some(ActionStatus::ActionNotFound)
                         }
                     }
+                    // task B3 replaces this with the wake path
+                    ActionLookup::Dormant(_) => Some(ActionStatus::ActionNotFound),
                     ActionLookup::Ambiguous(providers) => {
                         warn!(
                             action = %req.action,
