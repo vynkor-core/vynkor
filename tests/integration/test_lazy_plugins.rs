@@ -1,9 +1,10 @@
 use futures_util::future::BoxFuture;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::sync::Notify;
 use vynkor::events::bus::EventBus;
 use vynkor::ipc::protocol::MessageRouter;
 use vynkor::ipc::server::UdsServer;
@@ -142,37 +143,87 @@ async fn lazy_without_actions_loads_eagerly() {
 
 const LAZY_ID: &str = "lazy-echo";
 
+#[derive(Clone)]
+struct Opts {
+    /// the started plugin connects and registers; false = never registers
+    registers: bool,
+    /// ... after this long
+    register_delay: Duration,
+    /// the registered manifest declares `lazy_echo`
+    declares_action: bool,
+    /// permission the plugin holds once registered
+    provider_perm: Option<&'static str>,
+    start_timeout: Duration,
+    poll_interval: Option<Duration>,
+    /// how long `stop` takes
+    stop_delay: Duration,
+    /// permission `lazy_echo` requires of callers
+    required: Option<PermissionType>,
+}
+
+impl Default for Opts {
+    fn default() -> Self {
+        Opts {
+            registers: true,
+            register_delay: Duration::ZERO,
+            declares_action: true,
+            provider_perm: None,
+            start_timeout: Duration::from_secs(5),
+            poll_interval: None,
+            stop_delay: Duration::ZERO,
+            required: None,
+        }
+    }
+}
+
 /// stands in for ManagerStarter: "spawning" connects an in-process client that
 /// registers the plugin id and echoes action requests
 struct TestStarter {
     sock: String,
-    registers: bool,
-    register_delay: Duration,
+    opts: Opts,
     starts: AtomicUsize,
     stops: AtomicUsize,
+    in_stop: AtomicBool,
+    /// a start began while a stop was still running
+    overlapped: AtomicBool,
+    /// drops the running plugin's connection (a crash / exit)
+    kill: Arc<Notify>,
 }
 
 impl PluginStarter for TestStarter {
     fn start<'a>(&'a self, plugin_id: &'a str) -> BoxFuture<'a, Result<(), VynkorError>> {
         Box::pin(async move {
             self.starts.fetch_add(1, Ordering::SeqCst);
-            if self.registers {
+            if self.in_stop.load(Ordering::SeqCst) {
+                self.overlapped.store(true, Ordering::SeqCst);
+            }
+            if self.opts.registers {
                 let sock = self.sock.clone();
                 let id = plugin_id.to_string();
-                let delay = self.register_delay;
+                let opts = self.opts.clone();
+                let kill = Arc::clone(&self.kill);
                 tokio::spawn(async move {
-                    tokio::time::sleep(delay).await;
+                    tokio::time::sleep(opts.register_delay).await;
                     let mut c = VynkorClient::connect(&sock).await.unwrap();
                     c.register(
                         &id,
                         PluginManifest {
-                            actions: vec!["lazy_echo".to_string()],
+                            actions: if opts.declares_action {
+                                vec!["lazy_echo".to_string()]
+                            } else {
+                                vec![]
+                            },
+                            permissions: opts.provider_perm.iter().map(|p| p.to_string()).collect(),
                             ..Default::default()
                         },
                     )
                     .await
                     .unwrap();
-                    while let Ok(env) = c.recv().await {
+                    loop {
+                        let env = tokio::select! {
+                            e = c.recv() => match e { Ok(e) => e, Err(_) => break },
+                            _ = kill.notified() => break,
+                        };
                         if let Some(envelope::Payload::ActionRequest(r)) = env.payload {
                             let resp = Envelope {
                                 message_id: env.message_id,
@@ -195,7 +246,10 @@ impl PluginStarter for TestStarter {
 
     fn stop<'a>(&'a self, _plugin_id: &'a str) -> BoxFuture<'a, Result<(), VynkorError>> {
         Box::pin(async move {
+            self.in_stop.store(true, Ordering::SeqCst);
+            tokio::time::sleep(self.opts.stop_delay).await;
             self.stops.fetch_add(1, Ordering::SeqCst);
+            self.in_stop.store(false, Ordering::SeqCst);
             Ok(())
         })
     }
@@ -209,13 +263,8 @@ struct Harness {
 }
 
 /// uds server + router + LazyStarter wired by hand, with the lazy plugin
-/// recorded dormant and `lazy_echo` requiring `required`
-async fn harness(
-    registers: bool,
-    register_delay: Duration,
-    start_timeout: Duration,
-    required: Option<PermissionType>,
-) -> Harness {
+/// recorded dormant
+async fn harness(opts: Opts) -> Harness {
     let dir = tempfile::tempdir().unwrap();
     let sock = dir.path().join("k.sock").to_string_lossy().into_owned();
     let registry = Arc::new(PluginRegistry::new());
@@ -227,7 +276,7 @@ async fn harness(
         }],
         idle_stop: Duration::from_secs(300),
     });
-    if let Some(perm) = required {
+    if let Some(perm) = opts.required {
         registry.set_action_requirements(
             LAZY_ID.to_string(),
             [("lazy_echo".to_string(), perm)].into_iter().collect(),
@@ -235,14 +284,16 @@ async fn harness(
     }
     let starter = Arc::new(TestStarter {
         sock: sock.clone(),
-        registers,
-        register_delay,
+        opts: opts.clone(),
         starts: AtomicUsize::new(0),
         stops: AtomicUsize::new(0),
+        in_stop: AtomicBool::new(false),
+        overlapped: AtomicBool::new(false),
+        kill: Arc::new(Notify::new()),
     });
 
-    let (router_tx, router_rx) = tokio::sync::mpsc::channel(64);
-    let (lazy_tx, lazy_rx) = tokio::sync::mpsc::channel(64);
+    let (router_tx, router_rx) = tokio::sync::mpsc::channel(256);
+    let (lazy_tx, lazy_rx) = tokio::sync::mpsc::channel(256);
     UdsServer::start(std::path::Path::new(&sock), router_tx.clone(), 64, 30, 16)
         .await
         .unwrap();
@@ -270,12 +321,15 @@ async fn harness(
         None,
         Some(lazy_tx),
     ));
-    let lazy = LazyStarter::new(
+    let mut lazy = LazyStarter::new(
         Arc::clone(&registry),
         starter.clone(),
         router_tx,
-        start_timeout,
+        opts.start_timeout,
     );
+    if let Some(p) = opts.poll_interval {
+        lazy = lazy.with_poll_interval(p);
+    }
     tokio::spawn(lazy.run(lazy_rx));
     Harness {
         sock,
@@ -285,12 +339,22 @@ async fn harness(
     }
 }
 
-async fn caller(h: &Harness) -> VynkorClient {
+async fn caller_as(h: &Harness, id: &str, perms: &[&str]) -> VynkorClient {
     let mut c = VynkorClient::connect(&h.sock).await.unwrap();
-    c.register("caller", PluginManifest::default())
-        .await
-        .unwrap();
+    c.register(
+        id,
+        PluginManifest {
+            permissions: perms.iter().map(|p| p.to_string()).collect(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     c
+}
+
+async fn caller(h: &Harness) -> VynkorClient {
+    caller_as(h, "caller", &[]).await
 }
 
 async fn call(c: &mut VynkorClient, action_id: &str, params: &str) {
@@ -305,6 +369,7 @@ async fn call(c: &mut VynkorClient, action_id: &str, params: &str) {
     };
     c.send("kernel", req).await.unwrap();
 }
+
 type Reply = ActionResponse;
 
 async fn reply(c: &mut VynkorClient) -> Reply {
@@ -315,9 +380,17 @@ async fn reply(c: &mut VynkorClient) -> Reply {
     }
 }
 
+async fn wait_until(what: &str, mut cond: impl FnMut() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !cond() {
+        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
 #[tokio::test]
 async fn first_call_wakes_dormant_plugin() {
-    let h = harness(true, Duration::ZERO, Duration::from_secs(5), None).await;
+    let h = harness(Opts::default()).await;
     let mut c = caller(&h).await;
     call(&mut c, "a1", "{\"x\":1}").await;
 
@@ -336,12 +409,10 @@ async fn first_call_wakes_dormant_plugin() {
 #[tokio::test]
 async fn concurrent_first_calls_spawn_once() {
     // registration lags so every call is queued while the plugin is waking
-    let h = harness(
-        true,
-        Duration::from_millis(300),
-        Duration::from_secs(5),
-        None,
-    )
+    let h = harness(Opts {
+        register_delay: Duration::from_millis(300),
+        ..Opts::default()
+    })
     .await;
     let mut c = caller(&h).await;
     for i in 0..5 {
@@ -364,7 +435,12 @@ async fn concurrent_first_calls_spawn_once() {
 
 #[tokio::test]
 async fn wake_timeout_fails_every_queued_call() {
-    let h = harness(false, Duration::ZERO, Duration::from_millis(300), None).await;
+    let h = harness(Opts {
+        registers: false,
+        start_timeout: Duration::from_millis(300),
+        ..Opts::default()
+    })
+    .await;
     let mut c = caller(&h).await;
     let t0 = Instant::now();
     for i in 0..3 {
@@ -384,31 +460,155 @@ async fn wake_timeout_fails_every_queued_call() {
     );
     assert_eq!(h.starter.starts.load(Ordering::SeqCst), 1);
     // the half-started plugin is stopped; stop runs after the replies
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while h.starter.stops.load(Ordering::SeqCst) == 0 && Instant::now() < deadline {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    assert_eq!(h.starter.stops.load(Ordering::SeqCst), 1);
+    wait_until("stop", || h.starter.stops.load(Ordering::SeqCst) == 1).await;
 }
 
 #[tokio::test]
 async fn denied_caller_does_not_wake() {
-    let h = harness(
-        true,
-        Duration::ZERO,
-        Duration::from_secs(5),
-        Some(PermissionType::PermissionNetwork),
-    )
+    let h = harness(Opts {
+        required: Some(PermissionType::PermissionNetwork),
+        ..Opts::default()
+    })
     .await;
     let mut c = caller(&h).await;
     call(&mut c, "a1", "{}").await;
 
     let r = reply(&mut c).await;
     assert_eq!(r.status, ActionStatus::ActionPermissionDeny as i32);
-    // reply is sent by the router before any wake could be queued, so a
-    // spawn would already be visible once the router has moved on; ping
-    // round-trips through the same router task as a barrier
+    // ping round-trips through the same router task as a barrier
     c.ping().await.unwrap();
     assert_eq!(h.starter.starts.load(Ordering::SeqCst), 0);
     assert!(h.registry.get(LAZY_ID).is_none());
+}
+
+#[tokio::test]
+async fn requirement_survives_plugin_exit() {
+    // pre-existing bug fixed alongside: unregister cleared the requirement,
+    // so after a woken plugin exited an unprivileged caller could wake it
+    let h = harness(Opts {
+        required: Some(PermissionType::PermissionNetwork),
+        provider_perm: Some("PERMISSION_NETWORK"),
+        ..Opts::default()
+    })
+    .await;
+    let mut allowed = caller_as(&h, "allowed", &["PERMISSION_NETWORK"]).await;
+    call(&mut allowed, "a1", "{}").await;
+    let r = reply(&mut allowed).await;
+    assert_eq!(
+        r.status,
+        ActionStatus::ActionOk as i32,
+        "error: {}",
+        r.error
+    );
+
+    // the plugin's connection drops and its registration goes with it
+    h.starter.kill.notify_one();
+    wait_until("plugin unregistered", || {
+        h.registry.unregister_if_dead(LAZY_ID);
+        h.registry.get(LAZY_ID).is_none()
+    })
+    .await;
+
+    let mut denied = caller(&h).await;
+    call(&mut denied, "a2", "{}").await;
+    let r = reply(&mut denied).await;
+    assert_eq!(r.status, ActionStatus::ActionPermissionDeny as i32);
+    denied.ping().await.unwrap();
+    assert_eq!(
+        h.starter.starts.load(Ordering::SeqCst),
+        1,
+        "denied caller woke it"
+    );
+}
+
+#[tokio::test]
+async fn plugin_registering_without_the_action_answers_error_not_loop() {
+    let h = harness(Opts {
+        declares_action: false,
+        ..Opts::default()
+    })
+    .await;
+    let mut c = caller(&h).await;
+    call(&mut c, "a1", "{}").await;
+
+    let r = reply(&mut c).await;
+    assert_eq!(r.action_id, "a1");
+    assert_eq!(r.status, ActionStatus::ActionNotFound as i32);
+    assert!(r.error.contains("does not provide"), "error: {}", r.error);
+    assert_eq!(h.starter.starts.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn call_after_registration_does_not_overtake_queued_calls() {
+    // slow poll keeps the queue undrained after the plugin has registered
+    let h = harness(Opts {
+        register_delay: Duration::from_millis(100),
+        poll_interval: Some(Duration::from_millis(600)),
+        ..Opts::default()
+    })
+    .await;
+    let mut c = caller(&h).await;
+    for i in 0..3 {
+        call(&mut c, &format!("q{i}"), "{}").await;
+    }
+    wait_until("plugin registered", || h.registry.get(LAZY_ID).is_some()).await;
+    call(&mut c, "late", "{}").await;
+
+    for want in ["q0", "q1", "q2", "late"] {
+        let r = reply(&mut c).await;
+        assert_eq!(r.action_id, want, "replies out of order");
+        assert_eq!(
+            r.status,
+            ActionStatus::ActionOk as i32,
+            "error: {}",
+            r.error
+        );
+    }
+    assert_eq!(h.starter.starts.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn call_during_stop_waits_for_the_stop() {
+    let h = harness(Opts {
+        registers: false,
+        start_timeout: Duration::from_millis(200),
+        stop_delay: Duration::from_millis(400),
+        ..Opts::default()
+    })
+    .await;
+    let mut c = caller(&h).await;
+    call(&mut c, "a1", "{}").await;
+    let r = reply(&mut c).await;
+    assert_eq!(r.error, format!("lazy plugin {LAZY_ID} failed to start"));
+
+    // the stop of the first attempt is still running
+    call(&mut c, "a2", "{}").await;
+    let r = reply(&mut c).await;
+    assert_eq!(r.action_id, "a2");
+    assert_eq!(r.error, format!("lazy plugin {LAZY_ID} failed to start"));
+    assert_eq!(h.starter.starts.load(Ordering::SeqCst), 2);
+    assert!(
+        !h.starter.overlapped.load(Ordering::SeqCst),
+        "start ran while a stop was in flight"
+    );
+}
+
+#[tokio::test]
+async fn wake_queue_is_capped() {
+    let h = harness(Opts {
+        registers: false,
+        start_timeout: Duration::from_secs(2),
+        ..Opts::default()
+    })
+    .await;
+    let mut c = caller(&h).await;
+    for i in 0..66 {
+        call(&mut c, &format!("a{i}"), "{}").await;
+    }
+
+    // overflow is answered at once, ahead of the timeout failures
+    let r = reply(&mut c).await;
+    assert_eq!(r.action_id, "a64");
+    assert_eq!(r.status, ActionStatus::ActionError as i32);
+    assert_eq!(r.error, "lazy start queue full");
 }

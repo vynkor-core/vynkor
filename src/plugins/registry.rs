@@ -122,6 +122,11 @@ pub struct PluginRegistry {
     dormant: DashMap<String, DormantPlugin>,
     /// action name → dormant declarer ids, consulted only after the live index
     dormant_actions: DashMap<String, Vec<String>>,
+    /// lazy plugin id → payload addresses the router may route straight to the
+    /// live plugin. While a gate exists, calls to that plugin go to the waker
+    /// instead, so a call arriving after registration cannot overtake the
+    /// ones queued during the wake
+    lazy_gates: DashMap<String, HashMap<usize, Instant>>,
 }
 
 impl PluginRegistry {
@@ -137,6 +142,7 @@ impl PluginRegistry {
             ambiguous_actions: DashMap::new(),
             dormant: DashMap::new(),
             dormant_actions: DashMap::new(),
+            lazy_gates: DashMap::new(),
         }
     }
 
@@ -425,7 +431,10 @@ impl PluginRegistry {
         };
         self.by_conn_id.remove(&entry.conn_id);
         self.pong_times.remove(plugin_id);
-        self.clear_action_requirements(plugin_id);
+        // action requirements are config-derived and outlive the connection:
+        // clearing them here let a restarted plugin (or a woken lazy one) be
+        // called without the permission check. only `clear_action_requirements`
+        // removes them, for a plugin that is truly gone
         // PERF-3: drop this plugin's action→provider index entries
         for action in &entry.manifest.actions {
             self.unindex_action(action, plugin_id);
@@ -597,6 +606,47 @@ impl PluginRegistry {
 
     pub fn is_lazy(&self, plugin_id: &str) -> bool {
         self.dormant.contains_key(plugin_id)
+    }
+
+    /// start gating calls to `plugin_id` (see `lazy_gates`)
+    pub fn lazy_gate_hold(&self, plugin_id: &str) {
+        self.lazy_gates.entry(plugin_id.to_string()).or_default();
+    }
+
+    pub fn lazy_gate_release(&self, plugin_id: &str) {
+        self.lazy_gates.remove(plugin_id);
+    }
+
+    /// let one re-injected frame (identified by its payload address) through
+    pub fn lazy_gate_allow(&self, plugin_id: &str, frame_addr: usize) {
+        if let Some(mut g) = self.lazy_gates.get_mut(plugin_id) {
+            g.insert(frame_addr, Instant::now());
+        }
+    }
+
+    /// router side: may this frame go straight to the live plugin? true when
+    /// there is no gate, or the frame was allowed (consumed on use)
+    pub fn lazy_gate_passes(&self, plugin_id: &str, frame_addr: usize) -> bool {
+        match self.lazy_gates.get_mut(plugin_id) {
+            None => true,
+            Some(mut g) => g.remove(&frame_addr).is_some(),
+        }
+    }
+
+    pub fn lazy_gate_ids(&self) -> Vec<String> {
+        self.lazy_gates.iter().map(|g| g.key().clone()).collect()
+    }
+
+    /// drop allowances older than `max_age` (frame never reached the router's
+    /// Found path) and report whether the gate is now empty
+    pub fn lazy_gate_trim(&self, plugin_id: &str, max_age: Duration) -> bool {
+        match self.lazy_gates.get_mut(plugin_id) {
+            None => true,
+            Some(mut g) => {
+                g.retain(|_, at| at.elapsed() < max_age);
+                g.is_empty()
+            }
+        }
     }
 
     fn drop_dormant_actions(&self, plugin_id: &str) {

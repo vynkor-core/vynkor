@@ -9,6 +9,7 @@
 use crate::ipc::messages::IncomingMessage;
 use crate::ipc::protocol::helpers::send_envelope;
 use crate::plugins::manager::PluginManager;
+use crate::plugins::registry::ActionLookup;
 use crate::plugins::registry::PluginRegistry;
 use crate::plugins::supervisor::PluginConfig;
 use crate::proto::vynkor::{envelope, ActionResponse, ActionStatus, Envelope};
@@ -44,7 +45,12 @@ impl PluginStarter for ManagerStarter {
                 .configs
                 .get(plugin_id)
                 .ok_or_else(|| VynkorError::PluginNotFound(plugin_id.to_string()))?;
-            self.manager.start(config.clone()).await.map(|_| ())
+            match self.manager.start(config.clone()).await {
+                Ok(_) => Ok(()),
+                // already supervised (e.g. mid-restart): it will register on its own
+                Err(VynkorError::PluginAlreadyRunning(_)) => Ok(()),
+                Err(e) => Err(e),
+            }
         })
     }
 
@@ -61,10 +67,27 @@ pub struct WakeRequest {
 /// how often a waking plugin is checked for registration
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
-/// calls queued for a plugin that was asked to start and has not registered yet
+/// calls held per waking plugin; more would grow without bound if the plugin
+/// never registers
+const MAX_QUEUED: usize = 64;
+
+/// a re-injected frame the router never consumed stops being allowed after this
+const ALLOW_TTL: Duration = Duration::from_secs(5);
+
+type Started = (String, Result<(), VynkorError>);
+
+/// one lazy plugin that is starting, or being stopped after a failed start.
+/// start and stop for an id never overlap: a call that arrives while the
+/// stop is running queues, and the next start waits for it
 struct Waking {
     queue: Vec<IncomingMessage>,
     since: Instant,
+    /// `starter.start` has not returned yet
+    starting: bool,
+    /// start timed out; stop once any in-flight start returns
+    want_stop: bool,
+    /// `starter.stop` is running
+    stopping: bool,
 }
 
 pub struct LazyStarter {
@@ -72,6 +95,7 @@ pub struct LazyStarter {
     starter: Arc<dyn PluginStarter>,
     router_tx: mpsc::Sender<IncomingMessage>,
     start_timeout: Duration,
+    poll_interval: Duration,
 }
 
 impl LazyStarter {
@@ -86,16 +110,23 @@ impl LazyStarter {
             starter,
             router_tx,
             start_timeout,
+            poll_interval: POLL_INTERVAL,
         }
+    }
+
+    /// registration-check cadence; tests slow it down to hold the drain open
+    pub fn with_poll_interval(mut self, poll_interval: Duration) -> Self {
+        self.poll_interval = poll_interval;
+        self
     }
 
     pub async fn run(self, mut rx: mpsc::Receiver<WakeRequest>) {
         let mut waking: HashMap<String, Waking> = HashMap::new();
-        // `starter.start` can take a while; it runs off-loop so other wake
-        // requests keep queueing, and reports back here
-        let (started_tx, mut started_rx) =
-            mpsc::unbounded_channel::<(String, Result<(), VynkorError>)>();
-        let mut poll = tokio::time::interval(POLL_INTERVAL);
+        // `starter.start`/`stop` can take a while; they run off-loop so other
+        // wake requests keep queueing, and report back here
+        let (started_tx, mut started_rx) = mpsc::unbounded_channel::<Started>();
+        let (stopped_tx, mut stopped_rx) = mpsc::unbounded_channel::<String>();
+        let mut poll = tokio::time::interval(self.poll_interval);
         poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
         loop {
@@ -105,10 +136,13 @@ impl LazyStarter {
                     self.on_wake_request(req, &mut waking, &started_tx).await;
                 }
                 Some((id, result)) = started_rx.recv() => {
-                    self.on_start_result(id, result, &mut waking);
+                    self.on_start_result(id, result, &mut waking, &stopped_tx);
+                }
+                Some(id) = stopped_rx.recv() => {
+                    self.on_stopped(id, &mut waking, &started_tx);
                 }
                 _ = poll.tick() => {
-                    self.poll_waking(&mut waking).await;
+                    self.poll_waking(&mut waking, &stopped_tx).await;
                 }
             }
         }
@@ -118,31 +152,89 @@ impl LazyStarter {
         &self,
         req: WakeRequest,
         waking: &mut HashMap<String, Waking>,
-        started_tx: &mpsc::UnboundedSender<(String, Result<(), VynkorError>)>,
+        started_tx: &mpsc::UnboundedSender<Started>,
     ) {
         let WakeRequest { plugin_id, msg } = req;
         if let Some(w) = waking.get_mut(&plugin_id) {
-            w.queue.push(msg);
+            if w.queue.len() >= MAX_QUEUED {
+                fail_msg(
+                    msg,
+                    ActionStatus::ActionError,
+                    "lazy start queue full".to_string(),
+                );
+            } else {
+                w.queue.push(msg);
+            }
             return;
         }
-        // registered between the router's lookup and now: no spawn needed
         if self.registry.get(&plugin_id).is_some() {
-            self.reinject(vec![msg]).await;
+            // registered and not waking: either the router looked up just
+            // before registration, or a call hit the drain gate. deliver it
+            // if the plugin really serves the action; never bounce it back
+            // as dormant, that would loop
+            let served = request_action(&msg).is_some_and(|action| {
+                matches!(
+                    self.registry.find_action_provider(&action),
+                    ActionLookup::Found(p) if p.plugin_id == plugin_id
+                )
+            });
+            if served {
+                self.reinject(&plugin_id, vec![msg]).await;
+            } else {
+                let action = request_action(&msg).unwrap_or_default();
+                fail_msg(
+                    msg,
+                    ActionStatus::ActionNotFound,
+                    format!("lazy plugin {plugin_id} does not provide action {action}"),
+                );
+            }
             return;
         }
         debug!(plugin_id, "waking lazy plugin");
-        waking.insert(
-            plugin_id.clone(),
-            Waking {
-                queue: vec![msg],
-                since: Instant::now(),
-            },
-        );
+        self.registry.lazy_gate_hold(&plugin_id);
+        let mut w = Waking {
+            queue: vec![msg],
+            since: Instant::now(),
+            starting: false,
+            want_stop: false,
+            stopping: false,
+        };
+        self.spawn_start(&plugin_id, &mut w, started_tx);
+        waking.insert(plugin_id, w);
+    }
+
+    fn spawn_start(
+        &self,
+        plugin_id: &str,
+        w: &mut Waking,
+        started_tx: &mpsc::UnboundedSender<Started>,
+    ) {
+        w.starting = true;
+        w.since = Instant::now();
         let starter = Arc::clone(&self.starter);
         let tx = started_tx.clone();
+        let id = plugin_id.to_string();
         tokio::spawn(async move {
-            let result = starter.start(&plugin_id).await;
-            let _ = tx.send((plugin_id, result));
+            let result = starter.start(&id).await;
+            let _ = tx.send((id, result));
+        });
+    }
+
+    fn spawn_stop(
+        &self,
+        plugin_id: &str,
+        w: &mut Waking,
+        stopped_tx: &mpsc::UnboundedSender<String>,
+    ) {
+        w.stopping = true;
+        let starter = Arc::clone(&self.starter);
+        let tx = stopped_tx.clone();
+        let id = plugin_id.to_string();
+        tokio::spawn(async move {
+            if let Err(e) = starter.stop(&id).await {
+                warn!(plugin_id = %id, error = %e, "stopping half-started lazy plugin failed");
+            }
+            let _ = tx.send(id);
         });
     }
 
@@ -151,19 +243,60 @@ impl LazyStarter {
         id: String,
         result: Result<(), VynkorError>,
         waking: &mut HashMap<String, Waking>,
+        stopped_tx: &mpsc::UnboundedSender<String>,
     ) {
-        let Err(e) = result else { return };
-        warn!(plugin_id = %id, error = %e, "lazy plugin failed to start");
-        if let Some(w) = waking.remove(&id) {
-            fail_queue(&id, w.queue);
+        let Some(w) = waking.get_mut(&id) else {
+            // slot already finished (registered and drained): nothing to do
+            if let Err(e) = result {
+                warn!(plugin_id = %id, error = %e, "late lazy start error");
+            }
+            return;
+        };
+        w.starting = false;
+        if w.want_stop {
+            // start timed out while still running; stop now that it returned
+            self.spawn_stop(&id, w, stopped_tx);
+            return;
+        }
+        if let Err(e) = result {
+            warn!(plugin_id = %id, error = %e, "lazy plugin failed to start");
+            if let Some(w) = waking.remove(&id) {
+                self.registry.lazy_gate_release(&id);
+                fail_queue(&id, w.queue);
+            }
         }
     }
 
-    async fn poll_waking(&self, waking: &mut HashMap<String, Waking>) {
+    fn on_stopped(
+        &self,
+        id: String,
+        waking: &mut HashMap<String, Waking>,
+        started_tx: &mpsc::UnboundedSender<Started>,
+    ) {
+        let Some(w) = waking.get_mut(&id) else { return };
+        w.stopping = false;
+        w.want_stop = false;
+        if w.queue.is_empty() {
+            waking.remove(&id);
+        } else {
+            // calls arrived during the stop: start afresh now that it is done
+            self.registry.lazy_gate_hold(&id);
+            self.spawn_start(&id, w, started_tx);
+        }
+    }
+
+    async fn poll_waking(
+        &self,
+        waking: &mut HashMap<String, Waking>,
+        stopped_tx: &mpsc::UnboundedSender<String>,
+    ) {
         let now = Instant::now();
         let mut ready = Vec::new();
         let mut expired = Vec::new();
         for (id, w) in waking.iter() {
+            if w.stopping || w.want_stop {
+                continue;
+            }
             if self.registry.get(id).is_some() {
                 ready.push(id.clone());
             } else if now.duration_since(w.since) >= self.start_timeout {
@@ -172,28 +305,35 @@ impl LazyStarter {
         }
         for id in ready {
             if let Some(w) = waking.remove(&id) {
-                self.reinject(w.queue).await;
+                self.reinject(&id, w.queue).await;
             }
         }
         for id in expired {
-            let Some(w) = waking.remove(&id) else {
+            let Some(w) = waking.get_mut(&id) else {
                 continue;
             };
             warn!(plugin_id = %id, timeout = ?self.start_timeout, "lazy plugin did not register in time");
-            fail_queue(&id, w.queue);
-            // stop off-loop: it can wait out the plugin's grace period
-            let starter = Arc::clone(&self.starter);
-            tokio::spawn(async move {
-                if let Err(e) = starter.stop(&id).await {
-                    warn!(plugin_id = %id, error = %e, "stopping half-started lazy plugin failed");
-                }
-            });
+            fail_queue(&id, std::mem::take(&mut w.queue));
+            self.registry.lazy_gate_release(&id);
+            w.want_stop = true;
+            if !w.starting {
+                self.spawn_stop(&id, w, stopped_tx);
+            }
+        }
+        // gates with no wake in progress go once the router has consumed the
+        // frames we allowed (or they went stale)
+        for id in self.registry.lazy_gate_ids() {
+            if !waking.contains_key(&id) && self.registry.lazy_gate_trim(&id, ALLOW_TTL) {
+                self.registry.lazy_gate_release(&id);
+            }
         }
     }
 
-    /// send queued frames back through the router, preserving arrival order
-    async fn reinject(&self, queue: Vec<IncomingMessage>) {
+    /// send queued frames back through the router in arrival order; the gate
+    /// lets exactly these frames through to the now-live plugin
+    async fn reinject(&self, plugin_id: &str, queue: Vec<IncomingMessage>) {
         for msg in queue {
+            self.registry.lazy_gate_allow(plugin_id, frame_addr(&msg));
             if self.router_tx.send(msg).await.is_err() {
                 return;
             }
@@ -201,26 +341,47 @@ impl LazyStarter {
     }
 }
 
-/// answer every queued call with `ACTION_ERROR`, shaped like the router's own
-/// error replies (caller's `action_id` and `message_id`)
+fn frame_addr(msg: &IncomingMessage) -> usize {
+    Arc::as_ptr(&msg.frame.payload) as *const u8 as usize
+}
+
+/// the action name of a queued `ActionRequest`, if it decodes as one
+fn request_action(msg: &IncomingMessage) -> Option<String> {
+    let env = Envelope::decode(msg.frame.payload.as_ref()).ok()?;
+    match env.payload {
+        Some(envelope::Payload::ActionRequest(r)) => Some(r.action),
+        _ => None,
+    }
+}
+
 fn fail_queue(plugin_id: &str, queue: Vec<IncomingMessage>) {
     for msg in queue {
-        let Ok(env) = Envelope::decode(msg.frame.payload.as_ref()) else {
-            continue;
-        };
-        let Some(envelope::Payload::ActionRequest(req)) = env.payload else {
-            continue;
-        };
-        let response = Envelope {
-            message_id: env.message_id,
-            payload: Some(envelope::Payload::ActionResponse(ActionResponse {
-                action_id: req.action_id,
-                status: ActionStatus::ActionError as i32,
-                data_json: vec![],
-                error: format!("lazy plugin {plugin_id} failed to start"),
-            })),
-            ..Default::default()
-        };
-        send_envelope(&msg.write_tx, response);
+        fail_msg(
+            msg,
+            ActionStatus::ActionError,
+            format!("lazy plugin {plugin_id} failed to start"),
+        );
     }
+}
+
+/// answer a queued call with an error, shaped like the router's own error
+/// replies (caller's `action_id` and `message_id`)
+fn fail_msg(msg: IncomingMessage, status: ActionStatus, error: String) {
+    let Ok(env) = Envelope::decode(msg.frame.payload.as_ref()) else {
+        return;
+    };
+    let Some(envelope::Payload::ActionRequest(req)) = env.payload else {
+        return;
+    };
+    let response = Envelope {
+        message_id: env.message_id,
+        payload: Some(envelope::Payload::ActionResponse(ActionResponse {
+            action_id: req.action_id,
+            status: status as i32,
+            data_json: vec![],
+            error,
+        })),
+        ..Default::default()
+    };
+    send_envelope(&msg.write_tx, response);
 }

@@ -776,7 +776,19 @@ impl MessageRouter {
                 // to *invoke* it. Actions with no required permission are
                 // unaffected: the provider-declares-authorization model still
                 // applies to them as-is
-                let lookup = registry.find_action_provider(&req.action);
+                // lazy: while a wake is draining, calls for a live lazy plugin
+                // go via the waker so they stay behind the queued ones
+                let lookup = match registry.find_action_provider(&req.action) {
+                    ActionLookup::Found(p)
+                        if !registry.lazy_gate_passes(
+                            &p.plugin_id,
+                            Arc::as_ptr(&msg.frame.payload) as *const u8 as usize,
+                        ) =>
+                    {
+                        ActionLookup::Dormant(p.plugin_id.clone())
+                    }
+                    other => other,
+                };
                 // lazy: a dormant provider has no live entry yet, so only the
                 // requester side of the permission check can run before the wake
                 let (provider_id, provider_live) = match &lookup {
@@ -856,7 +868,9 @@ impl MessageRouter {
                         Some(ActionStatus::ActionQuotaExceeded)
                     }
                     // lazy: hand the call to the waker, which re-injects it once
-                    // the plugin registers (then it takes the Found path)
+                    // the plugin registers (then it takes the Found path). the
+                    // quota guards above ran for this pass and run again on
+                    // re-injection, so a woken call spends two rate tokens
                     ActionLookup::Dormant(plugin_id) => {
                         let queued = lazy_tx.is_some_and(|tx| {
                             tx.try_send(WakeRequest {
