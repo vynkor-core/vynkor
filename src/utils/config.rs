@@ -96,6 +96,10 @@ pub struct BridgeConfig {
     /// Must be a subset of `plugins`.
     #[serde(default)]
     pub mirror: Vec<String>,
+    /// PEM of the host's served cert; when set, wss:// trusts exactly this cert
+    /// under any name (pairing-link pinning, same as the phone app).
+    #[serde(default)]
+    pub ca_cert_path: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
