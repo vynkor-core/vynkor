@@ -122,6 +122,7 @@ fn spawn_router_with_store(
         device_store,
         None,
         None, // device_callers
+        None, // lazy_tx
     ));
     tx
 }

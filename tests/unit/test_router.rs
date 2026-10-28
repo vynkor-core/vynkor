@@ -832,6 +832,7 @@ async fn poisoned_session_key_cell_still_installs_mac_key() {
         None, // device_store
         None,
         None, // device_callers
+        None, // lazy_tx
     ));
 
     let (write_tx, mut write_rx) = make_write_pair();
@@ -1092,6 +1093,7 @@ fn spawn_router_with_jwt_and_config_perms(
         None, // device_store
         None,
         None, // device_callers
+        None, // lazy_tx
     ));
     tx
 }
@@ -1253,6 +1255,7 @@ async fn unregistered_connection_error_budget_survives_map_prune() {
         None, // device_store
         None,
         None, // device_callers
+        None, // lazy_tx
     ));
 
     let (tx, mut rx_out) = mpsc::channel::<Outbound>(64);
@@ -2639,6 +2642,7 @@ fn spawn_router_with(
         None,
         bridge,
         device_callers.map(Arc::new),
+        None,
     ));
     tx
 }
