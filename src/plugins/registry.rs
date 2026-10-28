@@ -657,10 +657,18 @@ impl PluginRegistry {
     /// router side: may this frame go straight to the live plugin? true when
     /// there is no gate, or the frame was allowed (consumed on use)
     pub fn lazy_gate_passes(&self, plugin_id: &str, frame_addr: usize) -> bool {
+        // read lock first: this runs for every action call, gate or not
+        if !self.lazy_gates.contains_key(plugin_id) {
+            return true;
+        }
         match self.lazy_gates.get_mut(plugin_id) {
             None => true,
             Some(mut g) => g.remove(&frame_addr).is_some(),
         }
+    }
+
+    pub fn has_lazy_gates(&self) -> bool {
+        !self.lazy_gates.is_empty()
     }
 
     pub fn lazy_gate_ids(&self) -> Vec<String> {

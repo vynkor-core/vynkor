@@ -845,3 +845,146 @@ async fn call_during_idle_stop_queues_and_rewakes_after_it() {
     assert_eq!(h.starter.starts.load(Ordering::SeqCst), 2);
     assert!(!h.starter.overlapped.load(Ordering::SeqCst));
 }
+
+// ── kernel boot wiring ──────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn kernel_boot_wakes_configured_lazy_plugin_on_first_call() {
+    // everything else here wires the waker by hand; this goes through the
+    // orchestrator. the "plugin" is a script that leaves a marker and sleeps;
+    // the test plays its protocol side once the marker shows it was spawned
+    let tmp = tempfile::tempdir().unwrap();
+    let marker = tmp.path().join("spawned");
+    let mut def = lazy_def(
+        tmp.path(),
+        "lazy-boot",
+        manifest("lazy-boot", serde_json::json!({})),
+    );
+    std::fs::write(
+        tmp.path().join("plugin.sh"),
+        format!("#!/bin/sh\ntouch {}\nexec sleep 60\n", marker.display()),
+    )
+    .unwrap();
+    def.grace_seconds = 1;
+
+    let sock = tmp.path().join("k.sock").to_string_lossy().into_owned();
+    let mut cfg = super::helpers::test_config(&sock, 19812);
+    cfg.plugins = vec![def];
+    let (shutdown_tx, registry, _bus) = super::helpers::start_kernel_with_config(cfg).await;
+
+    assert!(
+        matches!(
+            registry.find_action_provider("lazy_echo"),
+            ActionLookup::Dormant(id) if id == "lazy-boot"
+        ),
+        "dormant at boot"
+    );
+    assert!(!marker.exists(), "not spawned at boot");
+
+    let mut c = VynkorClient::connect(&sock).await.unwrap();
+    c.register("boot-caller", PluginManifest::default())
+        .await
+        .unwrap();
+    call(&mut c, "b1", "{\"boot\":1}").await;
+
+    wait_until("lazy plugin spawned by the kernel", || marker.exists()).await;
+    let mut plugin = VynkorClient::connect(&sock).await.unwrap();
+    plugin
+        .register(
+            "lazy-boot",
+            PluginManifest {
+                actions: vec!["lazy_echo".to_string()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let env = plugin.recv_timeout(Duration::from_secs(5)).await.unwrap();
+    let Some(envelope::Payload::ActionRequest(r)) = env.payload else {
+        panic!("expected the queued ActionRequest");
+    };
+    plugin
+        .send(
+            "kernel",
+            Envelope {
+                message_id: env.message_id,
+                payload: Some(envelope::Payload::ActionResponse(ActionResponse {
+                    action_id: r.action_id,
+                    status: ActionStatus::ActionOk as i32,
+                    data_json: r.params_json,
+                    error: String::new(),
+                })),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let reply = reply(&mut c).await;
+    assert_eq!(reply.action_id, "b1");
+    assert_eq!(reply.status, ActionStatus::ActionOk as i32);
+    assert_eq!(reply.data_json, b"{\"boot\":1}");
+    assert!(registry.get("lazy-boot").is_some());
+
+    let _ = shutdown_tx.send(());
+}
+
+#[tokio::test]
+async fn shutdown_kills_lazy_plugin_that_never_registered() {
+    // spawned but not yet registered: absent from registry.list(), so the
+    // shutdown must still reach it through the supervisor
+    let tmp = tempfile::tempdir().unwrap();
+    let pidfile = tmp.path().join("pid");
+    let termfile = tmp.path().join("got-term");
+    let mut def = lazy_def(
+        tmp.path(),
+        "lazy-orphan",
+        manifest("lazy-orphan", serde_json::json!({})),
+    );
+    std::fs::write(
+        tmp.path().join("plugin.sh"),
+        format!(
+            "#!/bin/sh\ntrap 'touch {term}; exit 0' TERM\necho $$ > {pid}\nwhile :; do sleep 0.1; done\n",
+            term = termfile.display(),
+            pid = pidfile.display()
+        ),
+    )
+    .unwrap();
+    def.grace_seconds = 1;
+
+    let sock = tmp.path().join("k.sock").to_string_lossy().into_owned();
+    let mut cfg = super::helpers::test_config(&sock, 19813);
+    cfg.plugins = vec![def];
+    cfg.default_grace_seconds = 1;
+    let (shutdown_tx, registry, _bus) = super::helpers::start_kernel_with_config(cfg).await;
+
+    let mut c = VynkorClient::connect(&sock).await.unwrap();
+    c.register("orphan-caller", PluginManifest::default())
+        .await
+        .unwrap();
+    call(&mut c, "o1", "{}").await;
+    wait_until("lazy plugin spawned", || {
+        std::fs::read_to_string(&pidfile).is_ok_and(|s| !s.trim().is_empty())
+    })
+    .await;
+    assert!(registry.get("lazy-orphan").is_none(), "never registers");
+    let pid = nix::unistd::Pid::from_raw(
+        std::fs::read_to_string(&pidfile)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap(),
+    );
+
+    // no registered plugin at all: shutdown can't rely on registry entries
+    drop(c);
+    wait_until("registry to empty", || registry.list().is_empty()).await;
+
+    let _ = shutdown_tx.send(());
+    wait_until("orphan to be killed", || {
+        nix::sys::signal::kill(pid, None).is_err()
+    })
+    .await;
+    // told to stop by the supervisor's shutdown, not just reaped on drop
+    assert!(termfile.exists(), "no SIGTERM from graceful shutdown");
+}

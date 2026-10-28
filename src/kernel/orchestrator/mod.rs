@@ -29,6 +29,9 @@ mod shutdown;
 /// are already shut off.
 pub(super) struct ShutdownHandles {
     pub(super) uds_accept: tokio::task::JoinHandle<()>,
+    /// the lazy waker, if any lazy plugin is configured; aborted with the
+    /// accept loop so nothing is woken once teardown begins
+    pub(super) lazy: Option<tokio::task::JoinHandle<()>>,
     pub(super) api_shutdown_handle: axum_server::Handle<std::net::SocketAddr>,
     pub(super) api_task: tokio::task::JoinHandle<()>,
     pub(super) background: Vec<tokio::task::JoinHandle<()>>,
@@ -294,15 +297,21 @@ impl Kernel {
             config.lazy_idle_stop_secs,
         )
         .await;
-        background_handles.push(tokio::spawn(
-            LazyStarter::new(
-                Arc::clone(&registry),
-                Arc::new(ManagerStarter::new(Arc::clone(&manager), lazy_configs)),
-                ws_router_tx.clone(),
-                std::time::Duration::from_millis(config.lazy_start_timeout_ms),
-            )
-            .run(lazy_rx),
-        ));
+        // no lazy plugins configured: nothing can be dormant, so no waker task
+        // (dropping lazy_rx makes any wake request fail fast)
+        let lazy_handle = if lazy_configs.is_empty() {
+            None
+        } else {
+            Some(tokio::spawn(
+                LazyStarter::new(
+                    Arc::clone(&registry),
+                    Arc::new(ManagerStarter::new(Arc::clone(&manager), lazy_configs)),
+                    ws_router_tx.clone(),
+                    std::time::Duration::from_millis(config.lazy_start_timeout_ms),
+                )
+                .run(lazy_rx),
+            ))
+        };
         // CD-01: ticket pairing shares the device store; needs jwt_secret to
         // sign device tokens, so it exists exactly when the store does
         let pairing = match (&device_store, &config.jwt_secret) {
@@ -365,6 +374,7 @@ impl Kernel {
             config.default_grace_seconds,
             ShutdownHandles {
                 uds_accept: uds_accept_handle,
+                lazy: lazy_handle,
                 api_shutdown_handle,
                 api_task,
                 background: background_handles,

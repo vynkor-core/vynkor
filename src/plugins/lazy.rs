@@ -178,7 +178,8 @@ impl LazyStarter {
                 Some(id) = stopped_rx.recv() => {
                     self.on_stopped(id, &mut waking, &started_tx);
                 }
-                _ = poll.tick() => {
+                // only while a wake is in flight or a gate awaits trimming
+                _ = poll.tick(), if !waking.is_empty() || self.registry.has_lazy_gates() => {
                     self.poll_waking(&mut waking, &stopped_tx).await;
                 }
                 _ = sweep.tick() => {

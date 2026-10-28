@@ -140,7 +140,8 @@ allow_no_auth: true
 # Lazy plugins: a plugin marked `lazy: true` in its plugins.d drop-in is not
 # spawned at boot. Its manifest actions stay routable (and listed as
 # "dormant" by list_plugins / get_manifest); the first call starts it and
-# waits for it to register. A lazy plugin that declares `events` is started
+# waits for it to register. Do not make a plugin lazy if others `requires` it:
+# dependants start without it running and it only wakes on a first action call. A lazy plugin that declares `events` is started
 # eagerly, since it would miss events while dormant.
 # lazy_idle_stop_secs: 600          # default seconds idle (no call routed to it or answered by it, none pending) before a lazy plugin is stopped again; it wakes on the next call
 # lazy_start_timeout_ms: 10000      # how long a first call waits for a lazy plugin to register before every queued call gets ACTION_ERROR "lazy plugin <id> failed to start"
