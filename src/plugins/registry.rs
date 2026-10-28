@@ -407,7 +407,10 @@ impl PluginRegistry {
         };
         self.by_conn_id.remove(&entry.conn_id);
         self.pong_times.remove(plugin_id);
-        self.clear_action_requirements(plugin_id);
+        // action requirements are config-derived and outlive the connection:
+        // clearing them here let a supervisor-restarted plugin be called
+        // without the permission check until the kernel restarted. only
+        // `clear_action_requirements` removes them, for a plugin truly gone
         // PERF-3: drop this plugin's action→provider index entries
         for action in &entry.manifest.actions {
             self.unindex_action(action, plugin_id);
@@ -841,6 +844,30 @@ mod tests {
         };
         reg.register(id.to_string(), conn_id, manifest, tx, "", "")
             .unwrap();
+    }
+
+    #[test]
+    fn action_requirements_survive_unregister_and_reregister() {
+        // a plugin the supervisor restarts unregisters then registers again;
+        // its permission gate must hold in between and after
+        let reg = PluginRegistry::new();
+        reg.set_action_requirements(
+            "net".to_string(),
+            [("fetch".to_string(), PermissionType::PermissionNetwork)]
+                .into_iter()
+                .collect(),
+        );
+        register_with(&reg, "net", 1, &["fetch"]);
+        assert!(reg.unregister_conn("net", 1));
+        assert_eq!(
+            reg.action_requirement("net", "fetch"),
+            Some(PermissionType::PermissionNetwork)
+        );
+        register_with(&reg, "net", 2, &["fetch"]);
+        assert_eq!(
+            reg.action_requirement("net", "fetch"),
+            Some(PermissionType::PermissionNetwork)
+        );
     }
 
     #[tracing_test::traced_test]
