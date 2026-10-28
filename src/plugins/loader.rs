@@ -1,12 +1,15 @@
 use crate::auth::permissions::normalize_permission;
 use crate::events::bus::EventBus;
+use crate::plugins::lazy_manifest::action_specs_from_manifest_json;
 use crate::plugins::manager::PluginManager;
+use crate::plugins::registry::{ActionLookup, DormantPlugin};
 use crate::plugins::supervisor::{PluginConfig, RestartPolicy};
 use crate::utils::config::PluginDef;
 use crate::utils::errors::VynkorError;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::{info, warn};
 // manifest types come from vynkor-wire — the single implementation shared
 // with vynm since V-01/V-02.
@@ -65,13 +68,17 @@ impl PluginLoader {
     /// Respects `requires` declarations in `plugin.json`: deps are loaded first.
     /// Circular dependencies are refused. Missing deps (not in config) refuse the
     /// dependant. If `event_bus` is provided, plugins subscribe to declared events.
+    /// Lazy plugins (without declared events) are registered dormant instead of
+    /// spawned; their `PluginConfig`s are returned for the waker.
     pub async fn load_all(
         defs: &[PluginDef],
         manager: &Arc<PluginManager>,
         event_bus: Option<&Arc<EventBus>>,
-    ) {
+        lazy_idle_stop_secs: u64,
+    ) -> HashMap<String, PluginConfig> {
+        let mut lazy_configs: HashMap<String, PluginConfig> = HashMap::new();
         if defs.is_empty() {
-            return;
+            return lazy_configs;
         }
         info!("loading {} plugin(s) from config", defs.len());
 
@@ -167,8 +174,20 @@ impl PluginLoader {
                 continue;
             }
 
-            info!(id = %def.id, binary = %def.binary, "spawning plugin");
             let config = Self::config_from_def(def);
+            if def.lazy {
+                let manifest = manifests.get(def.id.as_str()).and_then(|m| m.as_ref());
+                if manifest.is_some_and(|m| m.events.as_ref().is_some_and(|e| !e.is_empty())) {
+                    // a dormant plugin would silently miss bus events
+                    warn!(id = %def.id, "lazy plugin declares events — starting eagerly");
+                } else {
+                    Self::register_lazy(def, manager, lazy_idle_stop_secs);
+                    lazy_configs.insert(def.id.clone(), config);
+                    continue;
+                }
+            }
+
+            info!(id = %def.id, binary = %def.binary, "spawning plugin");
             match manager.start(config).await {
                 Ok(proc) => {
                     info!(id = %def.id, pid = proc.pid, "plugin spawned");
@@ -191,7 +210,37 @@ impl PluginLoader {
                 Err(e) => warn!(id = %def.id, error = %e, "failed to spawn plugin — skipping"),
             }
         }
+        lazy_configs
     }
+}
+
+impl PluginLoader {
+    fn register_lazy(def: &PluginDef, manager: &Arc<PluginManager>, default_idle_stop_secs: u64) {
+        let registry = manager.registry();
+        let action_specs = read_raw_manifest(def)
+            .map(|raw| action_specs_from_manifest_json(&raw))
+            .unwrap_or_default();
+        for spec in &action_specs {
+            if let ActionLookup::Found(_) | ActionLookup::Dormant(_) | ActionLookup::Ambiguous(_) =
+                registry.find_action_provider(&spec.name)
+            {
+                // routing stays ambiguous until first call otherwise
+                warn!(id = %def.id, action = %spec.name, "lazy plugin declares an action another plugin already provides");
+            }
+        }
+        let idle_stop = Duration::from_secs(def.idle_stop_secs.unwrap_or(default_idle_stop_secs));
+        info!(id = %def.id, actions = action_specs.len(), "registering lazy plugin as dormant");
+        registry.register_dormant(DormantPlugin {
+            plugin_id: def.id.clone(),
+            action_specs,
+            idle_stop,
+        });
+    }
+}
+
+fn read_raw_manifest(def: &PluginDef) -> Option<serde_json::Value> {
+    let path = PathBuf::from(&def.binary).parent()?.join("plugin.json");
+    serde_json::from_slice(&std::fs::read(path).ok()?).ok()
 }
 
 /// Kahn's algorithm topological sort.

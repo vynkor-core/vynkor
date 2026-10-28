@@ -1,4 +1,5 @@
 pub mod fsaccess;
+pub mod lazy_manifest;
 pub mod loader;
 pub mod manager;
 pub mod metrics;

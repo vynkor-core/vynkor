@@ -282,7 +282,13 @@ impl Kernel {
 
         let shutdown_supervisor = Arc::clone(&supervisor);
         let manager = Arc::new(PluginManager::new(supervisor, Arc::clone(&registry)));
-        PluginLoader::load_all(&config.plugins, &manager, Some(&event_bus)).await;
+        PluginLoader::load_all(
+            &config.plugins,
+            &manager,
+            Some(&event_bus),
+            config.lazy_idle_stop_secs,
+        )
+        .await;
         // CD-01: ticket pairing shares the device store; needs jwt_secret to
         // sign device tokens, so it exists exactly when the store does
         let pairing = match (&device_store, &config.jwt_secret) {
