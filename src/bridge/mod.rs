@@ -91,6 +91,8 @@ pub(crate) enum BridgeError {
     Tls(String),
     Http(u16),
     Timeout,
+    // constructed by transports that are not implemented yet (relay)
+    #[allow(dead_code)]
     Unsupported(String),
     Register(String),
     Wire(VynkorError),
