@@ -361,6 +361,43 @@ async fn remove_closes_an_open_session() {
     assert_closed_within(&mut ws, Duration::from_secs(3)).await;
 }
 
+/// A device with a valid token but the wrong secret registers fine (the ack
+/// precedes the MAC); its first tagged frame must get a close that names the
+/// reason, not a bare drop that reads as a host restart.
+#[tokio::test]
+async fn wrong_secret_gets_a_mac_close_code() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_shutdown, _reg, _bus) =
+        start_kernel_secured_with_data_dir("/tmp/vynkor_e01e.sock", 19614, MASTER, dir.path())
+            .await;
+    DeviceStore::new(dir.path(), MASTER)
+        .issue("typo-phone", "typo", 3600)
+        .unwrap();
+
+    let (mut ws, key) = connect_registered(19614, "typo-phone", "not-the-paired-secret").await;
+    let ping = Envelope {
+        payload: Some(envelope::Payload::Ping(Ping { timestamp: 1 })),
+        ..Default::default()
+    };
+    send_frame(
+        &mut ws,
+        build_frame("kernel", &ping.encode_to_vec(), Some(&key)),
+    )
+    .await;
+
+    let msg = timeout(Duration::from_secs(2), ws.next())
+        .await
+        .expect("close within 2s")
+        .expect("socket open")
+        .expect("no ws error");
+    match msg {
+        WsMsg::Close(Some(f)) => {
+            assert_eq!(u16::from(f.code), vynkor::api::websocket::CLOSE_MAC_INVALID);
+        }
+        other => panic!("expected a MAC close frame, got {other:?}"),
+    }
+}
+
 fn parse_payload(msg: &WsMsg) -> Vec<u8> {
     let data = match msg {
         WsMsg::Binary(d) => d.clone(),
