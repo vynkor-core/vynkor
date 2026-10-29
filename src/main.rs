@@ -340,7 +340,9 @@ fn daemonize_and_run(cfg: &Config, config_path: &str, debug: bool) -> Result<()>
         // bridge settings so client mode survives the background fork
         command.arg("--role").arg("client");
         if let Some(bridge) = &cfg.bridge {
-            command.arg("--bridge-url").arg(&bridge.host_url);
+            if !bridge.host_url.is_empty() {
+                command.arg("--bridge-url").arg(&bridge.host_url);
+            }
             if let Some(t) = &bridge.token {
                 command.arg("--bridge-token").arg(t);
             }

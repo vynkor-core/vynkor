@@ -84,7 +84,13 @@ pub enum Role {
 pub struct BridgeConfig {
     /// Host kernel base URL (`http://`/`https://` or full `ws://`/`wss://`).
     /// A base URL gets `/ws` appended; a ws(s) URL is used verbatim.
+    /// Optional when `transports` is set; setting both is a boot error.
+    #[serde(default)]
     pub host_url: String,
+    /// Ordered connection methods, first that connects wins. Replaces
+    /// `host_url` + `ca_cert_path` when non-empty.
+    #[serde(default)]
+    pub transports: Vec<TransportConfig>,
     /// JWT for the host's WS gateway. Optional when the host runs
     /// `allow_no_auth: true`.
     #[serde(default)]
@@ -106,6 +112,36 @@ pub struct BridgeConfig {
     pub keepalive_secs: u64,
 }
 
+/// One way to reach the host kernel.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum TransportConfig {
+    Direct {
+        url: String,
+        #[serde(default)]
+        ca_cert_path: Option<PathBuf>,
+    },
+    Relay {
+        url: String,
+        #[serde(default)]
+        key: Option<String>,
+    },
+}
+
+impl BridgeConfig {
+    /// `transports` if set, else the legacy `host_url` + `ca_cert_path` as one
+    /// direct transport.
+    pub fn effective_transports(&self) -> Vec<TransportConfig> {
+        if !self.transports.is_empty() {
+            return self.transports.clone();
+        }
+        vec![TransportConfig::Direct {
+            url: self.host_url.clone(),
+            ca_cert_path: self.ca_cert_path.clone(),
+        }]
+    }
+}
+
 fn default_bridge_keepalive() -> u64 {
     15
 }
@@ -114,6 +150,7 @@ impl Default for BridgeConfig {
     fn default() -> Self {
         BridgeConfig {
             host_url: String::new(),
+            transports: Vec::new(),
             token: None,
             secret: None,
             mirror: Vec::new(),
@@ -712,6 +749,43 @@ mod tests {
 
     // Zero would silently disable the IPC channel / watchdog — load_config must
     // clamp it back to the documented defaults (N3).
+    #[test]
+    fn transports_yaml_parses_direct_and_relay() {
+        let yaml = "transports:\n  - kind: direct\n    url: https://h:1\n    ca_cert_path: /x/c.pem\n  - kind: relay\n    url: wss://r.example/ws\n    key: k1\n  - kind: direct\n    url: http://h:2\n";
+        let b: BridgeConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(
+            b.transports,
+            vec![
+                TransportConfig::Direct {
+                    url: "https://h:1".into(),
+                    ca_cert_path: Some("/x/c.pem".into())
+                },
+                TransportConfig::Relay {
+                    url: "wss://r.example/ws".into(),
+                    key: Some("k1".into())
+                },
+                TransportConfig::Direct {
+                    url: "http://h:2".into(),
+                    ca_cert_path: None
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn host_url_only_config_unchanged() {
+        let b: BridgeConfig =
+            serde_yaml::from_str("host_url: https://h:1\nca_cert_path: /x/c.pem\n").unwrap();
+        assert!(b.transports.is_empty());
+        assert_eq!(
+            b.effective_transports(),
+            vec![TransportConfig::Direct {
+                url: "https://h:1".into(),
+                ca_cert_path: Some("/x/c.pem".into())
+            }]
+        );
+    }
+
     #[test]
     fn bridge_keepalive_defaults_to_15_and_clamps_zero() {
         let dir = tempfile::tempdir().unwrap();
