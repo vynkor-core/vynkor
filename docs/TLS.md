@@ -133,6 +133,26 @@ replacing the PEM. Setting `ca_cert_path` with a plaintext `http://`/`ws://`
 Leave `ca_cert_path` unset for a host behind a publicly-trusted certificate
 (section 3): the bridge then verifies against the bundled webpki roots.
 
+### `bridge.transports`
+
+Instead of `host_url` + `ca_cert_path`, a client can list transports; the
+bridge tries them in order and the first that connects wins:
+
+```yaml
+bridge:
+  transports:
+    - kind: direct            # same as host_url; ca_cert_path pins as above
+      url: https://100.80.85.81:8888
+      ca_cert_path: /home/me/.config/vyn-client/tls/host-cert.pem
+    - kind: relay             # not implemented yet: reported as `unsupported`, skipped
+      url: wss://relay.example/ws
+```
+
+Set either `host_url` or `transports`, not both. A `direct` entry follows the
+same URL and pin rules as `host_url` (errors name `bridge.transports[N]`); a
+`relay` url must be `wss://` or `https://`. When every transport fails the
+status carries the last failure and the bridge retries with backoff.
+
 ## Why not `tls: false` on its own
 
 `tls: false` without a TLS-terminating proxy sends JWTs, the pairing

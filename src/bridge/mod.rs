@@ -6,6 +6,7 @@
 //! docs/REMOTE_DEVICES_ROADMAP.md (D-06) and docs/DUMB_CORE_AUDIT.md (F3).
 
 mod tls;
+mod transport;
 
 use crate::api::websocket::frame_to_bytes;
 use crate::auth::frame_mac::{compute_tag, derive_session_key, verify_tag};
@@ -17,7 +18,7 @@ use crate::ipc::framing::{
 use crate::ipc::messages::IncomingMessage;
 use crate::plugins::registry::{DeviceMeta, PluginRegistry};
 use crate::proto::vynkor::{envelope, Envelope, PluginManifest, PluginRegister};
-use crate::utils::config::BridgeConfig;
+use crate::utils::config::{BridgeConfig, TransportConfig};
 use crate::utils::errors::VynkorError;
 use crate::utils::sync::recover_poison;
 use axum::http::HeaderValue;
@@ -27,15 +28,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, watch};
-use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Error as WsError;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
-use tokio_tungstenite::{
-    connect_async, connect_async_tls_with_config, Connector, MaybeTlsStream, WebSocketStream,
-};
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use tracing::{info, warn};
 
-type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
+pub(crate) type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 /// conn_ids for bridge connections: above the WS gateway's base so the two
 /// id spaces never collide in the registry's by_conn_id map. The router
@@ -46,7 +44,7 @@ const BRIDGE_MAX_BACKOFF: Duration = Duration::from_secs(30);
 
 /// tcp connect + ws/tls handshake budget; a black-holed host would otherwise
 /// hang for the os connect timeout (minutes)
-const BRIDGE_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const BRIDGE_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransportKind {
@@ -91,8 +89,6 @@ pub(crate) enum BridgeError {
     Tls(String),
     Http(u16),
     Timeout,
-    // constructed by transports that are not implemented yet (relay)
-    #[allow(dead_code)]
     Unsupported(String),
     Register(String),
     Wire(VynkorError),
@@ -280,9 +276,6 @@ impl Bridge {
     pub async fn run(self) {
         let mut backoff = Duration::from_secs(1);
         loop {
-            self.handle.set_status(BridgeStatus::Connecting {
-                transport: TransportKind::Direct,
-            });
             let result = self.one_cycle().await;
             // run_conn leaves Connected in place until we replace it below
             if matches!(*self.handle.status.borrow(), BridgeStatus::Connected { .. }) {
@@ -298,7 +291,10 @@ impl Bridge {
                 }
                 Err(BridgeError::Shutdown) => return,
                 Err(e) => {
-                    warn!(error = %e, "bridge connection failed");
+                    // unsupported transports warn once, where they are tried
+                    if !matches!(e, BridgeError::Unsupported(_)) {
+                        warn!(error = %e, "bridge connection failed");
+                    }
                     (classify(&e), e.to_string())
                 }
             };
@@ -312,46 +308,34 @@ impl Bridge {
         }
     }
 
+    /// walk the transport list in order; the first that connects runs the
+    /// session, otherwise the last connect error is returned
     async fn one_cycle(&self) -> Result<(), BridgeError> {
-        let url = resolve_ws_url(&self.config.host_url)?;
-        self.run_conn(&url).await
+        let token = self.config.token.clone().unwrap_or_default();
+        let transports = self.config.effective_transports();
+        let mut last_err = None;
+        for (i, t) in transports.iter().enumerate() {
+            let kind = t.kind();
+            self.handle
+                .set_status(BridgeStatus::Connecting { transport: kind });
+            match transport::connect(t, &token).await {
+                Ok(ws) => return self.run_conn(ws, kind).await,
+                Err(e) => {
+                    // the last one is reported by `run` with the backoff
+                    if i + 1 < transports.len() && !matches!(e, BridgeError::Unsupported(_)) {
+                        warn!(error = %e, transport = ?kind, "bridge transport failed, trying next");
+                    }
+                    last_err = Some(e);
+                }
+            }
+        }
+        Err(last_err.unwrap_or_else(|| BridgeError::Connect("no transports configured".into())))
     }
 
-    async fn run_conn(&self, url: &str) -> Result<(), BridgeError> {
+    async fn run_conn(&self, ws: WsStream, transport: TransportKind) -> Result<(), BridgeError> {
         let conn_id = BRIDGE_CONN_ID_BASE;
         let caps = self.config.mirror.clone();
-
-        let mut req = url
-            .into_client_request()
-            .map_err(|e| BridgeError::Connect(e.to_string()))?;
-        // same handshake as the SDK: the JWT rides the subprotocol header,
-        // never the URL (access-log hygiene)
         let token = self.config.token.clone().unwrap_or_default();
-        let protocol = if token.is_empty() {
-            "vynkor".to_string()
-        } else {
-            format!("vynkor, {token}")
-        };
-        let value =
-            HeaderValue::from_str(&protocol).map_err(|e| BridgeError::Connect(e.to_string()))?;
-        req.headers_mut().insert("sec-websocket-protocol", value);
-        let connect = async {
-            if url.starts_with("wss://") {
-                // no ca_cert_path -> None connector = webpki roots (host with a real CA cert)
-                let connector = match &self.config.ca_cert_path {
-                    Some(path) => Some(Connector::Rustls(Arc::new(tls::load_pinned_config(path)?))),
-                    None => None,
-                };
-                connect_async_tls_with_config(req, None, false, connector)
-                    .await
-                    .map_err(BridgeError::from_ws)
-            } else {
-                connect_async(req).await.map_err(BridgeError::from_ws)
-            }
-        };
-        let (ws, _resp) = tokio::time::timeout(BRIDGE_CONNECT_TIMEOUT, connect)
-            .await
-            .map_err(|_| BridgeError::Timeout)??;
         let (mut ws_write, mut ws_read) = ws.split();
         // any inbound message (pong included) resets this; see read_loop
         let silence_limit = self.keepalive() * 3;
@@ -408,9 +392,8 @@ impl Bridge {
                         _ => None,
                     };
                     info!(plugin_id = %self.device_id, "device registered on host");
-                    self.handle.set_status(BridgeStatus::Connected {
-                        transport: TransportKind::Direct,
-                    });
+                    self.handle
+                        .set_status(BridgeStatus::Connected { transport });
                     break key;
                 }
                 Some(envelope::Payload::Error(err)) => {
@@ -1206,5 +1189,84 @@ mod tests {
         );
         task.abort();
         host.abort();
+    }
+    fn transports_bridge(transports: Vec<TransportConfig>, handle: BridgeHandle) -> Bridge {
+        let (router_tx, _router_rx) = mpsc::channel::<IncomingMessage>(64);
+        Bridge::new(
+            BridgeConfig {
+                transports,
+                mirror: vec!["geo".to_string()],
+                ..Default::default()
+            },
+            "device-1".to_string(),
+            Arc::new(PluginRegistry::new()),
+            router_tx,
+            handle,
+        )
+    }
+
+    #[tokio::test]
+    async fn relay_is_skipped_then_direct_connects() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, mut rx) = tokio::sync::watch::channel(BridgeStatus::Disabled);
+        let bridge = transports_bridge(
+            vec![
+                TransportConfig::Relay {
+                    url: "wss://127.0.0.1:1".into(),
+                    key: None,
+                },
+                TransportConfig::Direct {
+                    url: format!("http://{addr}"),
+                    ca_cert_path: None,
+                },
+            ],
+            BridgeHandle::with_status(tx),
+        );
+        let task = tokio::spawn(bridge.run());
+        let host = tokio::spawn(async move {
+            let ws = accept_and_ack(&listener).await;
+            std::future::pending::<()>().await;
+            drop(ws);
+        });
+        let connected = BridgeStatus::Connected {
+            transport: TransportKind::Direct,
+        };
+        tokio::time::timeout(Duration::from_secs(5), rx.wait_for(|s| *s == connected))
+            .await
+            .expect("direct never connected after relay was skipped")
+            .unwrap();
+        task.abort();
+        host.abort();
+    }
+
+    #[tokio::test]
+    async fn only_relay_reports_unsupported() {
+        let (tx, mut rx) = tokio::sync::watch::channel(BridgeStatus::Disabled);
+        let bridge = transports_bridge(
+            vec![TransportConfig::Relay {
+                url: "wss://127.0.0.1:1".into(),
+                key: None,
+            }],
+            BridgeHandle::with_status(tx),
+        );
+        let task = tokio::spawn(bridge.run());
+        let t = Duration::from_secs(5);
+        let failed = |secs| {
+            move |s: &BridgeStatus| {
+                matches!(s, BridgeStatus::Failed { kind: BridgeFailure::Unsupported, retry_in, .. }
+                    if *retry_in == Duration::from_secs(secs))
+            }
+        };
+        tokio::time::timeout(t, rx.wait_for(failed(1)))
+            .await
+            .expect("no Unsupported failure")
+            .unwrap();
+        // the loop keeps retrying: status is published again, with doubled backoff
+        tokio::time::timeout(t, rx.wait_for(failed(2)))
+            .await
+            .expect("loop did not retry")
+            .unwrap();
+        task.abort();
     }
 }
