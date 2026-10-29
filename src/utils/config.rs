@@ -719,11 +719,20 @@ mod tests {
             format!("role: client\nbridge:\n  host_url: http://h:1\n  mirror: [a]\n{extra}")
         };
         let path = write_minimal_config(&dir, &body(""));
-        assert_eq!(load_config(&path).unwrap().bridge.unwrap().keepalive_secs, 15);
+        assert_eq!(
+            load_config(&path).unwrap().bridge.unwrap().keepalive_secs,
+            15
+        );
         let path = write_minimal_config(&dir, &body("  keepalive_secs: 0\n"));
-        assert_eq!(load_config(&path).unwrap().bridge.unwrap().keepalive_secs, 15);
+        assert_eq!(
+            load_config(&path).unwrap().bridge.unwrap().keepalive_secs,
+            15
+        );
         let path = write_minimal_config(&dir, &body("  keepalive_secs: 4\n"));
-        assert_eq!(load_config(&path).unwrap().bridge.unwrap().keepalive_secs, 4);
+        assert_eq!(
+            load_config(&path).unwrap().bridge.unwrap().keepalive_secs,
+            4
+        );
     }
 
     #[test]

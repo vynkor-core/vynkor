@@ -121,9 +121,8 @@ pub(crate) fn pinned_client_config(pem: &str) -> Result<rustls::ClientConfig, Br
 }
 
 pub(crate) fn load_pinned_config(path: &Path) -> Result<rustls::ClientConfig, BridgeError> {
-    let pem = std::fs::read_to_string(path).map_err(|e| {
-        BridgeError::Tls(format!("bridge ca_cert_path {}: {e}", path.display()))
-    })?;
+    let pem = std::fs::read_to_string(path)
+        .map_err(|e| BridgeError::Tls(format!("bridge ca_cert_path {}: {e}", path.display())))?;
     pinned_client_config(&pem)
 }
 

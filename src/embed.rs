@@ -3,10 +3,17 @@
 
 use std::collections::HashSet;
 use std::fs::{self, File};
+use std::future::Future;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+use crate::bridge::BridgeStatus;
+use crate::events::bus::EventBus;
+use crate::kernel::{Kernel, RunOptions};
+use crate::plugins::registry::PluginRegistry;
 use crate::utils::config::{Config, Role};
+use std::sync::Arc;
+use tokio::sync::watch;
 
 /// fail fast (before spawning anything) on a config the kernel cannot run:
 /// no auth without explicit opt-in, or an unusable client bridge block.
@@ -67,6 +74,26 @@ fn validate_bridge_config(cfg: &Config) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+/// run the kernel in-process until `shutdown` resolves. Takes the single-instance
+/// lock first (error downcasts to `InstanceLockError`); installs no signal
+/// handlers — the caller owns shutdown.
+pub async fn run<F: Future<Output = ()>>(
+    cfg: Config,
+    shutdown: F,
+    bridge_status: Option<watch::Sender<BridgeStatus>>,
+) -> anyhow::Result<()> {
+    validate_config(&cfg)?;
+    let _lock = InstanceLock::acquire(&cfg.pid_file)?;
+    Kernel::run_with_options(
+        cfg,
+        Arc::new(PluginRegistry::new()),
+        Arc::new(EventBus::new()),
+        shutdown,
+        RunOptions { bridge_status },
+    )
+    .await
 }
 
 #[derive(Debug)]

@@ -289,7 +289,10 @@ impl Bridge {
             let (kind, detail) = match result {
                 Ok(()) => {
                     info!("bridge connection closed");
-                    (BridgeFailure::Protocol, "host closed the connection".to_string())
+                    (
+                        BridgeFailure::Protocol,
+                        "host closed the connection".to_string(),
+                    )
                 }
                 Err(BridgeError::Shutdown) => return,
                 Err(e) => {
@@ -1048,7 +1051,10 @@ mod tests {
             (io(K::TimedOut), BridgeFailure::Timeout),
             (BridgeError::Timeout, BridgeFailure::Timeout),
             (BridgeError::Http(401), BridgeFailure::Auth),
-            (BridgeError::Register("bad token".into()), BridgeFailure::Auth),
+            (
+                BridgeError::Register("bad token".into()),
+                BridgeFailure::Auth,
+            ),
             (BridgeError::Tls("x".into()), BridgeFailure::Tls),
             (BridgeError::Mac, BridgeFailure::Protocol),
         ];
@@ -1109,11 +1115,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let (tx, mut rx) = tokio::sync::watch::channel(BridgeStatus::Disabled);
-        let bridge = test_bridge(
-            format!("http://{addr}"),
-            15,
-            BridgeHandle::with_status(tx),
-        );
+        let bridge = test_bridge(format!("http://{addr}"), 15, BridgeHandle::with_status(tx));
         let task = tokio::spawn(bridge.run());
         let host = tokio::spawn(async move {
             let ws = accept_and_ack(&listener).await;
@@ -1161,9 +1163,7 @@ mod tests {
         .unwrap()
         .clone();
         match st {
-            BridgeStatus::Failed {
-                kind, retry_in, ..
-            } => {
+            BridgeStatus::Failed { kind, retry_in, .. } => {
                 assert_eq!(kind, BridgeFailure::Unreachable);
                 assert_eq!(retry_in, Duration::from_secs(1));
             }

@@ -6,6 +6,7 @@ mod test_audio_stream_permission;
 mod test_autoload;
 mod test_device_keys_ws;
 mod test_disconnect;
+mod test_embed;
 mod test_event_store_integration;
 mod test_events;
 mod test_kernel_commands;
