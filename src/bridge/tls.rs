@@ -98,10 +98,10 @@ impl std::error::Error for PinMismatch {}
 pub(crate) fn pinned_client_config(pem: &str) -> Result<rustls::ClientConfig, BridgeError> {
     let mut pinned = Vec::new();
     for cert in CertificateDer::pem_slice_iter(pem.as_bytes()) {
-        pinned.push(cert.map_err(|e| BridgeError::Connect(format!("bad cert pem: {e}")))?);
+        pinned.push(cert.map_err(|e| BridgeError::Tls(format!("bad cert pem: {e}")))?);
     }
     if pinned.is_empty() {
-        return Err(BridgeError::Connect(
+        return Err(BridgeError::Tls(
             "ca_cert_path contained no certificates".into(),
         ));
     }
@@ -114,7 +114,7 @@ pub(crate) fn pinned_client_config(pem: &str) -> Result<rustls::ClientConfig, Br
     };
     Ok(rustls::ClientConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()
-        .map_err(|e| BridgeError::Connect(format!("tls config: {e}")))?
+        .map_err(|e| BridgeError::Tls(format!("tls config: {e}")))?
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(verifier))
         .with_no_client_auth())
@@ -122,7 +122,7 @@ pub(crate) fn pinned_client_config(pem: &str) -> Result<rustls::ClientConfig, Br
 
 pub(crate) fn load_pinned_config(path: &Path) -> Result<rustls::ClientConfig, BridgeError> {
     let pem = std::fs::read_to_string(path).map_err(|e| {
-        BridgeError::Connect(format!("bridge ca_cert_path {}: {e}", path.display()))
+        BridgeError::Tls(format!("bridge ca_cert_path {}: {e}", path.display()))
     })?;
     pinned_client_config(&pem)
 }
