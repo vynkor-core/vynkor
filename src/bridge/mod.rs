@@ -18,10 +18,9 @@ use crate::ipc::framing::{
 use crate::ipc::messages::IncomingMessage;
 use crate::plugins::registry::{DeviceMeta, PluginRegistry};
 use crate::proto::vynkor::{envelope, Envelope, PluginManifest, PluginRegister};
-use crate::utils::config::{BridgeConfig, TransportConfig};
+use crate::utils::config::BridgeConfig;
 use crate::utils::errors::VynkorError;
 use crate::utils::sync::recover_poison;
-use axum::http::HeaderValue;
 use futures_util::{SinkExt, StreamExt};
 use prost::Message;
 use std::sync::{Arc, Mutex};
@@ -653,6 +652,8 @@ fn is_kernel_routed(frame: &Frame) -> bool {
 mod tests {
     use super::*;
     use crate::proto::vynkor::{Event, PluginRegisterAck};
+    use crate::utils::config::TransportConfig;
+    use axum::http::HeaderValue;
     use tokio::net::TcpListener;
 
     fn frame_target(frame: &Frame) -> String {
