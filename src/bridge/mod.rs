@@ -8,7 +8,7 @@
 mod tls;
 mod transport;
 
-use crate::api::websocket::frame_to_bytes;
+use crate::api::websocket::{frame_to_bytes, CLOSE_MAC_INVALID};
 use crate::auth::frame_mac::{compute_tag, derive_session_key, verify_tag};
 use crate::ipc::connection::{out_frame, Outbound, SessionKeyCell};
 use crate::ipc::framing::{
@@ -17,7 +17,7 @@ use crate::ipc::framing::{
 };
 use crate::ipc::messages::IncomingMessage;
 use crate::plugins::registry::{DeviceMeta, PluginRegistry};
-use crate::proto::vynkor::{envelope, Envelope, PluginManifest, PluginRegister};
+use crate::proto::vynkor::{envelope, Envelope, Ping, PluginManifest, PluginRegister};
 use crate::utils::config::BridgeConfig;
 use crate::utils::errors::VynkorError;
 use crate::utils::sync::recover_poison;
@@ -27,6 +27,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, watch};
+use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::tungstenite::Error as WsError;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
@@ -90,6 +91,8 @@ pub(crate) enum BridgeError {
     Timeout,
     Unsupported(String),
     Register(String),
+    /// host closed with a reason that means our credentials are wrong
+    Rejected(String),
     Wire(VynkorError),
     Mac,
     Disconnected,
@@ -106,6 +109,7 @@ impl std::fmt::Display for BridgeError {
             BridgeError::Timeout => write!(f, "timed out"),
             BridgeError::Unsupported(e) => write!(f, "{e}"),
             BridgeError::Register(e) => write!(f, "registration rejected: {e}"),
+            BridgeError::Rejected(e) => write!(f, "host rejected the session: {e}"),
             BridgeError::Wire(e) => write!(f, "wire: {e}"),
             BridgeError::Mac => write!(f, "frame MAC verification failed"),
             BridgeError::Disconnected => write!(f, "disconnected"),
@@ -143,10 +147,14 @@ fn classify(e: &BridgeError) -> BridgeFailure {
         // refused/reset/dns failures (other kinds) all mean "nothing answering there"
         BridgeError::Io(..) | BridgeError::Connect(_) => BridgeFailure::Unreachable,
         BridgeError::Tls(_) => BridgeFailure::Tls,
-        BridgeError::Http(401 | 403) | BridgeError::Register(_) => BridgeFailure::Auth,
+        // both ends key the frame MAC off the device secret: a tag that fails
+        // either way means the secret is wrong, not that the link is flaky
+        BridgeError::Http(401 | 403)
+        | BridgeError::Register(_)
+        | BridgeError::Rejected(_)
+        | BridgeError::Mac => BridgeFailure::Auth,
         BridgeError::Http(_)
         | BridgeError::Wire(_)
-        | BridgeError::Mac
         | BridgeError::Disconnected
         | BridgeError::Shutdown => BridgeFailure::Protocol,
         BridgeError::Unsupported(_) => BridgeFailure::Unsupported,
@@ -390,9 +398,9 @@ impl Bridge {
                         )),
                         _ => None,
                     };
+                    // not Connected yet: the ack is sent before the MAC arms,
+                    // so it proves the token but not the secret (read_loop)
                     info!(plugin_id = %self.device_id, "device registered on host");
-                    self.handle
-                        .set_status(BridgeStatus::Connected { transport });
                     break key;
                 }
                 Some(envelope::Payload::Error(err)) => {
@@ -440,6 +448,10 @@ impl Bridge {
         // address it as "kernel" — rewrite here, once, on the way out
         let write_task = tokio::spawn(write_loop(ws_write, host_rx, session_key, self.keepalive()));
 
+        // provoke a MAC'd reply at once: a wrong secret then fails here,
+        // before Connected, instead of on the first real frame
+        let _ = host_tx.send(out_frame(probe_frame())).await;
+
         let session_cell: SessionKeyCell = Arc::new(Mutex::new(None));
         let result = read_loop(
             &mut ws_read,
@@ -450,6 +462,7 @@ impl Bridge {
             self.router_tx.clone(),
             session_cell,
             silence_limit,
+            Some((&self.handle, transport)),
         )
         .await;
 
@@ -490,11 +503,36 @@ async fn next_binary(
             .map_err(|_| BridgeError::Timeout)?;
         match next {
             Some(Ok(WsMessage::Binary(b))) => return Ok(b),
-            Some(Ok(WsMessage::Close(_))) | None => return Err(BridgeError::Disconnected),
+            Some(Ok(WsMessage::Close(f))) => return Err(closed(f)),
+            None => return Err(BridgeError::Disconnected),
             Some(Ok(_)) => continue,
             Some(Err(e)) => return Err(BridgeError::from_ws(e)),
         }
     }
+}
+
+/// a host close carries its reason in the code; anything but a MAC refusal
+/// reads as the host going away
+fn closed(frame: Option<CloseFrame<'_>>) -> BridgeError {
+    match frame {
+        Some(f) if u16::from(f.code) == CLOSE_MAC_INVALID => {
+            BridgeError::Rejected(f.reason.into_owned())
+        }
+        _ => BridgeError::Disconnected,
+    }
+}
+
+/// kernel Ping: every host answers it, MAC'd once the session is armed
+fn probe_frame() -> Frame {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let env = Envelope {
+        payload: Some(envelope::Payload::Ping(Ping { timestamp })),
+        ..Default::default()
+    };
+    build_frame("kernel", 0, env.encode_to_vec())
 }
 
 async fn write_loop(
@@ -556,6 +594,8 @@ async fn read_loop(
     router_tx: mpsc::Sender<IncomingMessage>,
     session_cell: SessionKeyCell,
     silence_limit: Duration,
+    // published as Connected on the first host frame that verifies
+    mut pending: Option<(&BridgeHandle, TransportKind)>,
 ) -> Result<(), BridgeError> {
     // a host that stops answering without closing tcp (sleep, wifi drop)
     // never errors the socket: bound every read instead
@@ -565,7 +605,7 @@ async fn read_loop(
     {
         let bytes = match item {
             Ok(WsMessage::Binary(b)) => b,
-            Ok(WsMessage::Close(_)) => return Err(BridgeError::Disconnected),
+            Ok(WsMessage::Close(f)) => return Err(closed(f)),
             Ok(_) => continue,
             Err(e) => return Err(BridgeError::from_ws(e)),
         };
@@ -583,6 +623,9 @@ async fn read_loop(
                 warn!(conn_id, "bridge frame MAC invalid — dropping connection");
                 return Err(BridgeError::Mac);
             }
+        }
+        if let Some((handle, transport)) = pending.take() {
+            handle.set_status(BridgeStatus::Connected { transport });
         }
         // the local router re-tags with the local plugin's key on the way
         // out — strip the host's tag here
@@ -658,6 +701,14 @@ mod tests {
 
     fn frame_target(frame: &Frame) -> String {
         target_as_str(frame).unwrap_or_default().to_string()
+    }
+
+    /// a local router that swallows frames: a dropped receiver would end the
+    /// bridge (Shutdown) on the first host frame
+    fn draining_router() -> mpsc::Sender<IncomingMessage> {
+        let (tx, mut rx) = mpsc::channel::<IncomingMessage>(64);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        tx
     }
 
     fn plain_frame(target: &str, env: &Envelope) -> Frame {
@@ -749,6 +800,7 @@ mod tests {
             handle.clone(),
         );
         let bridge_task = tokio::spawn(bridge.run());
+        let probe_handle = handle.clone();
 
         // fake host: accept, read the register, ack with a nonce, then drive
         // the two directions. Must echo the subprotocol the client requested
@@ -806,6 +858,31 @@ mod tests {
                 .unwrap();
 
             let key = derive_session_key(&host_secret, b"nonce-aaaaaaaaaa", "device-1");
+
+            // device -> host: the probe Ping, MAC'd, addressed to the kernel;
+            // nothing verified from the host yet, so not Connected
+            let msg = tokio::time::timeout(Duration::from_secs(5), ws_read.next())
+                .await
+                .expect("probe timeout")
+                .unwrap()
+                .unwrap();
+            let probe = match msg {
+                WsMessage::Binary(b) => parse_frame(&b).await.unwrap(),
+                other => panic!("expected binary probe, got {other:?}"),
+            };
+            assert_eq!(frame_target(&probe), "kernel");
+            assert!(verify_tag(
+                &key,
+                &serialize_header(&probe),
+                &probe.payload,
+                probe.mac.as_ref().expect("probe must be MAC'd")
+            ));
+            let env = Envelope::decode(probe.payload.as_ref()).unwrap();
+            assert!(matches!(env.payload, Some(envelope::Payload::Ping(_))));
+            assert!(!matches!(
+                *probe_handle.status().borrow(),
+                BridgeStatus::Connected { .. }
+            ));
 
             // host kernel -> device: an Event (device traffic)
             let event = Envelope {
@@ -874,6 +951,11 @@ mod tests {
             .unwrap();
         assert_eq!(frame_target(&msg.frame), "geo");
         assert!(msg.frame.mac.is_none(), "host MAC must be stripped");
+        // the event was the first verified host frame
+        assert!(matches!(
+            *handle.status().borrow(),
+            BridgeStatus::Connected { .. }
+        ));
         let env = Envelope::decode(msg.frame.payload.as_ref()).unwrap();
         assert!(matches!(env.payload, Some(envelope::Payload::Event(_))));
 
@@ -941,7 +1023,7 @@ mod tests {
     fn wss_bridge(port: u16, ca_pem: &str, dir: &tempfile::TempDir) -> Bridge {
         let ca = dir.path().join("host-cert.pem");
         std::fs::write(&ca, ca_pem).unwrap();
-        let (router_tx, _router_rx) = mpsc::channel::<IncomingMessage>(64);
+        let router_tx = draining_router();
         Bridge::new(
             BridgeConfig {
                 host_url: format!("https://127.0.0.1:{port}"),
@@ -1042,15 +1124,41 @@ mod tests {
                 BridgeFailure::Auth,
             ),
             (BridgeError::Tls("x".into()), BridgeFailure::Tls),
-            (BridgeError::Mac, BridgeFailure::Protocol),
+            (BridgeError::Mac, BridgeFailure::Auth),
+            (
+                BridgeError::Rejected("frame MAC invalid".into()),
+                BridgeFailure::Auth,
+            ),
+            (BridgeError::Disconnected, BridgeFailure::Protocol),
         ];
         for (err, want) in table {
             assert_eq!(classify(&err), want, "{err:?}");
         }
     }
 
-    /// accept one ws client, read its register frame and ack it (no nonce).
+    /// accept one ws client, read its register frame, ack it (no nonce) and
+    /// answer the probe — the first host frame is what makes it Connected
     async fn accept_and_ack(listener: &TcpListener) -> WebSocketStream<TcpStream> {
+        let mut ws = accept_and_ack_with(listener, Vec::new()).await;
+        ws.next().await.unwrap().unwrap(); // probe
+        let pong = Envelope {
+            payload: Some(envelope::Payload::Pong(
+                crate::proto::vynkor::Pong::default(),
+            )),
+            ..Default::default()
+        };
+        ws.send(WsMessage::Binary(frame_to_bytes(&plain_frame(
+            "client", &pong,
+        ))))
+        .await
+        .unwrap();
+        ws
+    }
+
+    async fn accept_and_ack_with(
+        listener: &TcpListener,
+        session_nonce: Vec<u8>,
+    ) -> WebSocketStream<TcpStream> {
         let (stream, _) = listener.accept().await.unwrap();
         let mut ws = tokio_tungstenite::accept_hdr_async(
             stream,
@@ -1068,6 +1176,7 @@ mod tests {
         let ack = Envelope {
             payload: Some(envelope::Payload::PluginRegisterAck(PluginRegisterAck {
                 accepted: true,
+                session_nonce,
                 ..Default::default()
             })),
             ..Default::default()
@@ -1080,8 +1189,91 @@ mod tests {
         ws
     }
 
+    fn secret_bridge(host_url: String, secret: &str, handle: BridgeHandle) -> Bridge {
+        let router_tx = draining_router();
+        Bridge::new(
+            BridgeConfig {
+                host_url,
+                token: Some("test-token".to_string()),
+                secret: Some(secret.to_string()),
+                mirror: vec!["geo".to_string()],
+                ..Default::default()
+            },
+            "device-1".to_string(),
+            Arc::new(PluginRegistry::new()),
+            router_tx,
+            handle,
+        )
+    }
+
+    #[tokio::test]
+    async fn host_mac_refusal_is_auth_and_never_connected() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = BridgeHandle::new();
+        let bridge = secret_bridge(format!("http://{addr}"), "wrong-secret", handle.clone());
+        // what the real gateway does when the client's tag fails
+        let host = tokio::spawn(async move {
+            let mut ws = accept_and_ack_with(&listener, b"nonce-aaaaaaaaaa".to_vec()).await;
+            ws.next().await.unwrap().unwrap(); // probe, tagged with the wrong key
+            ws.send(WsMessage::Close(Some(CloseFrame {
+                code: CLOSE_MAC_INVALID.into(),
+                reason: "frame MAC invalid".into(),
+            })))
+            .await
+            .unwrap();
+            ws
+        });
+        let err = tokio::time::timeout(Duration::from_secs(5), bridge.one_cycle())
+            .await
+            .expect("cycle did not end");
+        assert!(matches!(err, Err(BridgeError::Rejected(_))), "{err:?}");
+        assert_eq!(classify(&err.unwrap_err()), BridgeFailure::Auth);
+        assert!(
+            !matches!(*handle.status().borrow(), BridgeStatus::Connected { .. }),
+            "a refused secret must never read as Connected"
+        );
+        host.abort();
+    }
+
+    #[tokio::test]
+    async fn host_frame_under_another_secret_is_auth() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = BridgeHandle::new();
+        let bridge = secret_bridge(format!("http://{addr}"), "client-secret", handle.clone());
+        let host = tokio::spawn(async move {
+            let nonce = b"nonce-aaaaaaaaaa".to_vec();
+            let mut ws = accept_and_ack_with(&listener, nonce.clone()).await;
+            ws.next().await.unwrap().unwrap(); // probe
+            let key = derive_session_key(b"host-secret", &nonce, "device-1");
+            let pong = Envelope {
+                payload: Some(envelope::Payload::Pong(
+                    crate::proto::vynkor::Pong::default(),
+                )),
+                ..Default::default()
+            };
+            let mut f = plain_frame("client", &pong);
+            f.flags |= FLAG_MAC_PRESENT;
+            f.mac = Some(compute_tag(&key, &serialize_header(&f), &f.payload));
+            ws.send(WsMessage::Binary(frame_to_bytes(&f)))
+                .await
+                .unwrap();
+            ws
+        });
+        let err = tokio::time::timeout(Duration::from_secs(5), bridge.one_cycle())
+            .await
+            .expect("cycle did not end");
+        assert!(matches!(err, Err(BridgeError::Mac)), "{err:?}");
+        assert!(!matches!(
+            *handle.status().borrow(),
+            BridgeStatus::Connected { .. }
+        ));
+        host.abort();
+    }
+
     fn test_bridge(host_url: String, keepalive_secs: u64, status: BridgeHandle) -> Bridge {
-        let (router_tx, _router_rx) = mpsc::channel::<IncomingMessage>(64);
+        let router_tx = draining_router();
         Bridge::new(
             BridgeConfig {
                 host_url,
@@ -1192,7 +1384,7 @@ mod tests {
         host.abort();
     }
     fn transports_bridge(transports: Vec<TransportConfig>, handle: BridgeHandle) -> Bridge {
-        let (router_tx, _router_rx) = mpsc::channel::<IncomingMessage>(64);
+        let router_tx = draining_router();
         Bridge::new(
             BridgeConfig {
                 transports,

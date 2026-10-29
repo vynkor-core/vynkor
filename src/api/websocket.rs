@@ -1,6 +1,6 @@
 use axum::{
     extract::{
-        ws::{Message, WebSocket, WebSocketUpgrade},
+        ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade},
         State,
     },
     http::{HeaderMap, StatusCode},
@@ -26,6 +26,11 @@ use crate::utils::sync::recover_poison;
 const FRAME_HEADER_SIZE: usize = 44;
 const MAX_WS_PARSE_ERRORS: u32 = 16;
 pub const WS_CONN_ID_BASE: u64 = 1_000_000_000;
+
+/// close code for a frame whose MAC fails: the session key (device secret)
+/// does not match. Private range (4000-4999) so a bridge client can tell a
+/// wrong secret from a host that went away.
+pub const CLOSE_MAC_INVALID: u16 = 4401;
 
 pub struct WsGateway {
     pub router_tx: mpsc::Sender<IncomingMessage>,
@@ -206,6 +211,14 @@ async fn handle_socket(
                                     if !valid {
                                         warn!(conn_id, "WS: frame MAC invalid — dropping connection");
                                         counter!("ipc_frame_errors_total", "error" => "mac").increment(1);
+                                        // say why: a bare close looks like a host
+                                        // restart and the client would retry silently
+                                        let _ = socket
+                                            .send(Message::Close(Some(CloseFrame {
+                                                code: CLOSE_MAC_INVALID,
+                                                reason: "frame MAC invalid".into(),
+                                            })))
+                                            .await;
                                         break;
                                     }
                                 }
