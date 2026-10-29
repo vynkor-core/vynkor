@@ -18,8 +18,9 @@ use tokio::sync::watch;
 /// fail fast (before spawning anything) on a config the kernel cannot run:
 /// no auth without explicit opt-in, or an unusable client bridge block.
 pub fn validate_config(cfg: &Config) -> anyhow::Result<()> {
-    ensure_auth_configured(cfg)?;
-    validate_bridge_config(cfg)
+    // bridge first: same order `vyn start` always reported errors in
+    validate_bridge_config(cfg)?;
+    ensure_auth_configured(cfg)
 }
 
 pub fn ensure_auth_configured(cfg: &Config) -> anyhow::Result<()> {
