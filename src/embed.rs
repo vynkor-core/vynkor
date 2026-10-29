@@ -11,7 +11,7 @@ use crate::bridge::BridgeStatus;
 use crate::events::bus::EventBus;
 use crate::kernel::{Kernel, RunOptions};
 use crate::plugins::registry::PluginRegistry;
-use crate::utils::config::{Config, Role};
+use crate::utils::config::{Config, Role, TransportConfig};
 use std::sync::Arc;
 use tokio::sync::watch;
 
@@ -33,6 +33,10 @@ pub fn ensure_auth_configured(cfg: &Config) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn is_plaintext(url: &str) -> bool {
+    url.starts_with("ws://") || url.starts_with("http://")
+}
+
 /// A client kernel is unusable without a reachable host and a non-empty mirror
 /// list, and mirroring a plugin that is not configured would silently no-op.
 fn validate_bridge_config(cfg: &Config) -> anyhow::Result<()> {
@@ -42,23 +46,56 @@ fn validate_bridge_config(cfg: &Config) -> anyhow::Result<()> {
     let bridge = cfg.bridge.as_ref().ok_or_else(|| {
         anyhow::anyhow!("role: client requires a `bridge:` block in config or --bridge-url")
     })?;
-    let url_ok = ["ws://", "wss://", "http://", "https://"]
-        .iter()
-        .any(|p| bridge.host_url.starts_with(p));
-    if !url_ok {
-        anyhow::bail!(
-            "invalid bridge host_url '{}': expected http(s):// or ws(s)://",
-            bridge.host_url
-        );
+    let has_url = !bridge.host_url.is_empty();
+    if has_url && !bridge.transports.is_empty() {
+        anyhow::bail!("bridge: set either host_url or transports, not both");
     }
-    // a pin on a plaintext url would silently pin nothing
-    if bridge.ca_cert_path.is_some()
-        && (bridge.host_url.starts_with("ws://") || bridge.host_url.starts_with("http://"))
-    {
-        anyhow::bail!(
-            "bridge.ca_cert_path is set but host_url '{}' is plaintext: use https:// or wss://",
-            bridge.host_url
-        );
+    if !has_url && bridge.transports.is_empty() {
+        anyhow::bail!("bridge: host_url or transports is required");
+    }
+    if has_url {
+        let url_ok = ["ws://", "wss://", "http://", "https://"]
+            .iter()
+            .any(|p| bridge.host_url.starts_with(p));
+        if !url_ok {
+            anyhow::bail!(
+                "invalid bridge host_url '{}': expected http(s):// or ws(s)://",
+                bridge.host_url
+            );
+        }
+        // a pin on a plaintext url would silently pin nothing
+        if bridge.ca_cert_path.is_some() && is_plaintext(&bridge.host_url) {
+            anyhow::bail!(
+                "bridge.ca_cert_path is set but host_url '{}' is plaintext: use https:// or wss://",
+                bridge.host_url
+            );
+        }
+    }
+    for (i, t) in bridge.transports.iter().enumerate() {
+        match t {
+            TransportConfig::Direct { url, ca_cert_path } => {
+                if !["ws://", "wss://", "http://", "https://"]
+                    .iter()
+                    .any(|p| url.starts_with(p))
+                {
+                    anyhow::bail!(
+                        "invalid bridge.transports[{i}] url '{url}': expected http(s):// or ws(s)://"
+                    );
+                }
+                if ca_cert_path.is_some() && is_plaintext(url) {
+                    anyhow::bail!(
+                        "bridge.transports[{i}].ca_cert_path is set but url '{url}' is plaintext: use https:// or wss://"
+                    );
+                }
+            }
+            TransportConfig::Relay { url, .. } => {
+                if !(url.starts_with("wss://") || url.starts_with("https://")) {
+                    anyhow::bail!(
+                        "invalid bridge.transports[{i}] relay url '{url}': expected wss:// or https://"
+                    );
+                }
+            }
+        }
     }
     if bridge.mirror.is_empty() {
         anyhow::bail!(
@@ -204,6 +241,84 @@ mod tests {
         );
         cfg.bridge.as_mut().unwrap().host_url = "ws://h:8888/ws".into();
         assert!(validate_config(&cfg).is_err());
+    }
+
+    fn client_cfg(bridge: BridgeConfig) -> Config {
+        Config {
+            role: Role::Client,
+            allow_no_auth: true,
+            bridge: Some(bridge),
+            plugins: vec![crate::utils::config::PluginDef {
+                id: "geo".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    fn direct(url: &str, pin: bool) -> TransportConfig {
+        TransportConfig::Direct {
+            url: url.into(),
+            ca_cert_path: pin.then(|| "/x/c.pem".into()),
+        }
+    }
+
+    #[test]
+    fn host_url_and_transports_conflict() {
+        let cfg = client_cfg(BridgeConfig {
+            host_url: "https://h:1".into(),
+            transports: vec![direct("https://h:1", false)],
+            mirror: vec!["geo".into()],
+            ..Default::default()
+        });
+        let err = validate_config(&cfg).unwrap_err().to_string();
+        assert!(
+            err.contains("host_url") && err.contains("transports"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn empty_bridge_is_rejected() {
+        let cfg = client_cfg(BridgeConfig {
+            mirror: vec!["geo".into()],
+            ..Default::default()
+        });
+        let err = validate_config(&cfg).unwrap_err().to_string();
+        assert!(err.contains("host_url or transports is required"), "{err}");
+    }
+
+    #[test]
+    fn plaintext_direct_with_pin_names_index() {
+        let cfg = client_cfg(BridgeConfig {
+            transports: vec![direct("https://h:1", true), direct("ws://h:2/ws", true)],
+            mirror: vec!["geo".into()],
+            ..Default::default()
+        });
+        let err = validate_config(&cfg).unwrap_err().to_string();
+        assert!(
+            err.contains("bridge.transports[1]") && err.contains("plaintext"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn relay_requires_tls_url() {
+        let relay = |url: &str| {
+            client_cfg(BridgeConfig {
+                transports: vec![TransportConfig::Relay {
+                    url: url.into(),
+                    key: None,
+                }],
+                mirror: vec!["geo".into()],
+                ..Default::default()
+            })
+        };
+        let err = validate_config(&relay("ws://r/ws"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("bridge.transports[0]"), "{err}");
+        assert!(validate_config(&relay("wss://r/ws")).is_ok());
     }
 
     #[test]
