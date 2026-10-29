@@ -80,7 +80,7 @@ pub enum Role {
 /// `token` is the JWT the client presents (host gateway auth); `secret` is the
 /// host kernel's `jwt_secret` value, needed to derive the per-session frame MAC
 /// key (the token alone cannot — the nonce is derived from the shared secret).
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct BridgeConfig {
     /// Host kernel base URL (`http://`/`https://` or full `ws://`/`wss://`).
     /// A base URL gets `/ws` appended; a ws(s) URL is used verbatim.
@@ -100,6 +100,27 @@ pub struct BridgeConfig {
     /// under any name (pairing-link pinning, same as the phone app).
     #[serde(default)]
     pub ca_cert_path: Option<std::path::PathBuf>,
+    /// WS ping interval; a host silent for 3x this is declared dead. 0 is
+    /// invalid and clamped to the default.
+    #[serde(default = "default_bridge_keepalive")]
+    pub keepalive_secs: u64,
+}
+
+fn default_bridge_keepalive() -> u64 {
+    15
+}
+
+impl Default for BridgeConfig {
+    fn default() -> Self {
+        BridgeConfig {
+            host_url: String::new(),
+            token: None,
+            secret: None,
+            mirror: Vec::new(),
+            ca_cert_path: None,
+            keepalive_secs: default_bridge_keepalive(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -562,6 +583,13 @@ fn clamp_invalid_numerics(config: &mut Config) {
         warn!("watchdog_timeout_secs: 0 is invalid, clamping to default ({d})");
         config.watchdog_timeout_secs = d;
     }
+    if let Some(b) = config.bridge.as_mut() {
+        if b.keepalive_secs == 0 {
+            let d = default_bridge_keepalive();
+            warn!("bridge.keepalive_secs: 0 is invalid, clamping to default ({d})");
+            b.keepalive_secs = d;
+        }
+    }
     if config.max_ws_connections == 0 {
         let d = default_max_ws_connections();
         warn!("max_ws_connections: 0 is invalid, clamping to default ({d})");
@@ -684,6 +712,29 @@ mod tests {
 
     // Zero would silently disable the IPC channel / watchdog — load_config must
     // clamp it back to the documented defaults (N3).
+    #[test]
+    fn bridge_keepalive_defaults_to_15_and_clamps_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let body = |extra: &str| {
+            format!("role: client\nbridge:\n  host_url: http://h:1\n  mirror: [a]\n{extra}")
+        };
+        let path = write_minimal_config(&dir, &body(""));
+        assert_eq!(
+            load_config(&path).unwrap().bridge.unwrap().keepalive_secs,
+            15
+        );
+        let path = write_minimal_config(&dir, &body("  keepalive_secs: 0\n"));
+        assert_eq!(
+            load_config(&path).unwrap().bridge.unwrap().keepalive_secs,
+            15
+        );
+        let path = write_minimal_config(&dir, &body("  keepalive_secs: 4\n"));
+        assert_eq!(
+            load_config(&path).unwrap().bridge.unwrap().keepalive_secs,
+            4
+        );
+    }
+
     #[test]
     fn load_config_clamps_zero_numerics_to_defaults() {
         let dir = tempfile::tempdir().unwrap();

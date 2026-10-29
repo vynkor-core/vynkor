@@ -1,11 +1,11 @@
 use anyhow::Result;
 use clap::Parser;
-use std::collections::HashSet;
 use std::fs;
 use std::process::Command;
 use tracing::{info, warn};
 use vynkor::cli::{complete, device, devices, plugin, tls, token};
 use vynkor::cli::{Cli, Commands};
+use vynkor::embed::{self, InstanceLock};
 use vynkor::kernel;
 use vynkor::utils;
 use vynkor::utils::config::{load_config, BridgeConfig, Config, Role};
@@ -80,8 +80,7 @@ async fn run_kernel(cli: Cli) -> Result<()> {
                 bridge_secret,
                 bridge_mirror,
             )?;
-            validate_bridge_config(&cfg)?;
-            ensure_auth_configured(&cfg)?;
+            embed::validate_config(&cfg)?;
 
             if foreground {
                 // Foreground mode — including the child the daemon launcher spawns
@@ -110,7 +109,7 @@ async fn run_kernel(cli: Cli) -> Result<()> {
         Commands::Restart { config, debug } => {
             let cfg = load_config(&config)?;
             utils::logging::try_init(&cfg.log_level);
-            ensure_auth_configured(&cfg)?;
+            embed::ensure_auth_configured(&cfg)?;
             // Capture the PID before stop_kernel removes the pid file, so we can
             // confirm the actual process is gone rather than guessing with a sleep.
             let old_pid = read_pid(&cfg.pid_file).ok();
@@ -187,18 +186,6 @@ async fn run_kernel(cli: Cli) -> Result<()> {
 
 // ---- helpers ----
 
-/// Fail fast (before spawning anything) if the kernel would start without auth
-/// and the operator has not explicitly opted in to that.
-fn ensure_auth_configured(cfg: &Config) -> Result<()> {
-    if cfg.jwt_secret.is_none() && !cfg.allow_no_auth {
-        anyhow::bail!(
-            "refusing to start without authentication — set `jwt_secret` in config, \
-             or set `allow_no_auth: true` to run without auth (insecure)"
-        );
-    }
-    Ok(())
-}
-
 /// Merge D-06 CLI overrides into the loaded config. Bridge flags implicitly
 /// select the client role unless `--role` was given explicitly.
 fn apply_role_overrides(
@@ -237,50 +224,6 @@ fn apply_role_overrides(
     }
     if !bridge_mirror.is_empty() {
         bridge.mirror = bridge_mirror;
-    }
-    Ok(())
-}
-
-/// A client kernel is unusable without a reachable host and a non-empty mirror
-/// list, and mirroring a plugin that is not configured would silently no-op.
-fn validate_bridge_config(cfg: &Config) -> Result<()> {
-    if cfg.role != Role::Client {
-        return Ok(());
-    }
-    let bridge = cfg.bridge.as_ref().ok_or_else(|| {
-        anyhow::anyhow!("role: client requires a `bridge:` block in config or --bridge-url")
-    })?;
-    let url_ok = ["ws://", "wss://", "http://", "https://"]
-        .iter()
-        .any(|p| bridge.host_url.starts_with(p));
-    if !url_ok {
-        anyhow::bail!(
-            "invalid bridge host_url '{}': expected http(s):// or ws(s)://",
-            bridge.host_url
-        );
-    }
-    // a pin on a plaintext url would silently pin nothing
-    if bridge.ca_cert_path.is_some()
-        && (bridge.host_url.starts_with("ws://") || bridge.host_url.starts_with("http://"))
-    {
-        anyhow::bail!(
-            "bridge.ca_cert_path is set but host_url '{}' is plaintext: use https:// or wss://",
-            bridge.host_url
-        );
-    }
-    if bridge.mirror.is_empty() {
-        anyhow::bail!(
-            "role: client requires at least one mirrored plugin (`bridge.mirror` or --bridge-mirror)"
-        );
-    }
-    let configured: HashSet<&str> = cfg.plugins.iter().map(|p| p.id.as_str()).collect();
-    for cap in &bridge.mirror {
-        if !configured.contains(cap.as_str()) {
-            anyhow::bail!(
-                "bridge mirror '{cap}' is not a configured plugin (plugins: [{}])",
-                configured.iter().cloned().collect::<Vec<_>>().join(", ")
-            );
-        }
     }
     Ok(())
 }
@@ -500,25 +443,8 @@ fn nix_err_to_io(e: nix::errno::Errno) -> std::io::Error {
 }
 
 async fn run_foreground(cfg: Config) -> Result<()> {
-    use nix::fcntl::{Flock, FlockArg};
-
-    // O_NOFOLLOW: refuse to write through a symlink planted at the pid path
-    // by another local user (AUDIT M-09 — matches the socket/pid-file hardening
-    // already applied to socket_path, BUG-006).
-    use std::os::unix::fs::OpenOptionsExt;
-    let pid_file_handle = fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .custom_flags(nix::libc::O_NOFOLLOW)
-        .open(&cfg.pid_file)?;
-
-    let _lock = Flock::lock(pid_file_handle, FlockArg::LockExclusiveNonblock).map_err(|_| {
-        anyhow::anyhow!("kernel already running — another instance holds the PID lock")
-    })?;
-
+    let _lock = InstanceLock::acquire(&cfg.pid_file)?;
     let pid = std::process::id() as i32;
-    fs::write(&cfg.pid_file, pid.to_string())?;
     // N4: the daemon parent waits on this line before publishing the pid file,
     // so it must come only after the flock + pid write above are done. Unset in
     // plain foreground runs (vyn start --foreground in a shell) — no-op there.
@@ -532,9 +458,7 @@ async fn run_foreground(cfg: Config) -> Result<()> {
         }
     }
     info!("vynkor starting in foreground (port {})", cfg.port);
-    let pid_file = cfg.pid_file.clone();
     kernel::Kernel::run(cfg).await?;
-    let _ = fs::remove_file(&pid_file);
     info!("kernel stopped");
     Ok(())
 }
@@ -562,27 +486,6 @@ mod tests {
     use super::*;
     use std::io::Write as _;
     use std::time::{Duration, Instant};
-
-    #[test]
-    fn ca_cert_path_with_plaintext_host_url_is_rejected() {
-        let mut cfg = Config {
-            role: Role::Client,
-            bridge: Some(BridgeConfig {
-                host_url: "http://h:8888".into(),
-                mirror: vec!["geo".into()],
-                ca_cert_path: Some("/x/host-cert.pem".into()),
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-        let err = validate_bridge_config(&cfg).unwrap_err().to_string();
-        assert!(
-            err.contains("ca_cert_path") && err.contains("plaintext"),
-            "{err}"
-        );
-        cfg.bridge.as_mut().unwrap().host_url = "ws://h:8888/ws".into();
-        assert!(validate_bridge_config(&cfg).is_err());
-    }
 
     // K-01: a configured `default_grace_seconds: 15` must make the CLI wait
     // past the old hardcoded 10s window before escalating to SIGKILL.

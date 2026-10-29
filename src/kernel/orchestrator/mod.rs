@@ -7,7 +7,7 @@ use tracing::{error, info, warn};
 
 use crate::api::server::ApiServer;
 use crate::auth::jwt::{JwtValidator, MIN_JWT_SECRET_BYTES};
-use crate::bridge::{Bridge, BridgeHandle};
+use crate::bridge::{Bridge, BridgeHandle, BridgeStatus};
 use crate::events::bus::{run_retry_worker, EventBus};
 use crate::events::store::EventStore;
 use crate::ipc::protocol::MessageRouter;
@@ -37,6 +37,13 @@ pub(super) struct ShutdownHandles {
     pub(super) background: Vec<tokio::task::JoinHandle<()>>,
 }
 
+/// embedder hooks; `Default` = what the cli does
+#[derive(Default)]
+pub struct RunOptions {
+    /// receives the bridge connection status (`Disabled` when there is no bridge)
+    pub bridge_status: Option<tokio::sync::watch::Sender<BridgeStatus>>,
+}
+
 pub struct Kernel;
 
 impl Kernel {
@@ -54,6 +61,19 @@ impl Kernel {
         registry: Arc<PluginRegistry>,
         event_bus: Arc<EventBus>,
         shutdown: F,
+    ) -> anyhow::Result<()>
+    where
+        F: Future<Output = ()>,
+    {
+        Self::run_with_options(config, registry, event_bus, shutdown, RunOptions::default()).await
+    }
+
+    pub async fn run_with_options<F>(
+        config: Config,
+        registry: Arc<PluginRegistry>,
+        event_bus: Arc<EventBus>,
+        shutdown: F,
+        opts: RunOptions,
     ) -> anyhow::Result<()>
     where
         F: Future<Output = ()>,
@@ -178,9 +198,13 @@ impl Kernel {
         // and hand the router the relay handle (frames whose target is not in
         // the local registry fall through to the host).
         let mut background_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+        let mut bridge_status = opts.bridge_status;
         let bridge_handle = if config.role == Role::Client {
             if let Some(bridge_cfg) = &config.bridge {
-                let handle = BridgeHandle::new();
+                let handle = match bridge_status.take() {
+                    Some(tx) => BridgeHandle::with_status(tx),
+                    None => BridgeHandle::new(),
+                };
                 let bridge = Bridge::new(
                     bridge_cfg.clone(),
                     resolve_device_id(&config),
@@ -197,6 +221,10 @@ impl Kernel {
         } else {
             None
         };
+        // no bridge started: it never will, tell the embedder so it can stop waiting
+        if let Some(tx) = bridge_status {
+            tx.send_replace(BridgeStatus::Disabled);
+        }
         // lazy plugins: the router queues first calls here; the LazyStarter
         // (spawned once the plugin manager exists) wakes the plugin
         let (lazy_tx, lazy_rx) = mpsc::channel(64);
