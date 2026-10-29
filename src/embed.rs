@@ -97,6 +97,21 @@ fn validate_bridge_config(cfg: &Config) -> anyhow::Result<()> {
             }
         }
     }
+    // fallback must never downgrade: a failed (or attacker-broken) tls attempt
+    // followed by a plaintext one would send the jwt in the clear
+    if bridge.transports.len() > 1 {
+        for (i, t) in bridge.transports.iter().enumerate() {
+            let url = match t {
+                TransportConfig::Direct { url, .. } | TransportConfig::Relay { url, .. } => url,
+            };
+            if is_plaintext(url) {
+                anyhow::bail!(
+                    "bridge.transports: mixing plaintext and TLS transports is not allowed \
+                     (plaintext would leak the token on fallback): transports[{i}] is '{url}'"
+                );
+            }
+        }
+    }
     if bridge.mirror.is_empty() {
         anyhow::bail!(
             "role: client requires at least one mirrored plugin (`bridge.mirror` or --bridge-mirror)"
@@ -300,6 +315,43 @@ mod tests {
             err.contains("bridge.transports[1]") && err.contains("plaintext"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn mixed_plaintext_and_tls_transports_rejected() {
+        let cfg = client_cfg(BridgeConfig {
+            transports: vec![direct("https://h:1", false), direct("http://h:2", false)],
+            mirror: vec!["geo".into()],
+            ..Default::default()
+        });
+        let err = validate_config(&cfg).unwrap_err().to_string();
+        assert!(
+            err.contains("mixing plaintext and TLS") && err.contains("transports[1]"),
+            "{err}"
+        );
+        // all-tls list is fine
+        let ok = client_cfg(BridgeConfig {
+            transports: vec![direct("https://h:1", false), direct("wss://h:2/ws", true)],
+            mirror: vec!["geo".into()],
+            ..Default::default()
+        });
+        assert!(validate_config(&ok).is_ok());
+    }
+
+    #[test]
+    fn single_plaintext_host_url_still_allowed() {
+        let cfg = client_cfg(BridgeConfig {
+            host_url: "http://h:1".into(),
+            mirror: vec!["geo".into()],
+            ..Default::default()
+        });
+        assert!(validate_config(&cfg).is_ok());
+        let one = client_cfg(BridgeConfig {
+            transports: vec![direct("ws://h:1/ws", false)],
+            mirror: vec!["geo".into()],
+            ..Default::default()
+        });
+        assert!(validate_config(&one).is_ok());
     }
 
     #[test]

@@ -153,6 +153,11 @@ same URL and pin rules as `host_url` (errors name `bridge.transports[N]`); a
 `relay` url must be `wss://` or `https://`. When every transport fails the
 status carries the last failure and the bridge retries with backoff.
 
+With more than one transport, every entry must be TLS (`wss://`/`https://`):
+a plaintext entry in a list is a boot error, because falling back from a failed
+TLS attempt to plaintext would send the token in the clear. A single plaintext
+transport (the old `host_url: http://...`) is still allowed.
+
 ## Why not `tls: false` on its own
 
 `tls: false` without a TLS-terminating proxy sends JWTs, the pairing
