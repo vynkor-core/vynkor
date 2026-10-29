@@ -248,6 +248,15 @@ impl Clone for Bridge {
 }
 
 impl Bridge {
+    /// ping interval; 0 would spin the write loop (load_config clamps too,
+    /// this covers configs built in code)
+    fn keepalive(&self) -> Duration {
+        Duration::from_secs(match self.config.keepalive_secs {
+            0 => 15,
+            n => n,
+        })
+    }
+
     pub fn new(
         config: BridgeConfig,
         device_id: String,
@@ -339,6 +348,8 @@ impl Bridge {
             .await
             .map_err(|_| BridgeError::Timeout)??;
         let (mut ws_write, mut ws_read) = ws.split();
+        // any inbound message (pong included) resets this; see read_loop
+        let silence_limit = self.keepalive() * 3;
 
         // register the device itself, unauthenticated at the frame level (MAC
         // arms only after the ack) — mirrors the SDK register_full flow. One
@@ -373,7 +384,7 @@ impl Bridge {
             .map_err(BridgeError::from_ws)?;
 
         let session_key: Option<[u8; 32]> = loop {
-            let bytes = next_binary(&mut ws_read).await?;
+            let bytes = next_binary(&mut ws_read, silence_limit).await?;
             let frame = parse_frame(&bytes).await.map_err(BridgeError::Wire)?;
             let env = Envelope::decode(frame.payload.as_ref()).map_err(|_| {
                 BridgeError::Wire(VynkorError::Internal("decode register ack".into()))
@@ -440,7 +451,7 @@ impl Bridge {
         // host-bound frames: the local kernel addresses its peers as "client"
         // (build_outbound), but the host only accepts SDK-style frames that
         // address it as "kernel" — rewrite here, once, on the way out
-        let write_task = tokio::spawn(write_loop(ws_write, host_rx, session_key));
+        let write_task = tokio::spawn(write_loop(ws_write, host_rx, session_key, self.keepalive()));
 
         let session_cell: SessionKeyCell = Arc::new(Mutex::new(None));
         let result = read_loop(
@@ -451,6 +462,7 @@ impl Bridge {
             host_tx.clone(),
             self.router_tx.clone(),
             session_cell,
+            silence_limit,
         )
         .await;
 
@@ -483,9 +495,13 @@ fn resolve_ws_url(host_url: &str) -> Result<String, BridgeError> {
 
 async fn next_binary(
     ws_read: &mut futures_util::stream::SplitStream<WsStream>,
+    silence_limit: Duration,
 ) -> Result<Vec<u8>, BridgeError> {
     loop {
-        match ws_read.next().await {
+        let next = tokio::time::timeout(silence_limit, ws_read.next())
+            .await
+            .map_err(|_| BridgeError::Timeout)?;
+        match next {
             Some(Ok(WsMessage::Binary(b))) => return Ok(b),
             Some(Ok(WsMessage::Close(_))) | None => return Err(BridgeError::Disconnected),
             Some(Ok(_)) => continue,
@@ -498,8 +514,26 @@ async fn write_loop(
     mut ws_write: futures_util::stream::SplitSink<WsStream, WsMessage>,
     mut rx: mpsc::Receiver<Outbound>,
     key: Option<[u8; 32]>,
+    keepalive: Duration,
 ) {
-    while let Some(item) = rx.recv().await {
+    // ping only when idle: any outbound frame already proves liveness to the
+    // host, and the host's pong (or any frame) feeds read_loop's deadline
+    let idle = tokio::time::sleep(keepalive);
+    tokio::pin!(idle);
+    loop {
+        let item = tokio::select! {
+            item = rx.recv() => match item {
+                Some(item) => item,
+                None => break,
+            },
+            _ = &mut idle => {
+                if ws_write.send(WsMessage::Ping(Vec::new())).await.is_err() {
+                    break;
+                }
+                idle.as_mut().reset(tokio::time::Instant::now() + keepalive);
+                continue;
+            }
+        };
         let mut frame = match item {
             Outbound::Frame(f) => *f,
             // the local router never arms bridge conns (registration bypasses
@@ -521,6 +555,7 @@ async fn write_loop(
         {
             break;
         }
+        idle.as_mut().reset(tokio::time::Instant::now() + keepalive);
     }
 }
 
@@ -533,8 +568,14 @@ async fn read_loop(
     host_tx: mpsc::Sender<Outbound>,
     router_tx: mpsc::Sender<IncomingMessage>,
     session_cell: SessionKeyCell,
+    silence_limit: Duration,
 ) -> Result<(), BridgeError> {
-    while let Some(item) = ws_read.next().await {
+    // a host that stops answering without closing tcp (sleep, wifi drop)
+    // never errors the socket: bound every read instead
+    while let Some(item) = tokio::time::timeout(silence_limit, ws_read.next())
+        .await
+        .map_err(|_| BridgeError::Timeout)?
+    {
         let bytes = match item {
             Ok(WsMessage::Binary(b)) => b,
             Ok(WsMessage::Close(_)) => return Err(BridgeError::Disconnected),
@@ -1129,5 +1170,39 @@ mod tests {
             other => panic!("{other:?}"),
         }
         task.abort();
+    }
+    #[tokio::test]
+    async fn silent_host_times_out() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, mut rx) = tokio::sync::watch::channel(BridgeStatus::Disabled);
+        let bridge = test_bridge(format!("http://{addr}"), 1, BridgeHandle::with_status(tx));
+        let task = tokio::spawn(bridge.run());
+        // host acks, then never polls its socket again: no pong, tcp stays open
+        let host = tokio::spawn(async move {
+            let ws = accept_and_ack(&listener).await;
+            std::future::pending::<()>().await;
+            drop(ws);
+        });
+        let st = tokio::time::timeout(
+            Duration::from_secs(5),
+            rx.wait_for(|s| matches!(s, BridgeStatus::Failed { .. })),
+        )
+        .await
+        .expect("silent host was not detected within 5s")
+        .unwrap()
+        .clone();
+        assert!(
+            matches!(
+                st,
+                BridgeStatus::Failed {
+                    kind: BridgeFailure::Timeout,
+                    ..
+                }
+            ),
+            "{st:?}"
+        );
+        task.abort();
+        host.abort();
     }
 }
