@@ -52,7 +52,7 @@ serde_yaml = "0.9"
 
 jsonwebtoken = "9"
 
-rand = "0.8"
+rand = "0.10"
 
 # extra features: sandbox shim (plugins/shim.rs) — pdeathsig (prctl module,
 # gated by "process"), proc mount, readiness poll, socketpair
