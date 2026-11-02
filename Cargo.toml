@@ -50,7 +50,7 @@ opentelemetry-otlp   = { version = "0.33", features = ["grpc-tonic"], optional =
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
 
-jsonwebtoken = "9"
+jsonwebtoken = "11"
 
 rand = "0.8"
 
