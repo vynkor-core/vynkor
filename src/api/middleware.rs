@@ -103,25 +103,20 @@ pub async fn require_grant(
     request: Request<Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    match request.extensions().get::<Caller>() {
-        None => {}
-        Some(Caller::Device { grants, .. }) => {
-            if !grants.contains(&grant) {
-                return Err(StatusCode::FORBIDDEN);
-            }
+    let allowed = match request.extensions().get::<Caller>() {
+        None => true,
+        Some(Caller::Device { grants, .. }) => grants.contains(&grant),
+        Some(Caller::Other) if other_needs_admin => {
+            let required = PermissionType::PermissionKernelAdmin.as_str_name();
+            request
+                .extensions()
+                .get::<VerifiedPermissions>()
+                .is_some_and(|VerifiedPermissions(p)| p.iter().any(|x| x == required))
         }
-        Some(Caller::Other) => {
-            if other_needs_admin {
-                let required = PermissionType::PermissionKernelAdmin.as_str_name();
-                let ok = request
-                    .extensions()
-                    .get::<VerifiedPermissions>()
-                    .is_some_and(|VerifiedPermissions(p)| p.iter().any(|x| x == required));
-                if !ok {
-                    return Err(StatusCode::FORBIDDEN);
-                }
-            }
-        }
+        Some(Caller::Other) => true,
+    };
+    if !allowed {
+        return Err(StatusCode::FORBIDDEN);
     }
     Ok(next.run(request).await)
 }
