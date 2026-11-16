@@ -95,13 +95,13 @@ impl DeviceStore {
     }
 
     fn seal(&self, secret_hex: &str) -> Result<Vec<u8>, VynkorError> {
-        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&self.key));
+        let cipher = Aes256Gcm::new(&Key::<Aes256Gcm>::from(self.key));
         let mut nonce_bytes = [0u8; NONCE_LEN];
         use rand::RngCore;
         rand::thread_rng().fill_bytes(&mut nonce_bytes);
         let ct = cipher
             .encrypt(
-                Nonce::from_slice(&nonce_bytes),
+                &Nonce::from(nonce_bytes),
                 Payload {
                     msg: secret_hex.as_bytes(),
                     aad: SECRET_AAD,
@@ -119,10 +119,12 @@ impl DeviceStore {
             return Err(VynkorError::Auth("corrupt device store entry".into()));
         }
         let (nonce_bytes, ct) = enc.split_at(NONCE_LEN);
-        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&self.key));
+        let nonce = Nonce::try_from(nonce_bytes)
+            .map_err(|_| VynkorError::Auth("corrupt device store entry".into()))?;
+        let cipher = Aes256Gcm::new(&Key::<Aes256Gcm>::from(self.key));
         let pt = cipher
             .decrypt(
-                Nonce::from_slice(nonce_bytes),
+                &nonce,
                 Payload {
                     msg: ct,
                     aad: SECRET_AAD,
@@ -309,6 +311,22 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = DeviceStore::new(dir.path(), MASTER);
         (dir, store)
+    }
+
+    /// Rows written by any earlier build must still decrypt: a vector computed
+    /// independently (Python `cryptography`, HKDF-SHA256 + AES-256-GCM).
+    #[test]
+    fn unseal_known_answer_vector() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DeviceStore::new(dir.path(), "kat-master-secret");
+        let hex = "000102030405060708090a0b0cfda49a1ae5a6b459b55805391d99588344b6a48d4276a851cc88c84639c54f";
+        let enc: Vec<u8> = (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect();
+        assert_eq!(store.unseal(&enc).unwrap(), "00ff11ee22dd33cc");
+        let resealed = store.seal("00ff11ee22dd33cc").unwrap();
+        assert_eq!(store.unseal(&resealed).unwrap(), "00ff11ee22dd33cc");
     }
 
     #[test]
