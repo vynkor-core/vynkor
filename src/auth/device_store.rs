@@ -257,6 +257,20 @@ impl DeviceStore {
         self.read_all()
     }
 
+    /// Every row whose secret still decrypts, plus how many do not (rotated
+    /// `jwt_secret`, tampering). Unlike `list`, one bad row does not hide the
+    /// rest; for a screen that must show what it can.
+    pub fn list_readable(&self) -> Result<(Vec<DeviceRecord>, usize), VynkorError> {
+        let rows = self.read_rows()?;
+        let total = rows.len();
+        let ok: Vec<DeviceRecord> = rows
+            .into_iter()
+            .filter(|r| self.unseal(&r.secret_enc).is_ok())
+            .collect();
+        let bad = total - ok.len();
+        Ok((ok, bad))
+    }
+
     pub fn set_revoked(&self, device_id: &str, revoked: bool) -> Result<bool, VynkorError> {
         let _guard = self.lock_writes();
         let mut rows = self.read_all()?;
@@ -387,6 +401,33 @@ mod tests {
         assert_eq!(store.unseal(&enc).unwrap(), "00ff11ee22dd33cc");
         let resealed = store.seal("00ff11ee22dd33cc").unwrap();
         assert_eq!(store.unseal(&resealed).unwrap(), "00ff11ee22dd33cc");
+    }
+
+    #[test]
+    fn list_readable_skips_rows_sealed_with_another_secret() {
+        let dir = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let store = DeviceStore::new(dir.path(), MASTER);
+        store.issue("dev-new", "new", 3600, None).unwrap();
+        DeviceStore::new(other.path(), "other-master-secret-other-master-secret")
+            .issue("dev-old", "old", 3600, None)
+            .unwrap();
+        // splice the foreign row into the file by hand
+        let read = |d: &Path| -> Vec<serde_json::Value> {
+            serde_json::from_str(&fs::read_to_string(d.join(STORE_FILE)).unwrap()).unwrap()
+        };
+        let mut rows = read(dir.path());
+        rows.extend(read(other.path()));
+        fs::write(
+            dir.path().join(STORE_FILE),
+            serde_json::to_string(&rows).unwrap(),
+        )
+        .unwrap();
+        assert!(store.list().is_err());
+        let (rows, bad) = store.list_readable().unwrap();
+        assert_eq!(bad, 1);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].device_id, "dev-new");
     }
 
     #[test]
