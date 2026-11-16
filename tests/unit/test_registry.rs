@@ -63,6 +63,7 @@ fn register_rejects_invalid_plugin_ids() {
         "has space",                   // disallowed char
         "tab\tthing",                  // control char
         &long,                         // exceeds 32-byte target field
+        "laptop.daemon",               // '.' reserved for <device>.<name> (D-06)
     ];
 
     for id in bad {
@@ -82,7 +83,7 @@ fn register_rejects_invalid_plugin_ids() {
 
     // conn_id 1 was never consumed (all rejected pre-insert); a valid id registers
     reg.register(
-        "ok.plugin-1_v2".to_string(),
+        "ok-plugin-1_v2".to_string(),
         1,
         dummy_manifest(),
         dummy_write_tx(),

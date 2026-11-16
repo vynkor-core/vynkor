@@ -1,5 +1,5 @@
 use crate::plugins::registry::PendingAction;
-use crate::plugins::registry::PluginRegistry;
+use crate::plugins::registry::{ActionLookup, PluginRegistry};
 use crate::proto::vynkor::ActionStreamAbort;
 use crate::proto::vynkor::{envelope, Envelope};
 use crate::proto::vynkor::{ActionStatus, DeviceState};
@@ -238,6 +238,23 @@ pub(crate) fn offline_device_reason(registry: &PluginRegistry, action: &str) -> 
     }
 }
 
+/// honest reason for an ACTION_NOT_FOUND caused by two or more providers
+/// declaring the same action — otherwise the caller sees "action not found"
+/// for an action that is very much installed. Ids sorted so the text does
+/// not depend on registration order
+pub(crate) fn ambiguous_action_reason(registry: &PluginRegistry, action: &str) -> Option<String> {
+    match registry.find_action_provider(action) {
+        ActionLookup::Ambiguous(mut providers) => {
+            providers.sort();
+            Some(format!(
+                "action {action} is ambiguous: declared by {}",
+                providers.join(", ")
+            ))
+        }
+        _ => None,
+    }
+}
+
 /// CD-07: fail every action still waiting on `provider_id` now that it's
 /// gone, instead of leaving requesters to the timeout sweep. Unaccepted
 /// requests get their one expected `ActionResponse`; accepted streaming
@@ -362,9 +379,96 @@ pub(crate) async fn notify_forced_termination(
     }
 }
 
+/// D-06: identity of an ActionRequest arriving over a device connection.
+/// The device names the local plugin behind the call in caller_plugin_id;
+/// the kernel scopes it under the authenticated device id, so a device can
+/// only ever claim its own plugins — `laptop` can say `daemon`, never
+/// `phone.daemon` or a host plugin.
+pub(crate) struct DeviceCaller {
+    /// what providers see as caller_plugin_id: `<device>.<plugin>`, or the
+    /// bare device id when it called as itself
+    pub(crate) scoped: String,
+    plugin: Option<String>,
+}
+
+impl DeviceCaller {
+    pub(crate) fn new(device_id: &str, claimed: &str) -> Self {
+        // a garbage claim (dots, uppercase, oversized) or the device's own
+        // id downgrades to an unnamed call instead of failing it
+        if is_plugin_slug(claimed) && claimed != device_id {
+            DeviceCaller {
+                scoped: format!("{device_id}.{claimed}"),
+                plugin: Some(claimed.to_string()),
+            }
+        } else {
+            DeviceCaller {
+                scoped: device_id.to_string(),
+                plugin: None,
+            }
+        }
+    }
+
+    /// `device_callers` policy: listed devices admit the named plugins,
+    /// `"*"` admits everything incl. unnamed calls, unlisted devices nothing
+    pub(crate) fn allowed_by(
+        &self,
+        device_id: &str,
+        rules: &std::collections::HashMap<String, Vec<String>>,
+    ) -> bool {
+        rules.get(device_id).is_some_and(|names| {
+            names
+                .iter()
+                .any(|n| n == "*" || self.plugin.as_deref() == Some(n.as_str()))
+        })
+    }
+}
+
+fn is_plugin_slug(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 64
+        && s.bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn device_caller_scopes_claims_under_the_device() {
+        assert_eq!(
+            DeviceCaller::new("laptop", "daemon").scoped,
+            "laptop.daemon"
+        );
+        // no claim, the device's own id, or a claim trying to escape the
+        // prefix all collapse to the bare device
+        for claim in [
+            "",
+            "laptop",
+            "phone.daemon",
+            "Daemon",
+            "../x",
+            &"a".repeat(65),
+        ] {
+            let c = DeviceCaller::new("laptop", claim);
+            assert_eq!(c.scoped, "laptop", "claim {claim:?}");
+        }
+    }
+
+    #[test]
+    fn device_caller_policy_is_default_deny() {
+        let rules: std::collections::HashMap<String, Vec<String>> = [
+            ("laptop".to_string(), vec!["daemon".to_string()]),
+            ("phone".to_string(), vec!["*".to_string()]),
+        ]
+        .into();
+        assert!(DeviceCaller::new("laptop", "daemon").allowed_by("laptop", &rules));
+        assert!(!DeviceCaller::new("laptop", "clipboard").allowed_by("laptop", &rules));
+        assert!(!DeviceCaller::new("laptop", "").allowed_by("laptop", &rules));
+        assert!(DeviceCaller::new("phone", "").allowed_by("phone", &rules));
+        assert!(DeviceCaller::new("phone", "anything").allowed_by("phone", &rules));
+        assert!(!DeviceCaller::new("tv", "daemon").allowed_by("tv", &rules));
+    }
 
     #[test]
     fn kernel_protocol_range_constants_parse() {

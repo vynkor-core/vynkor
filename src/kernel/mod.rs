@@ -1,4 +1,4 @@
 pub mod commands;
 pub mod orchestrator;
 
-pub use orchestrator::Kernel;
+pub use orchestrator::{Kernel, RunOptions};

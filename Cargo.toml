@@ -42,10 +42,10 @@ tower-http = { version = "0.7.0", features = ["timeout"] }
 
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-tracing-opentelemetry = { version = "0.33", optional = true }
-opentelemetry        = { version = "0.32", features = ["trace"], optional = true }
-opentelemetry_sdk    = { version = "0.32", features = ["rt-tokio"], optional = true }
-opentelemetry-otlp   = { version = "0.32", features = ["grpc-tonic"], optional = true }
+tracing-opentelemetry = { version = "0.34", optional = true }
+opentelemetry        = { version = "0.33", features = ["trace"], optional = true }
+opentelemetry_sdk    = { version = "0.33", features = ["rt-tokio"], optional = true }
+opentelemetry-otlp   = { version = "0.33", features = ["grpc-tonic"], optional = true }
 
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
@@ -79,24 +79,24 @@ serde_json = "1"
 prost = "0.13"
 
 crc32fast = "1"
-zstd = "0.13"
+zstd = "0.14"
 dashmap = "6"
 governor = "0.8"
 
-metrics = "0.23"
-metrics-exporter-prometheus = "0.15"
+metrics = "0.24"
+metrics-exporter-prometheus = "0.18"
 
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 
 # D-06: bridge WS client (role: client) — the kernel connects outward to the
 # host gateway like any SDK plugin
-tokio-tungstenite = "0.24"
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 
 # D-07: self-signed cert generation when TLS is on by default and the operator
 # provided no tls_cert_path/tls_key_path
 rustls = { version = "0.23", features = ["aws_lc_rs"] }
-rcgen = "0.13"
+rcgen = "0.14"
 
 # D-14/K-05: `vyn-pair` (src/bin/vyn-pair.rs) renders the pairing QR (terminal
 # UTF-8 / SVG) — not used by the `vyn` lib/bin, see the vyn-pair [[bin]] above
@@ -106,7 +106,7 @@ base64 = "0.22"
 
 # E-01: device credential store — AES-256-GCM at rest under a key derived from
 # jwt_secret (HKDF); hkdf/sha2 declared directly, not via vynkor-wire
-aes-gcm = "0.10"
+aes-gcm = "0.11"
 hkdf = "0.12"
 sha2 = "0.10"
 # E-01: deflate the pair payload so the QR stays scannable by the in-app
@@ -124,5 +124,6 @@ vynkor-sdk = "0.0.4"
 tower = "0.5"
 mockito = "1"
 tempfile = "3"
+tokio-rustls = "0.26"
 tracing-test = "0.2"
 temp-env = "0.3.6"

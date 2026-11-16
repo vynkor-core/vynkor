@@ -83,9 +83,14 @@ registry, review abuse controls, publish pipeline. Full list:
 - [x] **vynkor**: revocation reaches live sessions — an open device WS
   re-checks its row every `ws_device_recheck_secs` and closes on
   revoke/remove/expiry (#107). The ed25519 half of D-18 stays open.
-- [ ] **vynkor**: duplicate action names across plugins — `stt`, `tts` and
-  `speech` declare the same actions; registry behavior is unverified. Decide
-  (reject at registration vs. last-wins), add a test; mark `stt`/`tts`
+- [x] **vynkor**: duplicate action names across plugins — neither reject nor
+  last-wins: the registry already moved colliding actions to
+  `ambiguous_actions` and the router refused them (tested), but the caller
+  only saw "action not found". Now the response `error` names the providers
+  (`action X is ambiguous: declared by a, b`, status still
+  `ACTION_NOT_FOUND`, no wire change) and the registry warns at registration.
+- [ ] **vynkor-plugins**: `stt`, `tts` and `speech` declare the same actions —
+  installing two of them makes those actions uncallable. Mark `stt`/`tts`
   deprecated in the registry.
 - [ ] **vynkor-plugins**: `speech` not verified under `sandbox: true`;
   `email` runs `sandbox: false`.
@@ -170,6 +175,9 @@ action name (`chat_completion`, stt/tts, quotas) lives in `vynkor-plugins`.
       7e0a4a1).
 - [x] CD-08 — TLS docs + fingerprint (**kernel**, 30dc367): `docs/TLS.md`,
       `vyn tls status`; explicit `--host wss://` survives `tls: false`.
+- [x] Lazy plugins (**kernel**) — 2026-10-28: `lazy: true` plugins start on the
+      first call, are stopped after `idle_stop_secs` idle (30 s sweep), and show
+      as `dormant` in `list_plugins` / `get_manifest`.
 - [ ] CD-09 — per-caller `chat_completion` quota (**vynkor-plugins**;
       kernel: none — existing generic `action_caller_*` limits stay).
 

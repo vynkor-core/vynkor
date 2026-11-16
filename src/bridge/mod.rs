@@ -5,7 +5,10 @@
 //! bridge passes bytes; the local router resolves targets. See
 //! docs/REMOTE_DEVICES_ROADMAP.md (D-06) and docs/DUMB_CORE_AUDIT.md (F3).
 
-use crate::api::websocket::frame_to_bytes;
+mod tls;
+mod transport;
+
+use crate::api::websocket::{frame_to_bytes, CLOSE_MAC_INVALID};
 use crate::auth::frame_mac::{compute_tag, derive_session_key, verify_tag};
 use crate::ipc::connection::{out_frame, Outbound, SessionKeyCell};
 use crate::ipc::framing::{
@@ -14,34 +17,82 @@ use crate::ipc::framing::{
 };
 use crate::ipc::messages::IncomingMessage;
 use crate::plugins::registry::{DeviceMeta, PluginRegistry};
-use crate::proto::vynkor::{envelope, Envelope, PluginManifest, PluginRegister};
+use crate::proto::vynkor::{envelope, Envelope, Ping, PluginManifest, PluginRegister};
 use crate::utils::config::BridgeConfig;
 use crate::utils::errors::VynkorError;
 use crate::utils::sync::recover_poison;
-use axum::http::HeaderValue;
 use futures_util::{SinkExt, StreamExt};
 use prost::Message;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::net::TcpStream;
-use tokio::sync::mpsc;
-use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio::sync::{mpsc, watch};
+use tokio_tungstenite::tungstenite::protocol::CloseFrame;
+use tokio_tungstenite::tungstenite::Error as WsError;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
-use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use tracing::{info, warn};
 
-type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
+pub(crate) type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 /// conn_ids for bridge connections: above the WS gateway's base so the two
-/// id spaces never collide in the registry's by_conn_id map.
-const BRIDGE_CONN_ID_BASE: u64 = 2_000_000_000;
+/// id spaces never collide in the registry's by_conn_id map. The router
+/// looks the host entry up by this id to relay unknown actions upstream.
+pub(crate) const BRIDGE_CONN_ID_BASE: u64 = 2_000_000_000;
 
 const BRIDGE_MAX_BACKOFF: Duration = Duration::from_secs(30);
 
+/// tcp connect + ws/tls handshake budget; a black-holed host would otherwise
+/// hang for the os connect timeout (minutes)
+pub(crate) const BRIDGE_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransportKind {
+    Direct,
+    Relay,
+}
+
+/// network-level failure class only: the kernel knows nothing about vpns,
+/// the embedder maps these to user-facing advice
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BridgeFailure {
+    Unreachable,
+    NoRoute,
+    Timeout,
+    Tls,
+    Auth,
+    Protocol,
+    Unsupported,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BridgeStatus {
+    /// host role, or client without a bridge block
+    Disabled,
+    Connecting {
+        transport: TransportKind,
+    },
+    Connected {
+        transport: TransportKind,
+    },
+    Failed {
+        kind: BridgeFailure,
+        detail: String,
+        retry_in: Duration,
+    },
+}
+
 #[derive(Debug)]
-enum BridgeError {
+pub(crate) enum BridgeError {
     Connect(String),
+    Io(std::io::ErrorKind, String),
+    Tls(String),
+    Http(u16),
+    Timeout,
+    Unsupported(String),
     Register(String),
+    /// host closed with a reason that means our credentials are wrong
+    Rejected(String),
     Wire(VynkorError),
     Mac,
     Disconnected,
@@ -52,7 +103,13 @@ impl std::fmt::Display for BridgeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             BridgeError::Connect(e) => write!(f, "connect: {e}"),
+            BridgeError::Io(_, e) => write!(f, "connect: {e}"),
+            BridgeError::Tls(e) => write!(f, "tls: {e}"),
+            BridgeError::Http(code) => write!(f, "connect: http status {code}"),
+            BridgeError::Timeout => write!(f, "timed out"),
+            BridgeError::Unsupported(e) => write!(f, "{e}"),
             BridgeError::Register(e) => write!(f, "registration rejected: {e}"),
+            BridgeError::Rejected(e) => write!(f, "host rejected the session: {e}"),
             BridgeError::Wire(e) => write!(f, "wire: {e}"),
             BridgeError::Mac => write!(f, "frame MAC verification failed"),
             BridgeError::Disconnected => write!(f, "disconnected"),
@@ -63,16 +120,80 @@ impl std::fmt::Display for BridgeError {
 
 impl std::error::Error for BridgeError {}
 
+impl BridgeError {
+    fn from_ws(e: WsError) -> BridgeError {
+        match e {
+            // tokio-rustls surfaces handshake failures as io errors wrapping rustls::Error
+            WsError::Io(io)
+                if io
+                    .get_ref()
+                    .is_some_and(|inner| inner.downcast_ref::<rustls::Error>().is_some()) =>
+            {
+                BridgeError::Tls(io.to_string())
+            }
+            WsError::Io(io) => BridgeError::Io(io.kind(), io.to_string()),
+            WsError::Tls(e) => BridgeError::Tls(e.to_string()),
+            WsError::Http(resp) => BridgeError::Http(resp.status().as_u16()),
+            other => BridgeError::Connect(other.to_string()),
+        }
+    }
+}
+
+fn classify(e: &BridgeError) -> BridgeFailure {
+    use std::io::ErrorKind as K;
+    match e {
+        BridgeError::Io(K::HostUnreachable | K::NetworkUnreachable, _) => BridgeFailure::NoRoute,
+        BridgeError::Io(K::TimedOut, _) | BridgeError::Timeout => BridgeFailure::Timeout,
+        // refused/reset/dns failures (other kinds) all mean "nothing answering there"
+        BridgeError::Io(..) | BridgeError::Connect(_) => BridgeFailure::Unreachable,
+        BridgeError::Tls(_) => BridgeFailure::Tls,
+        // both ends key the frame MAC off the device secret: a tag that fails
+        // either way means the secret is wrong, not that the link is flaky
+        BridgeError::Http(401 | 403)
+        | BridgeError::Register(_)
+        | BridgeError::Rejected(_)
+        | BridgeError::Mac => BridgeFailure::Auth,
+        BridgeError::Http(_)
+        | BridgeError::Wire(_)
+        | BridgeError::Disconnected
+        | BridgeError::Shutdown => BridgeFailure::Protocol,
+        BridgeError::Unsupported(_) => BridgeFailure::Unsupported,
+    }
+}
+
 /// Host-outbound channels of every live bridge connection. The router's
 /// forward() miss path falls through to this to reach the host.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct BridgeHandle {
     conns: Arc<Mutex<Vec<mpsc::Sender<Outbound>>>>,
+    status: Arc<watch::Sender<BridgeStatus>>,
+}
+
+impl Default for BridgeHandle {
+    fn default() -> Self {
+        Self::with_status(watch::channel(BridgeStatus::Disabled).0)
+    }
 }
 
 impl BridgeHandle {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// publish connection status through a caller-owned channel (embedders)
+    pub fn with_status(tx: watch::Sender<BridgeStatus>) -> Self {
+        BridgeHandle {
+            conns: Arc::default(),
+            status: Arc::new(tx),
+        }
+    }
+
+    pub fn status(&self) -> watch::Receiver<BridgeStatus> {
+        self.status.subscribe()
+    }
+
+    pub(crate) fn set_status(&self, s: BridgeStatus) {
+        self.status.send_replace(s);
     }
 
     /// Best-effort relay of an unroutable local frame: sends via the live
@@ -132,6 +253,15 @@ impl Clone for Bridge {
 }
 
 impl Bridge {
+    /// ping interval; 0 would spin the write loop (load_config clamps too,
+    /// this covers configs built in code)
+    fn keepalive(&self) -> Duration {
+        Duration::from_secs(match self.config.keepalive_secs {
+            0 => 15,
+            n => n,
+        })
+    }
+
     pub fn new(
         config: BridgeConfig,
         device_id: String,
@@ -153,43 +283,69 @@ impl Bridge {
     pub async fn run(self) {
         let mut backoff = Duration::from_secs(1);
         loop {
-            match self.one_cycle().await {
-                Ok(()) => info!("bridge connection closed"),
-                Err(BridgeError::Shutdown) => return,
-                Err(e) => warn!(error = %e, "bridge connection failed"),
+            let result = self.one_cycle().await;
+            // run_conn leaves Connected in place until we replace it below
+            if matches!(*self.handle.status.borrow(), BridgeStatus::Connected { .. }) {
+                backoff = Duration::from_secs(1);
             }
+            let (kind, detail) = match result {
+                Ok(()) => {
+                    info!("bridge connection closed");
+                    (
+                        BridgeFailure::Protocol,
+                        "host closed the connection".to_string(),
+                    )
+                }
+                Err(BridgeError::Shutdown) => return,
+                Err(e) => {
+                    // unsupported transports warn once, where they are tried
+                    if !matches!(e, BridgeError::Unsupported(_)) {
+                        warn!(error = %e, "bridge connection failed");
+                    }
+                    (classify(&e), e.to_string())
+                }
+            };
+            self.handle.set_status(BridgeStatus::Failed {
+                kind,
+                detail,
+                retry_in: backoff,
+            });
             tokio::time::sleep(backoff).await;
             backoff = (backoff * 2).min(BRIDGE_MAX_BACKOFF);
         }
     }
 
+    /// walk the transport list in order; the first that connects runs the
+    /// session, otherwise the last connect error is returned
     async fn one_cycle(&self) -> Result<(), BridgeError> {
-        let url = resolve_ws_url(&self.config.host_url)?;
-        self.run_conn(&url).await
+        let token = self.config.token.clone().unwrap_or_default();
+        let transports = self.config.effective_transports();
+        let mut last_err = None;
+        for (i, t) in transports.iter().enumerate() {
+            let kind = t.kind();
+            self.handle
+                .set_status(BridgeStatus::Connecting { transport: kind });
+            match transport::connect(t, &token).await {
+                Ok(ws) => return self.run_conn(ws, kind).await,
+                Err(e) => {
+                    // the last one is reported by `run` with the backoff
+                    if i + 1 < transports.len() && !matches!(e, BridgeError::Unsupported(_)) {
+                        warn!(error = %e, transport = ?kind, "bridge transport failed, trying next");
+                    }
+                    last_err = Some(e);
+                }
+            }
+        }
+        Err(last_err.unwrap_or_else(|| BridgeError::Connect("no transports configured".into())))
     }
 
-    async fn run_conn(&self, url: &str) -> Result<(), BridgeError> {
+    async fn run_conn(&self, ws: WsStream, transport: TransportKind) -> Result<(), BridgeError> {
         let conn_id = BRIDGE_CONN_ID_BASE;
         let caps = self.config.mirror.clone();
-
-        let mut req = url
-            .into_client_request()
-            .map_err(|e| BridgeError::Connect(e.to_string()))?;
-        // same handshake as the SDK: the JWT rides the subprotocol header,
-        // never the URL (access-log hygiene)
         let token = self.config.token.clone().unwrap_or_default();
-        let protocol = if token.is_empty() {
-            "vynkor".to_string()
-        } else {
-            format!("vynkor, {token}")
-        };
-        let value =
-            HeaderValue::from_str(&protocol).map_err(|e| BridgeError::Connect(e.to_string()))?;
-        req.headers_mut().insert("sec-websocket-protocol", value);
-        let (ws, _resp) = connect_async(req)
-            .await
-            .map_err(|e| BridgeError::Connect(e.to_string()))?;
         let (mut ws_write, mut ws_read) = ws.split();
+        // any inbound message (pong included) resets this; see read_loop
+        let silence_limit = self.keepalive() * 3;
 
         // register the device itself, unauthenticated at the frame level (MAC
         // arms only after the ack) — mirrors the SDK register_full flow. One
@@ -221,10 +377,10 @@ impl Bridge {
         ws_write
             .send(WsMessage::Binary(frame_to_bytes(&frame)))
             .await
-            .map_err(|e| BridgeError::Connect(e.to_string()))?;
+            .map_err(BridgeError::from_ws)?;
 
         let session_key: Option<[u8; 32]> = loop {
-            let bytes = next_binary(&mut ws_read).await?;
+            let bytes = next_binary(&mut ws_read, silence_limit).await?;
             let frame = parse_frame(&bytes).await.map_err(BridgeError::Wire)?;
             let env = Envelope::decode(frame.payload.as_ref()).map_err(|_| {
                 BridgeError::Wire(VynkorError::Internal("decode register ack".into()))
@@ -242,6 +398,8 @@ impl Bridge {
                         )),
                         _ => None,
                     };
+                    // not Connected yet: the ack is sent before the MAC arms,
+                    // so it proves the token but not the secret (read_loop)
                     info!(plugin_id = %self.device_id, "device registered on host");
                     break key;
                 }
@@ -288,7 +446,11 @@ impl Bridge {
         // host-bound frames: the local kernel addresses its peers as "client"
         // (build_outbound), but the host only accepts SDK-style frames that
         // address it as "kernel" — rewrite here, once, on the way out
-        let write_task = tokio::spawn(write_loop(ws_write, host_rx, session_key));
+        let write_task = tokio::spawn(write_loop(ws_write, host_rx, session_key, self.keepalive()));
+
+        // provoke a MAC'd reply at once: a wrong secret then fails here,
+        // before Connected, instead of on the first real frame
+        let _ = host_tx.send(out_frame(probe_frame())).await;
 
         let session_cell: SessionKeyCell = Arc::new(Mutex::new(None));
         let result = read_loop(
@@ -299,6 +461,8 @@ impl Bridge {
             host_tx.clone(),
             self.router_tx.clone(),
             session_cell,
+            silence_limit,
+            Some((&self.handle, transport)),
         )
         .await;
 
@@ -331,23 +495,70 @@ fn resolve_ws_url(host_url: &str) -> Result<String, BridgeError> {
 
 async fn next_binary(
     ws_read: &mut futures_util::stream::SplitStream<WsStream>,
+    silence_limit: Duration,
 ) -> Result<Vec<u8>, BridgeError> {
     loop {
-        match ws_read.next().await {
+        let next = tokio::time::timeout(silence_limit, ws_read.next())
+            .await
+            .map_err(|_| BridgeError::Timeout)?;
+        match next {
             Some(Ok(WsMessage::Binary(b))) => return Ok(b),
-            Some(Ok(WsMessage::Close(_))) | None => return Err(BridgeError::Disconnected),
+            Some(Ok(WsMessage::Close(f))) => return Err(closed(f)),
+            None => return Err(BridgeError::Disconnected),
             Some(Ok(_)) => continue,
-            Some(Err(e)) => return Err(BridgeError::Connect(e.to_string())),
+            Some(Err(e)) => return Err(BridgeError::from_ws(e)),
         }
     }
+}
+
+/// a host close carries its reason in the code; anything but a MAC refusal
+/// reads as the host going away
+fn closed(frame: Option<CloseFrame<'_>>) -> BridgeError {
+    match frame {
+        Some(f) if u16::from(f.code) == CLOSE_MAC_INVALID => {
+            BridgeError::Rejected(f.reason.into_owned())
+        }
+        _ => BridgeError::Disconnected,
+    }
+}
+
+/// kernel Ping: every host answers it, MAC'd once the session is armed
+fn probe_frame() -> Frame {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let env = Envelope {
+        payload: Some(envelope::Payload::Ping(Ping { timestamp })),
+        ..Default::default()
+    };
+    build_frame("kernel", 0, env.encode_to_vec())
 }
 
 async fn write_loop(
     mut ws_write: futures_util::stream::SplitSink<WsStream, WsMessage>,
     mut rx: mpsc::Receiver<Outbound>,
     key: Option<[u8; 32]>,
+    keepalive: Duration,
 ) {
-    while let Some(item) = rx.recv().await {
+    // ping only when idle: any outbound frame already proves liveness to the
+    // host, and the host's pong (or any frame) feeds read_loop's deadline
+    let idle = tokio::time::sleep(keepalive);
+    tokio::pin!(idle);
+    loop {
+        let item = tokio::select! {
+            item = rx.recv() => match item {
+                Some(item) => item,
+                None => break,
+            },
+            _ = &mut idle => {
+                if ws_write.send(WsMessage::Ping(Vec::new())).await.is_err() {
+                    break;
+                }
+                idle.as_mut().reset(tokio::time::Instant::now() + keepalive);
+                continue;
+            }
+        };
         let mut frame = match item {
             Outbound::Frame(f) => *f,
             // the local router never arms bridge conns (registration bypasses
@@ -369,6 +580,7 @@ async fn write_loop(
         {
             break;
         }
+        idle.as_mut().reset(tokio::time::Instant::now() + keepalive);
     }
 }
 
@@ -381,13 +593,21 @@ async fn read_loop(
     host_tx: mpsc::Sender<Outbound>,
     router_tx: mpsc::Sender<IncomingMessage>,
     session_cell: SessionKeyCell,
+    silence_limit: Duration,
+    // published as Connected on the first host frame that verifies
+    mut pending: Option<(&BridgeHandle, TransportKind)>,
 ) -> Result<(), BridgeError> {
-    while let Some(item) = ws_read.next().await {
+    // a host that stops answering without closing tcp (sleep, wifi drop)
+    // never errors the socket: bound every read instead
+    while let Some(item) = tokio::time::timeout(silence_limit, ws_read.next())
+        .await
+        .map_err(|_| BridgeError::Timeout)?
+    {
         let bytes = match item {
             Ok(WsMessage::Binary(b)) => b,
-            Ok(WsMessage::Close(_)) => return Err(BridgeError::Disconnected),
+            Ok(WsMessage::Close(f)) => return Err(closed(f)),
             Ok(_) => continue,
-            Err(e) => return Err(BridgeError::Connect(e.to_string())),
+            Err(e) => return Err(BridgeError::from_ws(e)),
         };
         let mut frame = parse_frame(&bytes).await.map_err(BridgeError::Wire)?;
         if let Some(k) = &key {
@@ -403,6 +623,9 @@ async fn read_loop(
                 warn!(conn_id, "bridge frame MAC invalid — dropping connection");
                 return Err(BridgeError::Mac);
             }
+        }
+        if let Some((handle, transport)) = pending.take() {
+            handle.set_status(BridgeStatus::Connected { transport });
         }
         // the local router re-tags with the local plugin's key on the way
         // out — strip the host's tag here
@@ -472,10 +695,20 @@ fn is_kernel_routed(frame: &Frame) -> bool {
 mod tests {
     use super::*;
     use crate::proto::vynkor::{Event, PluginRegisterAck};
+    use crate::utils::config::TransportConfig;
+    use axum::http::HeaderValue;
     use tokio::net::TcpListener;
 
     fn frame_target(frame: &Frame) -> String {
         target_as_str(frame).unwrap_or_default().to_string()
+    }
+
+    /// a local router that swallows frames: a dropped receiver would end the
+    /// bridge (Shutdown) on the first host frame
+    fn draining_router() -> mpsc::Sender<IncomingMessage> {
+        let (tx, mut rx) = mpsc::channel::<IncomingMessage>(64);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        tx
     }
 
     fn plain_frame(target: &str, env: &Envelope) -> Frame {
@@ -558,6 +791,8 @@ mod tests {
                 token: Some("test-token".to_string()),
                 secret: Some(String::from_utf8(host_secret.clone()).unwrap()),
                 mirror: vec!["geo".to_string()],
+                ca_cert_path: None,
+                ..Default::default()
             },
             "device-1".to_string(),
             Arc::clone(&registry),
@@ -565,6 +800,7 @@ mod tests {
             handle.clone(),
         );
         let bridge_task = tokio::spawn(bridge.run());
+        let probe_handle = handle.clone();
 
         // fake host: accept, read the register, ack with a nonce, then drive
         // the two directions. Must echo the subprotocol the client requested
@@ -622,6 +858,31 @@ mod tests {
                 .unwrap();
 
             let key = derive_session_key(&host_secret, b"nonce-aaaaaaaaaa", "device-1");
+
+            // device -> host: the probe Ping, MAC'd, addressed to the kernel;
+            // nothing verified from the host yet, so not Connected
+            let msg = tokio::time::timeout(Duration::from_secs(5), ws_read.next())
+                .await
+                .expect("probe timeout")
+                .unwrap()
+                .unwrap();
+            let probe = match msg {
+                WsMessage::Binary(b) => parse_frame(&b).await.unwrap(),
+                other => panic!("expected binary probe, got {other:?}"),
+            };
+            assert_eq!(frame_target(&probe), "kernel");
+            assert!(verify_tag(
+                &key,
+                &serialize_header(&probe),
+                &probe.payload,
+                probe.mac.as_ref().expect("probe must be MAC'd")
+            ));
+            let env = Envelope::decode(probe.payload.as_ref()).unwrap();
+            assert!(matches!(env.payload, Some(envelope::Payload::Ping(_))));
+            assert!(!matches!(
+                *probe_handle.status().borrow(),
+                BridgeStatus::Connected { .. }
+            ));
 
             // host kernel -> device: an Event (device traffic)
             let event = Envelope {
@@ -690,6 +951,11 @@ mod tests {
             .unwrap();
         assert_eq!(frame_target(&msg.frame), "geo");
         assert!(msg.frame.mac.is_none(), "host MAC must be stripped");
+        // the event was the first verified host frame
+        assert!(matches!(
+            *handle.status().borrow(),
+            BridgeStatus::Connected { .. }
+        ));
         let env = Envelope::decode(msg.frame.payload.as_ref()).unwrap();
         assert!(matches!(env.payload, Some(envelope::Payload::Event(_))));
 
@@ -733,5 +999,467 @@ mod tests {
 
         drop(ws_write);
         bridge_task.abort();
+    }
+
+    /// rcgen cert for "vynkor-host": (cert pem, tls acceptor)
+    fn tls_acceptor() -> (String, tokio_rustls::TlsAcceptor) {
+        let ck = rcgen::generate_simple_self_signed(vec!["vynkor-host".to_string()]).unwrap();
+        let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
+        let cfg = rustls::ServerConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_no_client_auth()
+            .with_single_cert(
+                vec![ck.cert.der().clone()],
+                rustls::pki_types::PrivateKeyDer::try_from(ck.signing_key.serialize_der()).unwrap(),
+            )
+            .unwrap();
+        (
+            ck.cert.pem(),
+            tokio_rustls::TlsAcceptor::from(Arc::new(cfg)),
+        )
+    }
+
+    fn wss_bridge(port: u16, ca_pem: &str, dir: &tempfile::TempDir) -> Bridge {
+        let ca = dir.path().join("host-cert.pem");
+        std::fs::write(&ca, ca_pem).unwrap();
+        let router_tx = draining_router();
+        Bridge::new(
+            BridgeConfig {
+                host_url: format!("https://127.0.0.1:{port}"),
+                token: Some("test-token".to_string()),
+                secret: None,
+                mirror: vec!["geo".to_string()],
+                ca_cert_path: Some(ca),
+                ..Default::default()
+            },
+            "device-1".to_string(),
+            Arc::new(PluginRegistry::new()),
+            router_tx,
+            BridgeHandle::new(),
+        )
+    }
+
+    #[tokio::test]
+    // accept_hdr_async pins the large tungstenite::Error in the fake-host callback's Result
+    #[allow(clippy::result_large_err)]
+    async fn wss_bridge_registers_with_pinned_cert() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (pem, acceptor) = tls_acceptor();
+        let dir = tempfile::tempdir().unwrap();
+        let bridge = wss_bridge(port, &pem, &dir);
+        let bridge_task = tokio::spawn(bridge.run());
+
+        let (stream, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept())
+            .await
+            .expect("no connection")
+            .unwrap();
+        let tls = acceptor.accept(stream).await.expect("tls handshake");
+        let mut ws = tokio_tungstenite::accept_hdr_async(
+            tls,
+            |_: &tokio_tungstenite::tungstenite::handshake::server::Request,
+             mut resp: tokio_tungstenite::tungstenite::handshake::server::Response| {
+                resp.headers_mut()
+                    .insert("sec-websocket-protocol", HeaderValue::from_static("vynkor"));
+                Ok(resp)
+            },
+        )
+        .await
+        .unwrap();
+        let msg = tokio::time::timeout(Duration::from_secs(5), ws.next())
+            .await
+            .expect("register frame timeout")
+            .unwrap()
+            .unwrap();
+        let bytes = match msg {
+            WsMessage::Binary(b) => b,
+            other => panic!("expected binary register, got {other:?}"),
+        };
+        let frame = parse_frame(&bytes).await.unwrap();
+        let env = Envelope::decode(frame.payload.as_ref()).unwrap();
+        let reg = match env.payload {
+            Some(envelope::Payload::PluginRegister(r)) => r,
+            other => panic!("expected PluginRegister, got {other:?}"),
+        };
+        assert_eq!(reg.plugin_id, "device-1");
+        assert_eq!(reg.capabilities, vec!["geo"]);
+        bridge_task.abort();
+    }
+
+    #[tokio::test]
+    async fn wss_rejects_unpinned_cert() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (_served_pem, acceptor) = tls_acceptor();
+        let (other_pem, _) = tls_acceptor();
+        let dir = tempfile::tempdir().unwrap();
+        let bridge = wss_bridge(port, &other_pem, &dir);
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            // client aborts the handshake; the error is expected here
+            let _ = acceptor.accept(stream).await;
+        });
+        match bridge.one_cycle().await {
+            Err(BridgeError::Tls(msg)) => {
+                assert!(msg.contains("does not match the pinned"), "{msg}")
+            }
+            other => panic!("expected Tls error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_io_kinds() {
+        use std::io::ErrorKind as K;
+        let io = |k| BridgeError::Io(k, String::new());
+        let table = [
+            (io(K::ConnectionRefused), BridgeFailure::Unreachable),
+            (io(K::HostUnreachable), BridgeFailure::NoRoute),
+            (io(K::NetworkUnreachable), BridgeFailure::NoRoute),
+            (io(K::TimedOut), BridgeFailure::Timeout),
+            (BridgeError::Timeout, BridgeFailure::Timeout),
+            (BridgeError::Http(401), BridgeFailure::Auth),
+            (
+                BridgeError::Register("bad token".into()),
+                BridgeFailure::Auth,
+            ),
+            (BridgeError::Tls("x".into()), BridgeFailure::Tls),
+            (BridgeError::Mac, BridgeFailure::Auth),
+            (
+                BridgeError::Rejected("frame MAC invalid".into()),
+                BridgeFailure::Auth,
+            ),
+            (BridgeError::Disconnected, BridgeFailure::Protocol),
+        ];
+        for (err, want) in table {
+            assert_eq!(classify(&err), want, "{err:?}");
+        }
+    }
+
+    /// accept one ws client, read its register frame, ack it (no nonce) and
+    /// answer the probe — the first host frame is what makes it Connected
+    async fn accept_and_ack(listener: &TcpListener) -> WebSocketStream<TcpStream> {
+        let mut ws = accept_and_ack_with(listener, Vec::new()).await;
+        ws.next().await.unwrap().unwrap(); // probe
+        let pong = Envelope {
+            payload: Some(envelope::Payload::Pong(
+                crate::proto::vynkor::Pong::default(),
+            )),
+            ..Default::default()
+        };
+        ws.send(WsMessage::Binary(frame_to_bytes(&plain_frame(
+            "client", &pong,
+        ))))
+        .await
+        .unwrap();
+        ws
+    }
+
+    async fn accept_and_ack_with(
+        listener: &TcpListener,
+        session_nonce: Vec<u8>,
+    ) -> WebSocketStream<TcpStream> {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_hdr_async(
+            stream,
+            #[allow(clippy::result_large_err)]
+            |_: &tokio_tungstenite::tungstenite::handshake::server::Request,
+             mut resp: tokio_tungstenite::tungstenite::handshake::server::Response| {
+                resp.headers_mut()
+                    .insert("sec-websocket-protocol", HeaderValue::from_static("vynkor"));
+                Ok(resp)
+            },
+        )
+        .await
+        .unwrap();
+        ws.next().await.unwrap().unwrap(); // register
+        let ack = Envelope {
+            payload: Some(envelope::Payload::PluginRegisterAck(PluginRegisterAck {
+                accepted: true,
+                session_nonce,
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        ws.send(WsMessage::Binary(frame_to_bytes(&plain_frame(
+            "client", &ack,
+        ))))
+        .await
+        .unwrap();
+        ws
+    }
+
+    fn secret_bridge(host_url: String, secret: &str, handle: BridgeHandle) -> Bridge {
+        let router_tx = draining_router();
+        Bridge::new(
+            BridgeConfig {
+                host_url,
+                token: Some("test-token".to_string()),
+                secret: Some(secret.to_string()),
+                mirror: vec!["geo".to_string()],
+                ..Default::default()
+            },
+            "device-1".to_string(),
+            Arc::new(PluginRegistry::new()),
+            router_tx,
+            handle,
+        )
+    }
+
+    #[tokio::test]
+    async fn host_mac_refusal_is_auth_and_never_connected() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = BridgeHandle::new();
+        let bridge = secret_bridge(format!("http://{addr}"), "wrong-secret", handle.clone());
+        // what the real gateway does when the client's tag fails
+        let host = tokio::spawn(async move {
+            let mut ws = accept_and_ack_with(&listener, b"nonce-aaaaaaaaaa".to_vec()).await;
+            ws.next().await.unwrap().unwrap(); // probe, tagged with the wrong key
+            ws.send(WsMessage::Close(Some(CloseFrame {
+                code: CLOSE_MAC_INVALID.into(),
+                reason: "frame MAC invalid".into(),
+            })))
+            .await
+            .unwrap();
+            ws
+        });
+        let err = tokio::time::timeout(Duration::from_secs(5), bridge.one_cycle())
+            .await
+            .expect("cycle did not end");
+        assert!(matches!(err, Err(BridgeError::Rejected(_))), "{err:?}");
+        assert_eq!(classify(&err.unwrap_err()), BridgeFailure::Auth);
+        assert!(
+            !matches!(*handle.status().borrow(), BridgeStatus::Connected { .. }),
+            "a refused secret must never read as Connected"
+        );
+        host.abort();
+    }
+
+    #[tokio::test]
+    async fn host_frame_under_another_secret_is_auth() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = BridgeHandle::new();
+        let bridge = secret_bridge(format!("http://{addr}"), "client-secret", handle.clone());
+        let host = tokio::spawn(async move {
+            let nonce = b"nonce-aaaaaaaaaa".to_vec();
+            let mut ws = accept_and_ack_with(&listener, nonce.clone()).await;
+            ws.next().await.unwrap().unwrap(); // probe
+            let key = derive_session_key(b"host-secret", &nonce, "device-1");
+            let pong = Envelope {
+                payload: Some(envelope::Payload::Pong(
+                    crate::proto::vynkor::Pong::default(),
+                )),
+                ..Default::default()
+            };
+            let mut f = plain_frame("client", &pong);
+            f.flags |= FLAG_MAC_PRESENT;
+            f.mac = Some(compute_tag(&key, &serialize_header(&f), &f.payload));
+            ws.send(WsMessage::Binary(frame_to_bytes(&f)))
+                .await
+                .unwrap();
+            ws
+        });
+        let err = tokio::time::timeout(Duration::from_secs(5), bridge.one_cycle())
+            .await
+            .expect("cycle did not end");
+        assert!(matches!(err, Err(BridgeError::Mac)), "{err:?}");
+        assert!(!matches!(
+            *handle.status().borrow(),
+            BridgeStatus::Connected { .. }
+        ));
+        host.abort();
+    }
+
+    fn test_bridge(host_url: String, keepalive_secs: u64, status: BridgeHandle) -> Bridge {
+        let router_tx = draining_router();
+        Bridge::new(
+            BridgeConfig {
+                host_url,
+                mirror: vec!["geo".to_string()],
+                keepalive_secs,
+                ..Default::default()
+            },
+            "device-1".to_string(),
+            Arc::new(PluginRegistry::new()),
+            router_tx,
+            status,
+        )
+    }
+
+    #[tokio::test]
+    async fn status_goes_connecting_then_connected() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, mut rx) = tokio::sync::watch::channel(BridgeStatus::Disabled);
+        let bridge = test_bridge(format!("http://{addr}"), 15, BridgeHandle::with_status(tx));
+        let task = tokio::spawn(bridge.run());
+        let host = tokio::spawn(async move {
+            let ws = accept_and_ack(&listener).await;
+            std::future::pending::<()>().await;
+            drop(ws);
+        });
+        let t = Duration::from_secs(5);
+        let connecting = BridgeStatus::Connecting {
+            transport: TransportKind::Direct,
+        };
+        tokio::time::timeout(t, rx.wait_for(|s| *s == connecting))
+            .await
+            .expect("no Connecting")
+            .unwrap();
+        let connected = BridgeStatus::Connected {
+            transport: TransportKind::Direct,
+        };
+        tokio::time::timeout(t, rx.wait_for(|s| *s == connected))
+            .await
+            .expect("no Connected")
+            .unwrap();
+        task.abort();
+        host.abort();
+    }
+
+    #[tokio::test]
+    async fn refused_port_reports_unreachable_with_retry() {
+        let port = {
+            let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            l.local_addr().unwrap().port()
+        };
+        let (tx, mut rx) = tokio::sync::watch::channel(BridgeStatus::Disabled);
+        let bridge = test_bridge(
+            format!("http://127.0.0.1:{port}"),
+            15,
+            BridgeHandle::with_status(tx),
+        );
+        let task = tokio::spawn(bridge.run());
+        let st = tokio::time::timeout(
+            Duration::from_secs(5),
+            rx.wait_for(|s| matches!(s, BridgeStatus::Failed { .. })),
+        )
+        .await
+        .expect("no Failed status")
+        .unwrap()
+        .clone();
+        match st {
+            BridgeStatus::Failed { kind, retry_in, .. } => {
+                assert_eq!(kind, BridgeFailure::Unreachable);
+                assert_eq!(retry_in, Duration::from_secs(1));
+            }
+            other => panic!("{other:?}"),
+        }
+        task.abort();
+    }
+    #[tokio::test]
+    async fn silent_host_times_out() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, mut rx) = tokio::sync::watch::channel(BridgeStatus::Disabled);
+        let bridge = test_bridge(format!("http://{addr}"), 1, BridgeHandle::with_status(tx));
+        let task = tokio::spawn(bridge.run());
+        // host acks, then never polls its socket again: no pong, tcp stays open
+        let host = tokio::spawn(async move {
+            let ws = accept_and_ack(&listener).await;
+            std::future::pending::<()>().await;
+            drop(ws);
+        });
+        let st = tokio::time::timeout(
+            Duration::from_secs(5),
+            rx.wait_for(|s| matches!(s, BridgeStatus::Failed { .. })),
+        )
+        .await
+        .expect("silent host was not detected within 5s")
+        .unwrap()
+        .clone();
+        assert!(
+            matches!(
+                st,
+                BridgeStatus::Failed {
+                    kind: BridgeFailure::Timeout,
+                    ..
+                }
+            ),
+            "{st:?}"
+        );
+        task.abort();
+        host.abort();
+    }
+    fn transports_bridge(transports: Vec<TransportConfig>, handle: BridgeHandle) -> Bridge {
+        let router_tx = draining_router();
+        Bridge::new(
+            BridgeConfig {
+                transports,
+                mirror: vec!["geo".to_string()],
+                ..Default::default()
+            },
+            "device-1".to_string(),
+            Arc::new(PluginRegistry::new()),
+            router_tx,
+            handle,
+        )
+    }
+
+    #[tokio::test]
+    async fn relay_is_skipped_then_direct_connects() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, mut rx) = tokio::sync::watch::channel(BridgeStatus::Disabled);
+        let bridge = transports_bridge(
+            vec![
+                TransportConfig::Relay {
+                    url: "wss://127.0.0.1:1".into(),
+                    key: None,
+                },
+                TransportConfig::Direct {
+                    url: format!("http://{addr}"),
+                    ca_cert_path: None,
+                },
+            ],
+            BridgeHandle::with_status(tx),
+        );
+        let task = tokio::spawn(bridge.run());
+        let host = tokio::spawn(async move {
+            let ws = accept_and_ack(&listener).await;
+            std::future::pending::<()>().await;
+            drop(ws);
+        });
+        let connected = BridgeStatus::Connected {
+            transport: TransportKind::Direct,
+        };
+        tokio::time::timeout(Duration::from_secs(5), rx.wait_for(|s| *s == connected))
+            .await
+            .expect("direct never connected after relay was skipped")
+            .unwrap();
+        task.abort();
+        host.abort();
+    }
+
+    #[tokio::test]
+    async fn only_relay_reports_unsupported() {
+        let (tx, mut rx) = tokio::sync::watch::channel(BridgeStatus::Disabled);
+        let bridge = transports_bridge(
+            vec![TransportConfig::Relay {
+                url: "wss://127.0.0.1:1".into(),
+                key: None,
+            }],
+            BridgeHandle::with_status(tx),
+        );
+        let task = tokio::spawn(bridge.run());
+        let t = Duration::from_secs(5);
+        let failed = |secs| {
+            move |s: &BridgeStatus| {
+                matches!(s, BridgeStatus::Failed { kind: BridgeFailure::Unsupported, retry_in, .. }
+                    if *retry_in == Duration::from_secs(secs))
+            }
+        };
+        tokio::time::timeout(t, rx.wait_for(failed(1)))
+            .await
+            .expect("no Unsupported failure")
+            .unwrap();
+        // the loop keeps retrying: status is published again, with doubled backoff
+        tokio::time::timeout(t, rx.wait_for(failed(2)))
+            .await
+            .expect("loop did not retry")
+            .unwrap();
+        task.abort();
     }
 }

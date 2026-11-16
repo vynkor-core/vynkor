@@ -2,6 +2,7 @@ pub mod api;
 pub mod auth;
 pub mod bridge;
 pub mod cli;
+pub mod embed;
 pub mod events;
 pub mod ipc;
 pub mod kernel;
