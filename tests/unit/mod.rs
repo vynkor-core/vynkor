@@ -1,6 +1,7 @@
 #[path = "../support/jwt_helper.rs"]
 mod jwt_helper;
 mod test_api;
+mod test_api_grants;
 mod test_completions;
 mod test_device_keys;
 mod test_errors;

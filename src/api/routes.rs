@@ -23,6 +23,8 @@ pub struct AppState {
     pub plugin_defs: Vec<PluginDef>,
     /// cd-01: ticket pairing; `None` without jwt_secret (nothing to sign with)
     pub pairing: Option<Arc<PairingService>>,
+    /// K3: device records, consulted per request for the caller's grants
+    pub devices: Option<Arc<crate::auth::device_store::DeviceStore>>,
 }
 
 /// Uniform JSON envelope for every non-2xx REST response (UX-1). Clients parse
