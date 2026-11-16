@@ -248,9 +248,11 @@ fn direct_limiter(per_sec: u32, burst: u32) -> DefaultDirectRateLimiter {
 /// 48 random bits — wider than `vyn device connect`'s ids since ticket
 /// devices are minted unattended.
 fn random_device_id() -> String {
-    use rand::RngCore;
+    use rand::TryRng;
     let mut b = [0u8; 6];
-    rand::rngs::OsRng.fill_bytes(&mut b);
+    rand::rngs::SysRng
+        .try_fill_bytes(&mut b)
+        .expect("OS RNG failure");
     format!(
         "dev-{}",
         b.iter().map(|x| format!("{x:02x}")).collect::<String>()

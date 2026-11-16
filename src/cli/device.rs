@@ -519,8 +519,8 @@ fn format_ts(epoch_secs: u64) -> String {
 }
 
 fn random_device_id() -> String {
-    use rand::Rng;
-    let n: u32 = rand::thread_rng().gen();
+    use rand::RngExt;
+    let n: u32 = rand::rng().random();
     format!("dev-{:06x}", n & 0xFF_FFFF)
 }
 

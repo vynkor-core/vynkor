@@ -340,12 +340,12 @@ impl PluginSupervisor {
 /// (shared dependency breaks, kernel restart under load) don't all restart
 /// at identical wall-clock offsets and spike the OS with simultaneous spawns.
 fn jitter_ms(ms: u64) -> u64 {
-    use rand::Rng;
+    use rand::RngExt;
     let band = (ms as f64 * 0.2) as u64;
     if band == 0 {
         return ms;
     }
-    let delta = rand::thread_rng().gen_range(0..=(2 * band));
+    let delta = rand::rng().random_range(0..=(2 * band));
     ms - band + delta
 }
 
