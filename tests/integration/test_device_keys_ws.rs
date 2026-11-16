@@ -112,7 +112,9 @@ async fn paired_device_connects_macs_then_revocation_blocks() {
 
     // ── pair (what `vyn device connect` does server-side)
     let store = DeviceStore::new(dir.path(), MASTER);
-    let device_secret = store.issue("behzod-phone", "behzod-phone", 3600, None).unwrap();
+    let device_secret = store
+        .issue("behzod-phone", "behzod-phone", 3600, None)
+        .unwrap();
 
     // ── fresh CLI-process view sees the row immediately
     let cli_store = DeviceStore::new(dir.path(), MASTER);

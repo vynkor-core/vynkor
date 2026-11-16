@@ -16,6 +16,7 @@ mod test_loader;
 mod test_manifest_enforcement;
 mod test_metrics;
 mod test_pairing;
+mod test_pairing_grants;
 mod test_permissions;
 mod test_plugin_key;
 mod test_proto;

@@ -259,10 +259,13 @@ fn concurrent_consume_issues_exactly_one_device() {
     let dir = tempfile::tempdir().unwrap();
     let svc = service(dir.path());
     let view = svc
-        .create_ticket(PairRequest {
-            host: Some("10.0.0.5".into()),
-            ..Default::default()
-        })
+        .create_ticket(
+            PairRequest {
+                host: Some("10.0.0.5".into()),
+                ..Default::default()
+            },
+            None,
+        )
         .unwrap();
 
     let handles: Vec<_> = (0..16)
@@ -293,10 +296,13 @@ fn concurrent_consumes_of_distinct_tickets_keep_every_device() {
     let svc = service(dir.path());
     let tickets: Vec<String> = (0..8)
         .map(|_| {
-            svc.create_ticket(PairRequest {
-                host: Some("10.0.0.5".into()),
-                ..Default::default()
-            })
+            svc.create_ticket(
+                PairRequest {
+                    host: Some("10.0.0.5".into()),
+                    ..Default::default()
+                },
+                None,
+            )
             .unwrap()
             .ticket
         })

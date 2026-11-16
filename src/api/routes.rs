@@ -1,5 +1,5 @@
 use axum::{
-    extract::{rejection::JsonRejection, Path, Query, State},
+    extract::{rejection::JsonRejection, Extension, Path, Query, State},
     http::StatusCode,
     Json,
 };
@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Instant;
 
+use crate::api::middleware::Caller;
 use crate::auth::jwt::JwtValidator;
 use crate::auth::pairing::{PairPayload, PairRequest, PairingService, TicketView};
 use crate::plugins::loader::{validate_plugin_def, PluginLoader};
@@ -333,6 +334,7 @@ fn pairing_error(e: VynkorError) -> (StatusCode, Json<ApiError>) {
             ApiError::conflict("ticket already used")
         }
         VynkorError::Ticket(TicketRejection::Expired) => ApiError::gone("ticket expired"),
+        VynkorError::PermissionDenied(msg) => ApiError::forbidden(&msg),
         VynkorError::InvalidInput(msg) | VynkorError::NetworkError(msg) => {
             ApiError::unprocessable(&msg)
         }
@@ -346,11 +348,20 @@ fn pairing_error(e: VynkorError) -> (StatusCode, Json<ApiError>) {
 /// CD-01: mint a single-use pairing ticket (admin only). Body is optional.
 pub async fn pair_device(
     State(state): State<Arc<AppState>>,
+    caller: Option<Extension<Caller>>,
     body: Option<Json<PairRequest>>,
 ) -> ApiResult<TicketView> {
     let pairing = pairing_of(&state)?;
     let req = body.map(|Json(b)| b).unwrap_or_default();
-    pairing.create_ticket(req).map(Json).map_err(pairing_error)
+    // K3: a device caller may not mint a device above its own grants
+    let caller_grants = match caller.as_ref().map(|Extension(c)| c) {
+        Some(Caller::Device { grants, .. }) => Some(grants),
+        _ => None,
+    };
+    pairing
+        .create_ticket(req, caller_grants)
+        .map(Json)
+        .map_err(pairing_error)
 }
 
 #[derive(Deserialize)]

@@ -82,7 +82,10 @@ async fn call(fx: &Fx, method: &str, uri: &str, token: &str) -> StatusCode {
 async fn device_guest_cannot_list_plugins() {
     let fx = fx();
     let t = pair(&fx, "guest-1", Preset::Guest);
-    assert_eq!(call(&fx, "GET", "/plugins", &t).await, StatusCode::FORBIDDEN);
+    assert_eq!(
+        call(&fx, "GET", "/plugins", &t).await,
+        StatusCode::FORBIDDEN
+    );
     assert_eq!(
         call(&fx, "GET", "/plugins/x/logs", &t).await,
         StatusCode::FORBIDDEN
@@ -105,7 +108,10 @@ async fn device_user_can_restart_but_not_pair() {
         call(&fx, "POST", "/devices/pair", &t).await,
         StatusCode::FORBIDDEN
     );
-    assert_eq!(call(&fx, "GET", "/devices", &t).await, StatusCode::FORBIDDEN);
+    assert_eq!(
+        call(&fx, "GET", "/devices", &t).await,
+        StatusCode::FORBIDDEN
+    );
 }
 
 #[tokio::test]
@@ -157,7 +163,10 @@ async fn revoked_device_loses_all_grants_over_http() {
     let fx = fx();
     let t = pair(&fx, "user-1", Preset::User);
     fx.store.set_revoked("user-1", true).unwrap();
-    assert_eq!(call(&fx, "GET", "/plugins", &t).await, StatusCode::FORBIDDEN);
+    assert_eq!(
+        call(&fx, "GET", "/plugins", &t).await,
+        StatusCode::FORBIDDEN
+    );
 }
 
 #[tokio::test]

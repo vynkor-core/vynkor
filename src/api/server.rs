@@ -15,13 +15,13 @@ use tower_http::timeout::TimeoutLayer;
 use tracing::info;
 
 use crate::api::middleware::{auth_middleware, require_grant};
-use crate::auth::grants::Grant;
 use crate::api::rate_limit::{build_rate_limiter, rate_limit_middleware, TokenRateLimiter};
 use crate::api::routes::{
     consume_ticket, get_plugin, get_plugin_logs, health_check, list_devices, list_plugins,
     pair_device, restart_plugin, start_plugin, stop_plugin, AppState,
 };
 use crate::api::websocket::{ws_handler, WsGateway};
+use crate::auth::grants::Grant;
 use crate::auth::jwt::JwtValidator;
 use crate::auth::pairing::PairingService;
 use crate::ipc::messages::IncomingMessage;
@@ -128,11 +128,12 @@ pub fn create_router_full(config: RouterConfig) -> BuiltRouter {
         .layer(middleware::from_fn(|r, n| {
             require_grant(Grant::DevicesManage, true, r, n)
         }));
-    let devices_list = Router::new()
-        .route("/devices", get(list_devices))
-        .layer(middleware::from_fn(|r, n| {
-            require_grant(Grant::DevicesManage, false, r, n)
-        }));
+    let devices_list =
+        Router::new()
+            .route("/devices", get(list_devices))
+            .layer(middleware::from_fn(|r, n| {
+                require_grant(Grant::DevicesManage, false, r, n)
+            }));
 
     let mut protected = Router::new()
         .route("/metrics", get(get_metrics))

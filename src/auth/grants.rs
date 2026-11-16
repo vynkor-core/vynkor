@@ -71,12 +71,24 @@ pub enum Preset {
 }
 
 impl Preset {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Preset::Guest => "guest",
+            Preset::User => "user",
+            Preset::Owner => "owner",
+        }
+    }
+
     pub fn grants(&self) -> Grants {
         match self {
             Preset::Guest => Grants::new(),
-            Preset::User => [Grant::PluginsView, Grant::PluginsLogs, Grant::PluginsControl]
-                .into_iter()
-                .collect(),
+            Preset::User => [
+                Grant::PluginsView,
+                Grant::PluginsLogs,
+                Grant::PluginsControl,
+            ]
+            .into_iter()
+            .collect(),
             Preset::Owner => Grant::ALL.into_iter().collect(),
         }
     }

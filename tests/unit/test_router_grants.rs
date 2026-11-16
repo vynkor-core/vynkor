@@ -154,9 +154,7 @@ async fn command(fx: &Fx, c: &mut Conn, name: &str) -> CommandStatus {
     };
     send(fx, c, env).await;
     match next_envelope(c).await.payload {
-        Some(envelope::Payload::KernelCommandAck(a)) => {
-            CommandStatus::try_from(a.status).unwrap()
-        }
+        Some(envelope::Payload::KernelCommandAck(a)) => CommandStatus::try_from(a.status).unwrap(),
         other => panic!("expected ack, got {other:?}"),
     }
 }

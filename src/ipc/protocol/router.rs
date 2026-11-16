@@ -404,8 +404,7 @@ impl MessageRouter {
             }
         }
         if !Self::READONLY_COMMANDS.contains(&command)
-            && check_permission(registry, sender_id, PermissionType::PermissionKernelAdmin)
-                .is_err()
+            && check_permission(registry, sender_id, PermissionType::PermissionKernelAdmin).is_err()
         {
             return Some(format!("{sender_id} lacks PERMISSION_KERNEL_ADMIN"));
         }

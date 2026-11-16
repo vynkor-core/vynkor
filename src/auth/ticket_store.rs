@@ -41,6 +41,10 @@ pub struct TicketRecord {
     pub name: Option<String>,
     /// advertise url chosen at pair time; echoed into the consume payload
     pub ws: String,
+    /// K3: grant preset (`guest|user|owner`) the minted device receives;
+    /// `None` (older rows) = `user`
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset: Option<String>,
 }
 
 impl TicketRecord {
@@ -83,6 +87,17 @@ impl TicketStore {
         self.issue_at(now_secs(), ttl_secs, name, ws)
     }
 
+    /// `issue` carrying the K3 grant preset for the device minted on consume.
+    pub fn issue_with_preset(
+        &self,
+        ttl_secs: u64,
+        name: Option<String>,
+        ws: String,
+        preset: Option<String>,
+    ) -> Result<IssuedTicket, VynkorError> {
+        self.issue_full(now_secs(), ttl_secs, name, ws, preset)
+    }
+
     /// `issue` with an explicit clock — lets tests mint already-expired
     /// tickets without sleeping.
     pub fn issue_at(
@@ -92,6 +107,17 @@ impl TicketStore {
         name: Option<String>,
         ws: String,
     ) -> Result<IssuedTicket, VynkorError> {
+        self.issue_full(now, ttl_secs, name, ws, None)
+    }
+
+    fn issue_full(
+        &self,
+        now: u64,
+        ttl_secs: u64,
+        name: Option<String>,
+        ws: String,
+        preset: Option<String>,
+    ) -> Result<IssuedTicket, VynkorError> {
         let ticket = random_ticket();
         let record = TicketRecord {
             ticket_sha256: hash_ticket(&ticket),
@@ -100,6 +126,7 @@ impl TicketStore {
             used_at: None,
             name,
             ws,
+            preset,
         };
         let _guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
         let mut rows = self.read_all()?;

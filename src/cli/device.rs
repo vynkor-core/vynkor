@@ -20,7 +20,8 @@
 
 use clap::Subcommand;
 
-use crate::auth::device_store::{DeviceStatus, DeviceStore};
+use crate::auth::device_store::{record_grants, DeviceStatus, DeviceStore};
+use crate::auth::grants::{Grant, Grants, Preset};
 use crate::auth::pairing::{
     default_device_permissions, encode_pair_link, PairPayload, TicketLinkPayload, TicketView,
 };
@@ -57,6 +58,11 @@ pub enum DeviceCmd {
         /// Audience claim. Default: config `jwt_audience`, else "vynkor".
         #[arg(long)]
         aud: Option<String>,
+        /// Grant preset: guest (agent only), user (view/logs/control plugins)
+        /// or owner (everything). Default: `user` for a new device; a re-pair
+        /// of an existing device id keeps its current grants.
+        #[arg(long)]
+        preset: Option<Preset>,
     },
     /// Mint a single-use pairing ticket on the running kernel (CD-01) and
     /// print a `vynkor://pair` link carrying just `{v, ws, ticket, cert_pem?}`.
@@ -79,6 +85,10 @@ pub enum DeviceCmd {
         /// token is minted locally from config jwt_secret.
         #[arg(long)]
         token: Option<String>,
+        /// Grant preset for the device minted from this ticket: guest, user or
+        /// owner. Default: user.
+        #[arg(long)]
+        preset: Option<Preset>,
     },
     /// List paired device credentials (from the local store), merged with live
     /// state from the running kernel when reachable.
@@ -100,6 +110,22 @@ pub enum DeviceCmd {
         /// Device id to remove.
         device_id: String,
     },
+    /// Show or change what a paired device may do on this host. Takes effect
+    /// on the next request, no re-pair needed. Grants: plugins.view,
+    /// plugins.logs, plugins.control, plugins.install, devices.manage.
+    Grants {
+        /// Device id.
+        device_id: String,
+        /// Replace the grants with a preset: guest, user or owner.
+        #[arg(long, conflicts_with_all = ["add", "remove"])]
+        preset: Option<Preset>,
+        /// Comma-separated grants to add.
+        #[arg(long, value_delimiter = ',')]
+        add: Vec<String>,
+        /// Comma-separated grants to remove.
+        #[arg(long, value_delimiter = ',')]
+        remove: Vec<String>,
+    },
 }
 
 pub async fn handle(cmd: DeviceCmd, config_path: &str) -> anyhow::Result<()> {
@@ -112,6 +138,7 @@ pub async fn handle(cmd: DeviceCmd, config_path: &str) -> anyhow::Result<()> {
             ipc_targets,
             ttl_seconds,
             aud,
+            preset,
         } => {
             connect(
                 ConnectOpts {
@@ -122,6 +149,7 @@ pub async fn handle(cmd: DeviceCmd, config_path: &str) -> anyhow::Result<()> {
                     ipc_targets,
                     ttl_seconds,
                     aud,
+                    preset,
                 },
                 config_path,
             )?;
@@ -132,14 +160,27 @@ pub async fn handle(cmd: DeviceCmd, config_path: &str) -> anyhow::Result<()> {
             name,
             host,
             token,
+            preset,
         } => {
             let token = token.or_else(|| std::env::var("VYN_JWT_TOKEN").ok());
-            pair(ttl, name, host, token, config_path).await?;
+            pair(ttl, name, host, token, preset, config_path).await?;
             Ok(())
         }
         DeviceCmd::List { offline } => list(offline, config_path).await,
         DeviceCmd::Revoke { device_id, undo } => revoke(&device_id, undo, config_path),
         DeviceCmd::Remove { device_id } => remove(&device_id, config_path),
+        DeviceCmd::Grants {
+            device_id,
+            preset,
+            add,
+            remove,
+        } => {
+            println!(
+                "{}",
+                grants(&device_id, preset, &add, &remove, config_path)?
+            );
+            Ok(())
+        }
     }
 }
 
@@ -160,6 +201,7 @@ struct ConnectOpts {
     ipc_targets: Option<String>,
     ttl_seconds: u64,
     aud: Option<String>,
+    preset: Option<Preset>,
 }
 
 fn connect(opts: ConnectOpts, config_path: &str) -> anyhow::Result<String> {
@@ -171,6 +213,7 @@ fn connect(opts: ConnectOpts, config_path: &str) -> anyhow::Result<String> {
         ipc_targets,
         ttl_seconds,
         aud,
+        preset,
     } = opts;
     let cfg = load_config(config_path)?;
     let secret = cfg.jwt_secret.clone().ok_or_else(|| {
@@ -187,7 +230,12 @@ fn connect(opts: ConnectOpts, config_path: &str) -> anyhow::Result<String> {
     // E-01: mint the per-device credential FIRST — a failure here must not
     // leave a half-paired device behind (token exists, row missing).
     let store = DeviceStore::new(&cfg.data_dir, &secret);
-    let device_secret = store.issue(&device_id, &name, ttl_seconds, None)?;
+    let device_secret = store.issue(
+        &device_id,
+        &name,
+        ttl_seconds,
+        preset.map(|p| p.grants()).as_ref(),
+    )?;
 
     let perms = permissions
         .map(parse_csv)
@@ -248,6 +296,7 @@ async fn pair(
     name: Option<String>,
     host: Option<String>,
     token: Option<String>,
+    preset: Option<Preset>,
     config_path: &str,
 ) -> anyhow::Result<String> {
     let cfg = load_config(config_path)?;
@@ -259,7 +308,12 @@ async fn pair(
     let base = format!("{scheme}://127.0.0.1:{}", cfg.port);
     let cert = effective_tls_cert_path(&cfg);
     let client = super::plugin::build_client(cfg.tls, cert.as_deref())?;
-    let body = serde_json::json!({ "ttl_secs": ttl_secs, "name": name, "host": host });
+    let body = serde_json::json!({
+        "ttl_secs": ttl_secs,
+        "name": name,
+        "host": host,
+        "preset": preset.map(|p| p.as_str()),
+    });
     let resp =
         super::plugin::api_post_json(&client, &base, "/devices/pair", Some(&token), &body).await?;
     let view: TicketView = serde_json::from_str(&resp)?;
@@ -362,16 +416,17 @@ async fn list(offline: bool, config_path: &str) -> anyhow::Result<()> {
         fetch_live_devices(&cfg).await
     };
 
-    const HEADERS: [&str; 6] = [
+    const HEADERS: [&str; 7] = [
         "DEVICE_ID",
         "NAME",
         "CREATED",
         "EXPIRES",
         "LAST_SEEN",
         "STATE",
+        "GRANTS",
     ];
-    let mut widths: [usize; 6] = HEADERS.map(str::len);
-    let mut table = String::new();
+    let mut widths: [usize; 7] = HEADERS.map(str::len);
+    let mut lines: Vec<[String; 7]> = Vec::new();
     for row in rows {
         let now = now_secs();
         let state = match row.status(now) {
@@ -391,45 +446,95 @@ async fn list(offline: bool, config_path: &str) -> anyhow::Result<()> {
             format_ts(row.expires_at),
             last_seen,
             state.to_string(),
+            grants_cell(&record_grants(&row)),
         ];
         for (i, cell) in cells.iter().enumerate() {
             widths[i] = widths[i].max(cell.len());
         }
-        table.push_str(&format!("{}\n", cells.join("\x1f")));
+        lines.push(cells);
     }
 
-    println!(
-        "{:<w0$}  {:<w1$}  {:<w2$}  {:<w3$}  {:<w4$}  {}",
-        HEADERS[0],
-        HEADERS[1],
-        HEADERS[2],
-        HEADERS[3],
-        HEADERS[4],
-        HEADERS[5],
-        w0 = widths[0],
-        w1 = widths[1],
-        w2 = widths[2],
-        w3 = widths[3],
-        w4 = widths[4],
-    );
-    for line in table.lines() {
-        let cells: Vec<&str> = line.split('\x1f').collect();
-        println!(
-            "{:<w0$}  {:<w1$}  {:<w2$}  {:<w3$}  {:<w4$}  {}",
-            cells[0],
-            cells[1],
-            cells[2],
-            cells[3],
-            cells[4],
-            cells[5],
-            w0 = widths[0],
-            w1 = widths[1],
-            w2 = widths[2],
-            w3 = widths[3],
-            w4 = widths[4],
-        );
+    let fmt_line = |cells: &[&str]| -> String {
+        // last column is left unpadded
+        cells
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                if i + 1 == cells.len() {
+                    c.to_string()
+                } else {
+                    format!("{c:<w$}", w = widths[i])
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("  ")
+    };
+    println!("{}", fmt_line(&HEADERS));
+    for cells in &lines {
+        let refs: Vec<&str> = cells.iter().map(String::as_str).collect();
+        println!("{}", fmt_line(&refs));
     }
     Ok(())
+}
+
+/// `guest` for an empty set, else the comma-separated grant names.
+fn grants_cell(g: &Grants) -> String {
+    if g.is_empty() {
+        "guest".to_string()
+    } else {
+        g.iter().map(Grant::as_str).collect::<Vec<_>>().join(",")
+    }
+}
+
+/// `vyn device grants` — returns the line to print. Validates every grant
+/// name BEFORE touching the store.
+fn grants(
+    device_id: &str,
+    preset: Option<Preset>,
+    add: &[String],
+    remove: &[String],
+    config_path: &str,
+) -> anyhow::Result<String> {
+    let parse_all = |names: &[String]| -> anyhow::Result<Vec<Grant>> {
+        names
+            .iter()
+            .map(|n| n.trim())
+            .filter(|n| !n.is_empty())
+            .map(|n| n.parse::<Grant>().map_err(anyhow::Error::msg))
+            .collect()
+    };
+    let to_add = parse_all(add)?;
+    let to_remove = parse_all(remove)?;
+
+    let cfg = load_config(config_path)?;
+    let store = open_store(&cfg)?;
+    let Some(mut current) = store.grants(device_id)? else {
+        anyhow::bail!("unknown device {device_id}");
+    };
+    if preset.is_some() || !to_add.is_empty() || !to_remove.is_empty() {
+        if let Some(p) = preset {
+            current = p.grants();
+        }
+        current.extend(to_add);
+        for g in to_remove {
+            current.remove(&g);
+        }
+        if !store.set_grants(device_id, &current)? {
+            anyhow::bail!("unknown device {device_id}");
+        }
+    }
+    Ok(if current.is_empty() {
+        format!("{device_id}: (guest — agent only)")
+    } else {
+        format!(
+            "{device_id}: {}",
+            current
+                .iter()
+                .map(Grant::as_str)
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    })
 }
 
 /// GET /devices from the running kernel (localhost); None = unreachable.
@@ -618,6 +723,7 @@ mod tests {
             Some("friend".into()),
             None,
             None,
+            None,
             cfg_path.to_str().unwrap(),
         )
         .await
@@ -662,6 +768,7 @@ mod tests {
                 ipc_targets: None,
                 ttl_seconds: 3600,
                 aud: None,
+                preset: None,
             },
             &cfg_path,
         )
@@ -705,6 +812,7 @@ mod tests {
                 ipc_targets: None,
                 ttl_seconds: 3600,
                 aud: None,
+                preset: None,
             },
             &cfg_path,
         )
@@ -719,6 +827,153 @@ mod tests {
 
         remove("dev-r", &cfg_path).unwrap();
         assert!(store.get("dev-r").unwrap().is_none());
+    }
+
+    fn connect_dev(cfg_path: &str, id: &str, preset: Option<Preset>) {
+        connect(
+            ConnectOpts {
+                device: Some(id.into()),
+                name: None,
+                host: Some("10.0.0.5".into()),
+                permissions: None,
+                ipc_targets: None,
+                ttl_seconds: 3600,
+                aud: None,
+                preset,
+            },
+            cfg_path,
+        )
+        .unwrap();
+    }
+
+    fn setup() -> (tempfile::TempDir, String, DeviceStore) {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg_path = write_cfg(dir.path(), &format!("jwt_secret: {}", "s".repeat(40)));
+        let cfg = load_config(&cfg_path).unwrap();
+        let store = DeviceStore::new(&cfg.data_dir, cfg.jwt_secret.as_ref().unwrap());
+        (dir, cfg_path, store)
+    }
+
+    #[test]
+    fn connect_default_preset_is_user() {
+        let (_d, cfg, store) = setup();
+        connect_dev(&cfg, "dev-u", None);
+        assert_eq!(
+            store.grants("dev-u").unwrap().unwrap(),
+            Preset::User.grants()
+        );
+    }
+
+    #[test]
+    fn connect_guest_has_no_grants() {
+        let (_d, cfg, store) = setup();
+        connect_dev(&cfg, "dev-g", Some(Preset::Guest));
+        assert!(store.grants("dev-g").unwrap().unwrap().is_empty());
+    }
+
+    #[test]
+    fn repair_without_preset_keeps_grants() {
+        let (_d, cfg, store) = setup();
+        connect_dev(&cfg, "dev-o", Some(Preset::Owner));
+        connect_dev(&cfg, "dev-o", None);
+        assert_eq!(
+            store.grants("dev-o").unwrap().unwrap(),
+            Preset::Owner.grants()
+        );
+        connect_dev(&cfg, "dev-o", Some(Preset::Guest));
+        assert!(store.grants("dev-o").unwrap().unwrap().is_empty());
+    }
+
+    #[test]
+    fn preset_flag_parses_and_rejects_unknown() {
+        use clap::Parser;
+        #[derive(Parser)]
+        struct W {
+            #[command(subcommand)]
+            c: DeviceCmd,
+        }
+        let ok = W::try_parse_from(["w", "connect", "--preset", "owner"]).unwrap();
+        assert!(matches!(
+            ok.c,
+            DeviceCmd::Connect {
+                preset: Some(Preset::Owner),
+                ..
+            }
+        ));
+        assert!(W::try_parse_from(["w", "connect", "--preset", "admin"]).is_err());
+        assert!(W::try_parse_from(["w", "pair", "--preset", "admin"]).is_err());
+        assert!(W::try_parse_from(["w", "grants", "d", "--preset", "admin"]).is_err());
+        // --preset excludes --add/--remove
+        assert!(W::try_parse_from(["w", "grants", "d", "--preset", "user", "--add", "x"]).is_err());
+    }
+
+    #[test]
+    fn grants_show_set_preset_add_remove() {
+        let (_d, cfg, store) = setup();
+        connect_dev(&cfg, "dev-x", None);
+        assert_eq!(
+            grants("dev-x", None, &[], &[], &cfg).unwrap(),
+            "dev-x: plugins.view, plugins.logs, plugins.control"
+        );
+        assert_eq!(
+            grants("dev-x", Some(Preset::Guest), &[], &[], &cfg).unwrap(),
+            "dev-x: (guest — agent only)"
+        );
+        grants("dev-x", Some(Preset::Owner), &[], &[], &cfg).unwrap();
+        assert_eq!(store.grants("dev-x").unwrap().unwrap().len(), 5);
+        let out = grants(
+            "dev-x",
+            None,
+            &["plugins.install".into()],
+            &["plugins.control".into(), "devices.manage".into()],
+            &cfg,
+        )
+        .unwrap();
+        assert_eq!(out, "dev-x: plugins.view, plugins.logs, plugins.install");
+        // persisted
+        assert_eq!(store.grants("dev-x").unwrap().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn grants_unknown_name_fails_before_write() {
+        let (_d, cfg, store) = setup();
+        connect_dev(&cfg, "dev-x", None);
+        let err = grants(
+            "dev-x",
+            None,
+            &["plugins.install".into(), "plugins.foo".into()],
+            &[],
+            &cfg,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("plugins.foo") && err.contains("devices.manage"),
+            "{err}"
+        );
+        // nothing was written, not even the valid half
+        assert_eq!(
+            store.grants("dev-x").unwrap().unwrap(),
+            Preset::User.grants()
+        );
+    }
+
+    #[test]
+    fn grants_unknown_device_errors() {
+        let (_d, cfg, _store) = setup();
+        let err = grants("ghost", Some(Preset::Owner), &[], &[], &cfg)
+            .unwrap_err()
+            .to_string();
+        assert_eq!(err, "unknown device ghost");
+    }
+
+    #[test]
+    fn list_shows_grants_column() {
+        assert_eq!(grants_cell(&Grants::new()), "guest");
+        assert_eq!(
+            grants_cell(&Preset::User.grants()),
+            "plugins.view,plugins.logs,plugins.control"
+        );
     }
 
     #[test]

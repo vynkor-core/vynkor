@@ -32,7 +32,11 @@ fn legacy_record_without_grants_is_user() {
     assert_eq!(s.grants("d1").unwrap().unwrap(), Preset::User.grants());
     assert_eq!(
         Preset::User.grants(),
-        set(&[Grant::PluginsView, Grant::PluginsLogs, Grant::PluginsControl])
+        set(&[
+            Grant::PluginsView,
+            Grant::PluginsLogs,
+            Grant::PluginsControl
+        ])
     );
 }
 
@@ -81,7 +85,11 @@ fn preset_parse_and_contents() {
     assert_eq!("owner".parse::<Preset>().unwrap().grants().len(), 5);
     assert_eq!(
         "user".parse::<Preset>().unwrap().grants(),
-        set(&[Grant::PluginsView, Grant::PluginsLogs, Grant::PluginsControl])
+        set(&[
+            Grant::PluginsView,
+            Grant::PluginsLogs,
+            Grant::PluginsControl
+        ])
     );
     assert!("admin".parse::<Preset>().is_err());
     for g in Grant::ALL {
