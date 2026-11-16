@@ -123,7 +123,7 @@ pub struct PluginInfo {
 }
 
 pub async fn list_plugins(State(state): State<Arc<AppState>>) -> Json<Vec<PluginInfo>> {
-    let plugins = state
+    let mut plugins = state
         .manager
         .list()
         .into_iter()
@@ -143,7 +143,23 @@ pub async fn list_plugins(State(state): State<Arc<AppState>>) -> Json<Vec<Plugin
                 last_seen,
             }
         })
-        .collect();
+        .collect::<Vec<_>>();
+    // declared but not connected (stopped, or lazy and not yet spawned): the
+    // ui needs them to offer "start"; registered entries win over their def
+    for def in &state.plugin_defs {
+        if plugins.iter().any(|p| p.plugin_id == def.id) {
+            continue;
+        }
+        let idle = if def.lazy { "lazy" } else { "stopped" };
+        plugins.push(PluginInfo {
+            plugin_id: def.id.clone(),
+            state: idle.to_string(),
+            registered_at: 0,
+            permissions: def.permissions.clone(),
+            device_id: "local".to_string(),
+            last_seen: 0,
+        });
+    }
     Json(plugins)
 }
 
