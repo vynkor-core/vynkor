@@ -168,6 +168,25 @@ impl TicketStore {
         Ok(consumed)
     }
 
+    /// State of the ticket whose id is `ticket_sha256` (see `ticket_id`).
+    /// Read-only: never marks anything used.
+    pub fn state(&self, ticket_sha256: &str) -> Result<TicketState, VynkorError> {
+        self.state_at(ticket_sha256, now_secs())
+    }
+
+    pub fn state_at(&self, ticket_sha256: &str, now: u64) -> Result<TicketState, VynkorError> {
+        let _guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
+        let rows = self.read_all()?;
+        Ok(
+            match rows.iter().find(|r| r.ticket_sha256 == ticket_sha256) {
+                None => TicketState::Unknown,
+                Some(r) if r.used_at.is_some() => TicketState::Used,
+                Some(r) if now >= r.expires_at => TicketState::Expired,
+                Some(_) => TicketState::Waiting,
+            },
+        )
+    }
+
     /// Drop rows past expiry/use plus `STALE_RETENTION_SECS`. Returns how
     /// many were removed.
     pub fn sweep_expired(&self, now: u64) -> Result<usize, VynkorError> {
@@ -208,6 +227,23 @@ fn random_ticket() -> String {
         .try_fill_bytes(&mut bytes)
         .expect("OS RNG failure");
     URL_SAFE_NO_PAD.encode(bytes)
+}
+
+/// Where a ticket stands, for a screen that shows a pairing QR.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TicketState {
+    /// issued, not used, not expired
+    Waiting,
+    Used,
+    Expired,
+    /// no such row (never issued, or swept after `STALE_RETENTION_SECS`)
+    Unknown,
+}
+
+/// The id of a ticket: its hex sha-256, which is what the store keeps. Lets a
+/// caller follow a ticket (`TicketStore::state`) without holding the raw secret.
+pub fn ticket_id(ticket: &str) -> String {
+    hash_ticket(ticket)
 }
 
 fn hash_ticket(ticket: &str) -> String {
@@ -253,5 +289,21 @@ mod tests {
             Err(VynkorError::Ticket(TicketRejection::Expired))
         ));
         assert!(store.consume_at(&t.ticket, 109).is_ok());
+    }
+
+    #[test]
+    fn state_follows_the_ticket_without_consuming_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = TicketStore::new(dir.path());
+        let t = store.issue_at(100, 10, None, "ws://h/ws".into()).unwrap();
+        let id = ticket_id(&t.ticket);
+        assert_eq!(id, t.record.ticket_sha256);
+        assert_eq!(store.state_at(&id, 105).unwrap(), TicketState::Waiting);
+        // looking does not burn it
+        assert_eq!(store.state_at(&id, 105).unwrap(), TicketState::Waiting);
+        assert_eq!(store.state_at(&id, 110).unwrap(), TicketState::Expired);
+        assert_eq!(store.state_at("nope", 105).unwrap(), TicketState::Unknown);
+        store.consume_at(&t.ticket, 106).unwrap();
+        assert_eq!(store.state_at(&id, 107).unwrap(), TicketState::Used);
     }
 }
