@@ -137,6 +137,36 @@ pub async fn run<F: Future<Output = ()>>(
     shutdown: F,
     bridge_status: Option<watch::Sender<BridgeStatus>>,
 ) -> anyhow::Result<()> {
+    run_with(
+        cfg,
+        shutdown,
+        EmbedOptions {
+            bridge_status,
+            bridge_retry: None,
+        },
+    )
+    .await
+}
+
+/// embedder hooks for [`run_with`]
+#[derive(Default)]
+pub struct EmbedOptions {
+    /// receives the bridge connection status
+    pub bridge_status: Option<watch::Sender<BridgeStatus>>,
+    /// `notify_waiters()` = reconnect the bridge now (a "reconnect" button)
+    pub bridge_retry: Option<std::sync::Arc<tokio::sync::Notify>>,
+}
+
+/// [`run`] with every embedder hook
+pub async fn run_with<F: Future<Output = ()>>(
+    cfg: Config,
+    shutdown: F,
+    opts: EmbedOptions,
+) -> anyhow::Result<()> {
+    let EmbedOptions {
+        bridge_status,
+        bridge_retry,
+    } = opts;
     validate_config(&cfg)?;
     let _lock = InstanceLock::acquire(&cfg.pid_file)?;
     Kernel::run_with_options(
@@ -144,7 +174,10 @@ pub async fn run<F: Future<Output = ()>>(
         Arc::new(PluginRegistry::new()),
         Arc::new(EventBus::new()),
         shutdown,
-        RunOptions { bridge_status },
+        RunOptions {
+            bridge_status,
+            bridge_retry,
+        },
     )
     .await
 }
