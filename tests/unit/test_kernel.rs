@@ -68,6 +68,24 @@ async fn kernel_refuses_to_start_without_auth() {
 }
 
 #[tokio::test]
+async fn kernel_stops_when_gateway_port_is_taken() {
+    // the gateway failing to bind used to be logged while the kernel ran on
+    // without it; now the kernel returns that error
+    let holder = std::net::TcpListener::bind("0.0.0.0:0").expect("hold a port");
+    let port = holder.local_addr().unwrap().port();
+    let cfg = test_config("/tmp/vynkor_kernel_port_taken.sock", port);
+    let result = timeout(
+        Duration::from_secs(10),
+        Kernel::run_with_shutdown(cfg, std::future::pending::<()>()),
+    )
+    .await
+    .expect("kernel must not keep running without its gateway");
+    let err = result.expect_err("a taken gateway port is fatal");
+    assert!(err.to_string().contains("HTTP API failed"), "{err:#}");
+    drop(holder);
+}
+
+#[tokio::test]
 async fn kernel_refuses_weak_jwt_secret() {
     let mut cfg = test_config("/tmp/vynkor_kernel_weak_secret.sock", 19198);
     cfg.allow_no_auth = false;
