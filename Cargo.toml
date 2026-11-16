@@ -81,7 +81,7 @@ prost = "0.13"
 crc32fast = "1"
 zstd = "0.14"
 dashmap = "6"
-governor = "0.8"
+governor = "0.10"
 
 metrics = "0.24"
 metrics-exporter-prometheus = "0.18"
