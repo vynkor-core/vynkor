@@ -51,6 +51,9 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           version: "35.1"
+          # authenticated release lookup: anonymous calls share the runner
+          # IP's 60/h limit and failed fuzz jobs with "API rate limit exceeded"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Restore seed corpus
         run: |
