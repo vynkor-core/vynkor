@@ -386,15 +386,29 @@ impl Kernel {
         // it (axum-server's Handle is the drain/stop switch for the listener).
         let api_shutdown_handle = axum_server::Handle::new();
         let api_task_handle = api_shutdown_handle.clone();
+        // A gateway that cannot serve (port taken, bad TLS files) used to be
+        // only logged while the kernel ran on without it: devices and the
+        // CLI then looked "connected but silent". Its failure now stops the
+        // kernel with that error.
+        let (api_failed_tx, api_failed_rx) = tokio::sync::oneshot::channel::<String>();
         let api_task = tokio::spawn(async move {
             if let Err(e) = api.run(api_task_handle).await {
                 error!("HTTP API error: {e}");
+                let _ = api_failed_tx.send(e.to_string());
             }
         });
 
         info!("kernel ready");
-        shutdown.await;
-        info!("shutdown signal received");
+        let api_failure = tokio::select! {
+            _ = shutdown => {
+                info!("shutdown signal received");
+                None
+            }
+            Ok(e) = api_failed_rx => {
+                error!("HTTP API stopped ({e}); shutting the kernel down");
+                Some(e)
+            }
+        };
 
         Self::graceful_shutdown(
             &registry,
@@ -409,6 +423,9 @@ impl Kernel {
             },
         )
         .await;
-        Ok(())
+        match api_failure {
+            Some(e) => Err(anyhow::anyhow!("HTTP API failed: {e}")),
+            None => Ok(()),
+        }
     }
 }
