@@ -167,6 +167,7 @@ fn classify(e: &BridgeError) -> BridgeFailure {
 pub struct BridgeHandle {
     conns: Arc<Mutex<Vec<mpsc::Sender<Outbound>>>>,
     status: Arc<watch::Sender<BridgeStatus>>,
+    retry: Arc<tokio::sync::Notify>,
 }
 
 impl Default for BridgeHandle {
@@ -185,7 +186,20 @@ impl BridgeHandle {
         BridgeHandle {
             conns: Arc::default(),
             status: Arc::new(tx),
+            retry: Arc::default(),
         }
+    }
+
+    /// share an embedder-owned trigger for `retry_now`
+    pub fn with_retry(mut self, retry: Arc<tokio::sync::Notify>) -> Self {
+        self.retry = retry;
+        self
+    }
+
+    /// skip the current reconnect wait and start over at the shortest backoff
+    /// (a user pressing "reconnect"); no-op while connected
+    pub fn retry_now(&self) {
+        self.retry.notify_waiters();
     }
 
     pub fn status(&self) -> watch::Receiver<BridgeStatus> {
@@ -310,8 +324,14 @@ impl Bridge {
                 detail,
                 retry_in: backoff,
             });
-            tokio::time::sleep(backoff).await;
-            backoff = (backoff * 2).min(BRIDGE_MAX_BACKOFF);
+            tokio::select! {
+                _ = tokio::time::sleep(backoff) => {
+                    backoff = (backoff * 2).min(BRIDGE_MAX_BACKOFF);
+                }
+                _ = self.handle.retry.notified() => {
+                    backoff = Duration::from_secs(1);
+                }
+            }
         }
     }
 
@@ -1459,6 +1479,39 @@ mod tests {
         tokio::time::timeout(t, rx.wait_for(failed(2)))
             .await
             .expect("loop did not retry")
+            .unwrap();
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn retry_now_cuts_the_backoff_short() {
+        let (tx, mut rx) = tokio::sync::watch::channel(BridgeStatus::Disabled);
+        let handle = BridgeHandle::with_status(tx);
+        let bridge = transports_bridge(
+            vec![TransportConfig::Relay {
+                url: "wss://127.0.0.1:1".into(),
+                key: None,
+            }],
+            handle.clone(),
+        );
+        let task = tokio::spawn(bridge.run());
+        let failed = |secs| {
+            move |s: &BridgeStatus| {
+                matches!(s, BridgeStatus::Failed { retry_in, .. }
+                    if *retry_in == Duration::from_secs(secs))
+            }
+        };
+        let t = Duration::from_secs(10);
+        tokio::time::timeout(t, rx.wait_for(failed(4)))
+            .await
+            .expect("backoff never reached 4s")
+            .unwrap();
+        // without the nudge the next attempt is 4s away; with it, immediate,
+        // and the backoff starts over
+        handle.retry_now();
+        tokio::time::timeout(Duration::from_millis(1500), rx.wait_for(failed(1)))
+            .await
+            .expect("retry_now did not retry promptly")
             .unwrap();
         task.abort();
     }
