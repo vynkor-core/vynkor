@@ -106,7 +106,7 @@ base64 = "0.22"
 
 # E-01: device credential store — AES-256-GCM at rest under a key derived from
 # jwt_secret (HKDF); hkdf/sha2 declared directly, not via vynkor-wire
-aes-gcm = "0.10"
+aes-gcm = "0.11"
 hkdf = "0.12"
 sha2 = "0.10"
 # E-01: deflate the pair payload so the QR stays scannable by the in-app
