@@ -378,9 +378,9 @@ impl MessageRouter {
         command: &str,
     ) -> Option<String> {
         if let (Some(store), false) = (device_store, sender_device_id.is_empty()) {
-            match store.get(sender_device_id) {
+            match store.record(sender_device_id) {
                 Err(_) => return Some("device store unavailable".to_string()),
-                Ok(Some((row, _))) => {
+                Ok(Some(row)) => {
                     let held = if row.status(now_unix_secs()) == DeviceStatus::Active {
                         record_grants(&row)
                     } else {

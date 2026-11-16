@@ -158,6 +158,18 @@ impl DeviceStore {
     }
 
     fn read_all(&self) -> Result<Vec<DeviceRecord>, VynkorError> {
+        let rows = self.read_rows()?;
+        // fail loud on the first undecryptable row — silently dropping rows
+        // would turn revocation into a no-op for exactly the compromised case
+        for row in &rows {
+            self.unseal(&row.secret_enc)?;
+        }
+        Ok(rows)
+    }
+
+    /// rows without decrypting secrets: grants and status need no key, so a
+    /// rotated jwt_secret or one bad row does not break every request
+    fn read_rows(&self) -> Result<Vec<DeviceRecord>, VynkorError> {
         let raw = match fs::read_to_string(&self.path) {
             Ok(raw) => raw,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -166,14 +178,15 @@ impl DeviceStore {
         if raw.trim().is_empty() {
             return Ok(Vec::new());
         }
-        let rows: Vec<DeviceRecord> =
-            serde_json::from_str(&raw).map_err(|e| VynkorError::Internal(e.to_string()))?;
-        // fail loud on the first undecryptable row — silently dropping rows
-        // would turn revocation into a no-op for exactly the compromised case
-        for row in &rows {
-            self.unseal(&row.secret_enc)?;
-        }
-        Ok(rows)
+        serde_json::from_str(&raw).map_err(|e| VynkorError::Internal(e.to_string()))
+    }
+
+    /// the record alone (no secret), for per-request grant checks
+    pub fn record(&self, device_id: &str) -> Result<Option<DeviceRecord>, VynkorError> {
+        Ok(self
+            .read_rows()?
+            .into_iter()
+            .find(|r| r.device_id == device_id))
     }
 
     fn write_all(&self, rows: &[DeviceRecord]) -> Result<(), VynkorError> {
@@ -260,11 +273,7 @@ impl DeviceStore {
 
     /// Effective grants of a device, re-read from disk. `None` = no such device.
     pub fn grants(&self, device_id: &str) -> Result<Option<Grants>, VynkorError> {
-        Ok(self
-            .read_all()?
-            .into_iter()
-            .find(|r| r.device_id == device_id)
-            .map(|r| record_grants(&r)))
+        Ok(self.record(device_id)?.map(|r| record_grants(&r)))
     }
 
     /// Replace a device's grants. `false` = no such device.
@@ -415,6 +424,20 @@ mod tests {
         assert!(other.get("dev-1").is_err());
         // and the gate fails closed
         assert!(other.active_secret("dev-1").is_err());
+    }
+
+    #[test]
+    fn grants_readable_after_master_secret_rotation() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let store = DeviceStore::new(dir.path(), MASTER);
+            store.issue("dev-1", "phone", 60, None).unwrap();
+        }
+        let other = DeviceStore::new(dir.path(), "a-different-master-secret-that-is-long!!");
+        // secrets stay sealed, but the per-request grant check must not 500
+        assert_eq!(other.record("dev-1").unwrap().unwrap().device_id, "dev-1");
+        assert!(other.grants("dev-1").unwrap().is_some());
+        assert!(other.record("nope").unwrap().is_none());
     }
 
     #[test]
