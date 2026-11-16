@@ -40,7 +40,7 @@ jobs:
       # the sdk's declared deps, not whatever the runner image ships: ubuntu-26.04
       # has apt protobuf 4.21, which can't load pb2 generated for protobuf >= 6
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
 
