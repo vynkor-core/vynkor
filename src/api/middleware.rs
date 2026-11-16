@@ -58,11 +58,11 @@ pub async fn auth_middleware(
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
 
     let caller = match &state.devices {
-        Some(store) => match store.get(&claims.sub) {
+        Some(store) => match store.record(&claims.sub) {
             // fail closed: an unreadable store must not downgrade a device to
             // the permissive non-device path
             Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
-            Ok(Some((row, _))) => {
+            Ok(Some(row)) => {
                 let grants = if row.status(now_secs()) == DeviceStatus::Active {
                     record_grants(&row)
                 } else {
