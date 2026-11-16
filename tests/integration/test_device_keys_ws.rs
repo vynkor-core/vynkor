@@ -112,7 +112,7 @@ async fn paired_device_connects_macs_then_revocation_blocks() {
 
     // ── pair (what `vyn device connect` does server-side)
     let store = DeviceStore::new(dir.path(), MASTER);
-    let device_secret = store.issue("behzod-phone", "behzod-phone", 3600).unwrap();
+    let device_secret = store.issue("behzod-phone", "behzod-phone", 3600, None).unwrap();
 
     // ── fresh CLI-process view sees the row immediately
     let cli_store = DeviceStore::new(dir.path(), MASTER);
@@ -226,7 +226,7 @@ async fn expired_device_is_rejected_at_upgrade() {
             .await;
 
     let store = DeviceStore::new(dir.path(), MASTER);
-    store.issue("old-phone", "old", 1).unwrap();
+    store.issue("old-phone", "old", 1, None).unwrap();
     tokio::time::sleep(Duration::from_millis(1300)).await;
 
     let err = timeout(
@@ -329,7 +329,7 @@ async fn revoke_closes_an_open_session() {
     let (_shutdown, _reg, _bus) =
         start_fast_recheck_kernel("/tmp/vynkor_e01c.sock", 19612, dir.path()).await;
     let store = DeviceStore::new(dir.path(), MASTER);
-    let secret = store.issue("lost-phone", "lost", 3600).unwrap();
+    let secret = store.issue("lost-phone", "lost", 3600, None).unwrap();
 
     let (mut ws, key) = connect_registered(19612, "lost-phone", &secret).await;
     // past at least one re-check tick: an active row must not be dropped
@@ -348,7 +348,7 @@ async fn remove_closes_an_open_session() {
     let (_shutdown, _reg, _bus) =
         start_fast_recheck_kernel("/tmp/vynkor_e01d.sock", 19613, dir.path()).await;
     let store = DeviceStore::new(dir.path(), MASTER);
-    let secret = store.issue("sold-phone", "sold", 3600).unwrap();
+    let secret = store.issue("sold-phone", "sold", 3600, None).unwrap();
 
     let (mut ws, key) = connect_registered(19613, "sold-phone", &secret).await;
     ping_pongs(&mut ws, &key).await;
@@ -371,7 +371,7 @@ async fn wrong_secret_gets_a_mac_close_code() {
         start_kernel_secured_with_data_dir("/tmp/vynkor_e01e.sock", 19614, MASTER, dir.path())
             .await;
     DeviceStore::new(dir.path(), MASTER)
-        .issue("typo-phone", "typo", 3600)
+        .issue("typo-phone", "typo", 3600, None)
         .unwrap();
 
     let (mut ws, key) = connect_registered(19614, "typo-phone", "not-the-paired-secret").await;

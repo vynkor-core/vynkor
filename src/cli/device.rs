@@ -187,7 +187,7 @@ fn connect(opts: ConnectOpts, config_path: &str) -> anyhow::Result<String> {
     // E-01: mint the per-device credential FIRST — a failure here must not
     // leave a half-paired device behind (token exists, row missing).
     let store = DeviceStore::new(&cfg.data_dir, &secret);
-    let device_secret = store.issue(&device_id, &name, ttl_seconds)?;
+    let device_secret = store.issue(&device_id, &name, ttl_seconds, None)?;
 
     let perms = permissions
         .map(parse_csv)

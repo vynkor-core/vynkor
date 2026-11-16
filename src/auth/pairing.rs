@@ -197,7 +197,7 @@ impl PairingService {
         let name = record.name.unwrap_or_else(|| device_id.clone());
         let device_secret = self
             .devices
-            .issue(&device_id, &name, self.cfg.device_ttl_secs)?;
+            .issue(&device_id, &name, self.cfg.device_ttl_secs, None)?;
         let jwt_token = crate::auth::jwt::mint_device_token(
             self.cfg.jwt_secret.as_bytes(),
             &device_id,

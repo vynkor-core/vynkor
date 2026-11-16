@@ -7,6 +7,7 @@ mod test_errors;
 mod test_event_bus;
 mod test_event_store;
 mod test_framing;
+mod test_grants;
 mod test_jwt;
 mod test_kernel;
 mod test_lazy_registry;
