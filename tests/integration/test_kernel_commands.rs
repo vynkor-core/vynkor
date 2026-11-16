@@ -2290,3 +2290,84 @@ async fn session_idle_timeout_unset_leaves_accepted_session_open() {
 
     let _ = shutdown_tx.send(());
 }
+
+fn dormant_weather() -> vynkor::plugins::registry::DormantPlugin {
+    vynkor::plugins::registry::DormantPlugin {
+        plugin_id: "lazy-weather".to_string(),
+        action_specs: vec![vynkor::proto::vynkor::ActionSpec {
+            name: "weather.get".to_string(),
+            description: "current conditions".to_string(),
+            params_schema: r#"{"type":"object"}"#.to_string(),
+            risk: vynkor::proto::vynkor::ActionRisk::Low as i32,
+            requires_confirmation: false,
+        }],
+        idle_stop: Duration::from_secs(300),
+    }
+}
+
+#[tokio::test]
+async fn list_plugins_reports_dormant() {
+    let sock = "/tmp/vynkor_integ_cmd_ldorm.sock";
+    let (shutdown_tx, registry, _bus) = start_kernel(sock, 19810).await;
+    registry.register_dormant(dormant_weather());
+
+    let mut client = VynkorClient::connect(sock).await.unwrap();
+    client
+        .register("cmd-ldorm-client", PluginManifest::default())
+        .await
+        .unwrap();
+    let ack = timeout(
+        Duration::from_secs(2),
+        client.send_command("ld1", "list_plugins", b"{}"),
+    )
+    .await
+    .expect("timed out")
+    .expect("send_command failed");
+
+    assert_eq!(ack.status(), CommandStatus::CommandOk, "{}", ack.error);
+    let list: serde_json::Value = serde_json::from_slice(&ack.data_json).unwrap();
+    let dormant = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["plugin_id"] == "lazy-weather")
+        .unwrap_or_else(|| panic!("dormant plugin missing from {list}"));
+    assert_eq!(dormant["state"], "dormant");
+    assert_eq!(dormant["actions"], serde_json::json!(["weather.get"]));
+
+    let _ = shutdown_tx.send(());
+}
+
+#[tokio::test]
+async fn get_manifest_for_dormant_returns_specs() {
+    let sock = "/tmp/vynkor_integ_cmd_mdorm.sock";
+    let (shutdown_tx, registry, _bus) = start_kernel(sock, 19811).await;
+    registry.register_dormant(dormant_weather());
+
+    let mut client = VynkorClient::connect(sock).await.unwrap();
+    client
+        .register("cmd-mdorm-client", PluginManifest::default())
+        .await
+        .unwrap();
+    let ack = timeout(
+        Duration::from_secs(2),
+        client.send_command("md1", "get_manifest", br#"{"plugin_id":"lazy-weather"}"#),
+    )
+    .await
+    .expect("timed out")
+    .expect("send_command failed");
+
+    assert_eq!(ack.status(), CommandStatus::CommandOk, "{}", ack.error);
+    let m: serde_json::Value = serde_json::from_slice(&ack.data_json).unwrap();
+    assert_eq!(m["plugin_id"], "lazy-weather");
+    assert_eq!(m["state"], "dormant");
+    assert_eq!(m["actions"], serde_json::json!(["weather.get"]));
+    let spec = &m["action_specs"][0];
+    assert_eq!(spec["name"], "weather.get");
+    assert_eq!(spec["description"], "current conditions");
+    assert_eq!(spec["params_schema"], r#"{"type":"object"}"#);
+    assert_eq!(spec["risk"], "low");
+    assert_eq!(spec["requires_confirmation"], false);
+
+    let _ = shutdown_tx.send(());
+}

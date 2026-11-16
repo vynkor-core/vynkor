@@ -109,6 +109,55 @@ The proxy must not log request bodies. `POST /devices/consume` carries the
 single-use pairing ticket in its body. Tickets are useless once consumed or
 expired (default 5 min), but a body-logging proxy still widens the window.
 
+## Client side: a `role: client` kernel (bridge)
+
+A client kernel dials the host's `wss://` endpoint natively; no socat or
+other TLS wrapper is needed. Against a self-signed host, pin its cert:
+
+```yaml
+role: client
+bridge:
+  host_url: https://100.80.85.81:8888
+  ca_cert_path: /home/me/.config/vyn-client/tls/host-cert.pem   # host's cert PEM
+```
+
+`ca_cert_path` is the PEM of the cert the host serves (the `cert_pem` from its
+pairing link, or `<private runtime dir>/vyn-tls/` on the host). The bridge then
+trusts exactly that certificate, under any name or IP, like the phone app, and
+refuses any other cert with a "does not match the pinned ca_cert_path" error;
+the reconnect loop keeps retrying. A missing or empty file is an error naming
+the path. The pin ignores validity dates and names, like the Android app; rotate by
+replacing the PEM. Setting `ca_cert_path` with a plaintext `http://`/`ws://`
+`host_url` is a boot error.
+
+Leave `ca_cert_path` unset for a host behind a publicly-trusted certificate
+(section 3): the bridge then verifies against the bundled webpki roots.
+
+### `bridge.transports`
+
+Instead of `host_url` + `ca_cert_path`, a client can list transports; the
+bridge tries them in order and the first that connects wins:
+
+```yaml
+bridge:
+  transports:
+    - kind: direct            # same as host_url; ca_cert_path pins as above
+      url: https://100.80.85.81:8888
+      ca_cert_path: /home/me/.config/vyn-client/tls/host-cert.pem
+    - kind: relay             # not implemented yet: reported as `unsupported`, skipped
+      url: wss://relay.example/ws
+```
+
+Set either `host_url` or `transports`, not both. A `direct` entry follows the
+same URL and pin rules as `host_url` (errors name `bridge.transports[N]`); a
+`relay` url must be `wss://` or `https://`. When every transport fails the
+status carries the last failure and the bridge retries with backoff.
+
+With more than one transport, every entry must be TLS (`wss://`/`https://`):
+a plaintext entry in a list is a boot error, because falling back from a failed
+TLS attempt to plaintext would send the token in the clear. A single plaintext
+transport (the old `host_url: http://...`) is still allowed.
+
 ## Why not `tls: false` on its own
 
 `tls: false` without a TLS-terminating proxy sends JWTs, the pairing

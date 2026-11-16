@@ -252,7 +252,7 @@ async fn python_sdk_streaming_action_round_trip() {
         // legacy alias for pre-built plugins (stage 4/B drops it)
         .env("VYN_SOCKET_PATH", &socket)
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stderr(std::process::Stdio::inherit())
         .spawn()
         .expect("failed to spawn python3 echo_plugin");
 
@@ -355,7 +355,7 @@ async fn python_sdk_publish_event_from_plugin() {
         // legacy alias for pre-built plugins (stage 4/B drops it)
         .env("VYN_SOCKET_PATH", &socket)
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stderr(std::process::Stdio::inherit())
         .spawn()
         .expect("failed to spawn python3 echo_plugin");
 
@@ -462,7 +462,7 @@ async fn python_sdk_session_close_dispatch() {
         // legacy alias for pre-built plugins (stage 4/B drops it)
         .env("VYN_SOCKET_PATH", &socket)
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
+        .stderr(std::process::Stdio::inherit())
         .spawn()
         .expect("failed to spawn python3 echo_plugin");
 

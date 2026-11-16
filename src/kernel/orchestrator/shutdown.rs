@@ -90,6 +90,11 @@ impl Kernel {
     ) {
         // (1) refuse new plugin connections immediately.
         handles.uds_accept.abort();
+        // a call during teardown must not wake a plugin the supervisor
+        // is about to stop (or has already stopped)
+        if let Some(lazy) = &handles.lazy {
+            lazy.abort();
+        }
 
         // (2) notify + wait out existing plugins' grace window.
         let entries = registry.list();
@@ -117,9 +122,12 @@ impl Kernel {
                     .send(out_frame(build_frame("self", 0, payload)))
                     .await;
             }
-
-            supervisor.graceful_shutdown(default_grace_seconds).await;
         }
+
+        // outside the registry check: a lazy plugin spawned but not yet
+        // registered is supervised yet absent from `entries` (a no-op when
+        // nothing is supervised)
+        supervisor.graceful_shutdown(default_grace_seconds).await;
 
         // (3) drain the API/WS server: stop accepting new connections, give
         // in-flight requests/WS sessions `default_grace_seconds` to finish

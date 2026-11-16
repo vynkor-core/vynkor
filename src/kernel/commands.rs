@@ -88,22 +88,20 @@ impl CommandHandler {
                             .map(|s| s.to_string())
                     })
                     .unwrap_or_default();
-                match registry.get(&plugin_id) {
-                    Some(entry) => {
+                let spec_json = |s: &crate::proto::vynkor::ActionSpec| {
+                    serde_json::json!({
+                        "name": s.name,
+                        "description": s.description,
+                        "params_schema": s.params_schema,
+                        "risk": crate::plugins::registry::action_risk_str(s.risk),
+                        "requires_confirmation": s.requires_confirmation,
+                    })
+                };
+                match (registry.get(&plugin_id), registry.get_dormant(&plugin_id)) {
+                    (Some(entry), _) => {
                         let m = &entry.manifest;
-                        let action_specs: Vec<serde_json::Value> = m
-                            .action_specs
-                            .iter()
-                            .map(|s| {
-                                serde_json::json!({
-                                    "name": s.name,
-                                    "description": s.description,
-                                    "params_schema": s.params_schema,
-                                    "risk": crate::plugins::registry::action_risk_str(s.risk),
-                                    "requires_confirmation": s.requires_confirmation,
-                                })
-                            })
-                            .collect();
+                        let action_specs: Vec<serde_json::Value> =
+                            m.action_specs.iter().map(spec_json).collect();
                         CommandOutcome::ok(
                             serde_json::json!({
                                 "plugin_id": entry.plugin_id,
@@ -119,7 +117,23 @@ impl CommandHandler {
                             .to_string(),
                         )
                     }
-                    None => CommandOutcome::err(
+                    // lazy and not running: only the action specs are known
+                    (None, Some(d)) => CommandOutcome::ok(
+                        serde_json::json!({
+                            "plugin_id": d.plugin_id,
+                            "state": "dormant",
+                            "device_id": "local",
+                            "user_id": "default",
+                            "permissions": Vec::<String>::new(),
+                            "actions": d.action_specs.iter().map(|s| &s.name).collect::<Vec<_>>(),
+                            "events": Vec::<String>::new(),
+                            "ipc_targets": Vec::<String>::new(),
+                            "platforms": Vec::<String>::new(),
+                            "action_specs": d.action_specs.iter().map(spec_json).collect::<Vec<_>>(),
+                        })
+                        .to_string(),
+                    ),
+                    (None, None) => CommandOutcome::err(
                         CommandStatus::CommandError,
                         format!("plugin not registered: {plugin_id}"),
                     ),
@@ -130,7 +144,7 @@ impl CommandHandler {
             // slug. Read-only registry data; pairs with the READONLY_COMMANDS
             // exemption in ipc/protocol.rs.
             "list_plugins" => {
-                let plugins: Vec<serde_json::Value> = registry
+                let mut plugins: Vec<serde_json::Value> = registry
                     .list()
                     .iter()
                     .map(|e| {
@@ -141,6 +155,20 @@ impl CommandHandler {
                         })
                     })
                     .collect();
+                // lazy plugins that are not running; a woken one is listed above
+                plugins.extend(
+                    registry
+                        .list_dormant()
+                        .into_iter()
+                        .filter(|d| registry.get(&d.plugin_id).is_none())
+                        .map(|d| {
+                            serde_json::json!({
+                                "plugin_id": d.plugin_id,
+                                "state": "dormant",
+                                "actions": d.action_specs.iter().map(|s| &s.name).collect::<Vec<_>>(),
+                            })
+                        }),
+                );
                 CommandOutcome::ok(serde_json::Value::Array(plugins).to_string())
             }
             "reload_config" => match config_path {

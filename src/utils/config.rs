@@ -29,6 +29,13 @@ pub struct PluginDef {
     /// sandboxed ones.
     #[serde(default)]
     pub max_vmem_mb: Option<u64>,
+    /// Do not spawn at boot; the first action call to this plugin starts it.
+    #[serde(default)]
+    pub lazy: bool,
+    /// Seconds idle before a lazy plugin is stopped again. Unset =
+    /// `Config.lazy_idle_stop_secs`.
+    #[serde(default)]
+    pub idle_stop_secs: Option<u64>,
     /// Permissions granted to this plugin by the operator. Any permission declared
     /// in plugin.json but absent here causes the kernel to refuse to load the plugin.
     /// Empty list means "allow all declared permissions" (no restriction).
@@ -73,11 +80,17 @@ pub enum Role {
 /// `token` is the JWT the client presents (host gateway auth); `secret` is the
 /// host kernel's `jwt_secret` value, needed to derive the per-session frame MAC
 /// key (the token alone cannot — the nonce is derived from the shared secret).
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct BridgeConfig {
     /// Host kernel base URL (`http://`/`https://` or full `ws://`/`wss://`).
     /// A base URL gets `/ws` appended; a ws(s) URL is used verbatim.
+    /// Optional when `transports` is set; setting both is a boot error.
+    #[serde(default)]
     pub host_url: String,
+    /// Ordered connection methods, first that connects wins. Replaces
+    /// `host_url` + `ca_cert_path` when non-empty.
+    #[serde(default)]
+    pub transports: Vec<TransportConfig>,
     /// JWT for the host's WS gateway. Optional when the host runs
     /// `allow_no_auth: true`.
     #[serde(default)]
@@ -89,6 +102,62 @@ pub struct BridgeConfig {
     /// Must be a subset of `plugins`.
     #[serde(default)]
     pub mirror: Vec<String>,
+    /// PEM of the host's served cert; when set, wss:// trusts exactly this cert
+    /// under any name (pairing-link pinning, same as the phone app).
+    #[serde(default)]
+    pub ca_cert_path: Option<std::path::PathBuf>,
+    /// WS ping interval; a host silent for 3x this is declared dead. 0 is
+    /// invalid and clamped to the default.
+    #[serde(default = "default_bridge_keepalive")]
+    pub keepalive_secs: u64,
+}
+
+/// One way to reach the host kernel.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum TransportConfig {
+    Direct {
+        url: String,
+        #[serde(default)]
+        ca_cert_path: Option<PathBuf>,
+    },
+    Relay {
+        url: String,
+        #[serde(default)]
+        key: Option<String>,
+    },
+}
+
+impl BridgeConfig {
+    /// `transports` if set, else the legacy `host_url` + `ca_cert_path` as one
+    /// direct transport.
+    pub fn effective_transports(&self) -> Vec<TransportConfig> {
+        if !self.transports.is_empty() {
+            return self.transports.clone();
+        }
+        vec![TransportConfig::Direct {
+            url: self.host_url.clone(),
+            ca_cert_path: self.ca_cert_path.clone(),
+        }]
+    }
+}
+
+fn default_bridge_keepalive() -> u64 {
+    15
+}
+
+impl Default for BridgeConfig {
+    fn default() -> Self {
+        BridgeConfig {
+            host_url: String::new(),
+            transports: Vec::new(),
+            token: None,
+            secret: None,
+            mirror: Vec::new(),
+            ca_cert_path: None,
+            keepalive_secs: default_bridge_keepalive(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -124,6 +193,13 @@ pub struct Config {
     /// Bridge settings, required when `role: client`.
     #[serde(default)]
     pub bridge: Option<BridgeConfig>,
+    /// D-06 (host): which local plugins of each bridged device may call host
+    /// actions, keyed by device id — e.g. `laptop: [daemon]`, `phone: ["*"]`.
+    /// A device's relayed calls are stamped `<device>.<plugin>`; `"*"` also
+    /// admits the device's own unnamed calls. Unset = no filtering (stamping
+    /// still applies); set = default-deny for any device not listed.
+    #[serde(default)]
+    pub device_callers: Option<std::collections::HashMap<String, Vec<String>>>,
     /// Stable device identifier advertised to the host. Defaults to `$HOSTNAME`.
     #[serde(default)]
     pub device_id: Option<String>,
@@ -272,6 +348,12 @@ pub struct Config {
     /// Max number of entries an installed archive may contain.
     #[serde(default = "default_max_archive_entries")]
     pub max_archive_entries: usize,
+    /// Default idle seconds before a lazy plugin is stopped.
+    #[serde(default = "default_lazy_idle_stop_secs")]
+    pub lazy_idle_stop_secs: u64,
+    /// How long a first call to a lazy plugin waits for it to register.
+    #[serde(default = "default_lazy_start_timeout_ms")]
+    pub lazy_start_timeout_ms: u64,
     /// Path this config was loaded from — used by reload_config kernel command.
     #[serde(skip)]
     pub config_file: Option<String>,
@@ -386,6 +468,12 @@ fn default_max_archive_bytes() -> u64 {
 fn default_max_extracted_bytes() -> u64 {
     1024 * 1024 * 1024
 }
+fn default_lazy_idle_stop_secs() -> u64 {
+    600
+}
+fn default_lazy_start_timeout_ms() -> u64 {
+    10_000
+}
 fn default_max_archive_entries() -> usize {
     10_000
 }
@@ -404,6 +492,7 @@ impl Default for Config {
             legacy_plugin_mac: false,
             role: Role::Host,
             bridge: None,
+            device_callers: None,
             device_id: None,
             plugins: vec![],
             plugins_dir: None,
@@ -442,6 +531,8 @@ impl Default for Config {
             max_archive_bytes: default_max_archive_bytes(),
             max_extracted_bytes: default_max_extracted_bytes(),
             max_archive_entries: default_max_archive_entries(),
+            lazy_idle_stop_secs: default_lazy_idle_stop_secs(),
+            lazy_start_timeout_ms: default_lazy_start_timeout_ms(),
             config_file: None,
         }
     }
@@ -528,6 +619,13 @@ fn clamp_invalid_numerics(config: &mut Config) {
         let d = default_watchdog_timeout();
         warn!("watchdog_timeout_secs: 0 is invalid, clamping to default ({d})");
         config.watchdog_timeout_secs = d;
+    }
+    if let Some(b) = config.bridge.as_mut() {
+        if b.keepalive_secs == 0 {
+            let d = default_bridge_keepalive();
+            warn!("bridge.keepalive_secs: 0 is invalid, clamping to default ({d})");
+            b.keepalive_secs = d;
+        }
     }
     if config.max_ws_connections == 0 {
         let d = default_max_ws_connections();
@@ -651,6 +749,66 @@ mod tests {
 
     // Zero would silently disable the IPC channel / watchdog — load_config must
     // clamp it back to the documented defaults (N3).
+    #[test]
+    fn transports_yaml_parses_direct_and_relay() {
+        let yaml = "transports:\n  - kind: direct\n    url: https://h:1\n    ca_cert_path: /x/c.pem\n  - kind: relay\n    url: wss://r.example/ws\n    key: k1\n  - kind: direct\n    url: http://h:2\n";
+        let b: BridgeConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(
+            b.transports,
+            vec![
+                TransportConfig::Direct {
+                    url: "https://h:1".into(),
+                    ca_cert_path: Some("/x/c.pem".into())
+                },
+                TransportConfig::Relay {
+                    url: "wss://r.example/ws".into(),
+                    key: Some("k1".into())
+                },
+                TransportConfig::Direct {
+                    url: "http://h:2".into(),
+                    ca_cert_path: None
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn host_url_only_config_unchanged() {
+        let b: BridgeConfig =
+            serde_yaml::from_str("host_url: https://h:1\nca_cert_path: /x/c.pem\n").unwrap();
+        assert!(b.transports.is_empty());
+        assert_eq!(
+            b.effective_transports(),
+            vec![TransportConfig::Direct {
+                url: "https://h:1".into(),
+                ca_cert_path: Some("/x/c.pem".into())
+            }]
+        );
+    }
+
+    #[test]
+    fn bridge_keepalive_defaults_to_15_and_clamps_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let body = |extra: &str| {
+            format!("role: client\nbridge:\n  host_url: http://h:1\n  mirror: [a]\n{extra}")
+        };
+        let path = write_minimal_config(&dir, &body(""));
+        assert_eq!(
+            load_config(&path).unwrap().bridge.unwrap().keepalive_secs,
+            15
+        );
+        let path = write_minimal_config(&dir, &body("  keepalive_secs: 0\n"));
+        assert_eq!(
+            load_config(&path).unwrap().bridge.unwrap().keepalive_secs,
+            15
+        );
+        let path = write_minimal_config(&dir, &body("  keepalive_secs: 4\n"));
+        assert_eq!(
+            load_config(&path).unwrap().bridge.unwrap().keepalive_secs,
+            4
+        );
+    }
+
     #[test]
     fn load_config_clamps_zero_numerics_to_defaults() {
         let dir = tempfile::tempdir().unwrap();

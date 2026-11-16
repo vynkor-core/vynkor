@@ -9,6 +9,7 @@ mod test_event_store;
 mod test_framing;
 mod test_jwt;
 mod test_kernel;
+mod test_lazy_registry;
 mod test_loader;
 mod test_manifest_enforcement;
 mod test_metrics;
