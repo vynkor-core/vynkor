@@ -1,6 +1,6 @@
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
-use rand::rngs::OsRng;
-use rand::RngCore;
+use rand::rngs::SysRng;
+use rand::TryRng;
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -112,7 +112,9 @@ pub fn mint_device_token(
         .unwrap_or_default()
         .as_secs() as usize;
     let mut nonce = [0u8; 16];
-    OsRng.fill_bytes(&mut nonce);
+    SysRng
+        .try_fill_bytes(&mut nonce)
+        .map_err(|e| VynkorError::Internal(format!("OS RNG failure: {e}")))?;
     let claims = PluginClaims {
         sub: device_id.to_string(),
         permissions,

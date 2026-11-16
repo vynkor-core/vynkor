@@ -549,9 +549,9 @@ impl MessageRouter {
                 // when auth is on, mint a per-registration nonce; the plugin and
                 // kernel both derive the frame-MAC key from it
                 let session_nonce: Vec<u8> = if mac_secret.is_some() && result.is_ok() {
-                    use rand::RngCore;
+                    use rand::Rng;
                     let mut n = vec![0u8; crate::auth::frame_mac::SESSION_NONCE_LEN];
-                    rand::thread_rng().fill_bytes(&mut n);
+                    rand::rng().fill_bytes(&mut n);
                     n
                 } else {
                     Vec::new()

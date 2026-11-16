@@ -175,9 +175,11 @@ impl TicketStore {
 }
 
 fn random_ticket() -> String {
-    use rand::RngCore;
+    use rand::TryRng;
     let mut bytes = [0u8; TICKET_BYTES];
-    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    rand::rngs::SysRng
+        .try_fill_bytes(&mut bytes)
+        .expect("OS RNG failure");
     URL_SAFE_NO_PAD.encode(bytes)
 }
 

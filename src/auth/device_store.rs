@@ -97,8 +97,8 @@ impl DeviceStore {
     fn seal(&self, secret_hex: &str) -> Result<Vec<u8>, VynkorError> {
         let cipher = Aes256Gcm::new(&Key::<Aes256Gcm>::from(self.key));
         let mut nonce_bytes = [0u8; NONCE_LEN];
-        use rand::RngCore;
-        rand::thread_rng().fill_bytes(&mut nonce_bytes);
+        use rand::Rng;
+        rand::rng().fill_bytes(&mut nonce_bytes);
         let ct = cipher
             .encrypt(
                 &Nonce::from(nonce_bytes),
@@ -294,9 +294,9 @@ fn now_secs() -> u64 {
 
 /// 32 CSPRNG bytes as 64 lowercase hex chars.
 pub fn random_device_secret_hex() -> String {
-    use rand::RngCore;
+    use rand::Rng;
     let mut bytes = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    rand::rng().fill_bytes(&mut bytes);
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
