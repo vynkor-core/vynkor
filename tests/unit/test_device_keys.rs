@@ -195,7 +195,7 @@ fn mint(device_id: &str, ttl: u64) -> String {
 #[tokio::test]
 async fn paired_device_key_derives_from_device_secret_not_master() {
     let fx = fixture();
-    let secret = fx.store.issue("dev-1", "phone", 3600).unwrap();
+    let secret = fx.store.issue("dev-1", "phone", 3600, None).unwrap();
 
     let (mut write_rx, ack) =
         register_device(&fx.router_tx, 1, "dev-1.geo", "dev-1", &mint("dev-1", 600)).await;
@@ -232,7 +232,7 @@ async fn unknown_device_registration_is_rejected() {
 #[tokio::test]
 async fn revoked_device_registration_is_rejected() {
     let fx = fixture();
-    fx.store.issue("dev-2", "phone", 3600).unwrap();
+    fx.store.issue("dev-2", "phone", 3600, None).unwrap();
     fx.store.set_revoked("dev-2", true).unwrap();
 
     let (_, ack) =
@@ -248,7 +248,7 @@ async fn revoked_device_registration_is_rejected() {
 #[tokio::test]
 async fn expired_device_registration_is_rejected() {
     let fx = fixture();
-    fx.store.issue("dev-3", "phone", 1).unwrap();
+    fx.store.issue("dev-3", "phone", 1, None).unwrap();
     tokio::time::sleep(Duration::from_millis(1200)).await;
 
     let (_, ack) =
@@ -289,7 +289,7 @@ async fn local_plugins_derive_from_per_plugin_key() {
 #[tokio::test]
 async fn revocation_after_registration_blocks_the_next_connection() {
     let fx = fixture();
-    let secret = fx.store.issue("dev-4", "phone", 3600).unwrap();
+    let secret = fx.store.issue("dev-4", "phone", 3600, None).unwrap();
     let token = mint("dev-4", 600);
 
     let (_, ack) = register_device(&fx.router_tx, 1, "dev-4.geo", "dev-4", &token).await;
@@ -304,7 +304,7 @@ async fn revocation_after_registration_blocks_the_next_connection() {
     assert!(ack2.reject_reason.contains("revoked"));
 
     // re-pairing (issue rotates + un-revokes) restores access
-    fx.store.issue("dev-4", "phone", 3600).unwrap();
+    fx.store.issue("dev-4", "phone", 3600, None).unwrap();
     let (_, ack3) = register_device(&fx.router_tx, 3, "dev-4.clipboard", "dev-4", &token).await;
     assert!(ack3.accepted, "{:?}", ack3.reject_reason);
     let _ = secret;

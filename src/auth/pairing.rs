@@ -17,6 +17,7 @@ use governor::{DefaultDirectRateLimiter, Quota, RateLimiter};
 use serde::{Deserialize, Serialize};
 
 use crate::auth::device_store::DeviceStore;
+use crate::auth::grants::{Grants, Preset};
 use crate::auth::ticket_store::TicketStore;
 use crate::utils::errors::VynkorError;
 
@@ -64,6 +65,9 @@ pub struct PairRequest {
     /// advertise host override (LAN ip, tailscale name, or full url);
     /// default auto-detects the LAN address
     pub host: Option<String>,
+    /// K3: grant preset for the new device (`guest|user|owner`). Default
+    /// `user`. A device caller can't exceed its own grants.
+    pub preset: Option<String>,
 }
 
 /// Response of `POST /devices/pair`.
@@ -149,7 +153,32 @@ impl PairingService {
         self.consume_limiter.check().is_ok()
     }
 
-    pub fn create_ticket(&self, req: PairRequest) -> Result<TicketView, VynkorError> {
+    /// `caller_grants`: the grants of the calling DEVICE, if the caller is one
+    /// — the ticket's preset must be a subset of them (a device can't mint a
+    /// more powerful device than itself). `None` = non-device admin, any preset.
+    pub fn create_ticket(
+        &self,
+        req: PairRequest,
+        caller_grants: Option<&Grants>,
+    ) -> Result<TicketView, VynkorError> {
+        let preset = match req.preset.as_deref() {
+            Some(p) => Some(p.parse::<Preset>().map_err(VynkorError::InvalidInput)?),
+            None => None,
+        };
+        // a device caller always gets an explicit, checked preset (default
+        // `user`); for admins `None` stays unset on the ticket
+        let effective = match (preset, caller_grants) {
+            (Some(p), _) => Some(p),
+            (None, Some(_)) => Some(Preset::User),
+            (None, None) => None,
+        };
+        if let (Some(p), Some(caller)) = (effective, caller_grants) {
+            if !p.grants().is_subset(caller) {
+                return Err(VynkorError::PermissionDenied(
+                    "preset exceeds caller grants".into(),
+                ));
+            }
+        }
         let ttl_secs = req
             .ttl_secs
             .unwrap_or(DEFAULT_TICKET_TTL_SECS)
@@ -171,7 +200,12 @@ impl PairingService {
             self.cfg.tls,
             req.host.as_deref(),
         )?;
-        let issued = self.tickets.issue(ttl_secs, name, ws.clone())?;
+        let issued = self.tickets.issue_with_preset(
+            ttl_secs,
+            name,
+            ws.clone(),
+            effective.map(|p| p.as_str().to_string()),
+        )?;
         let cert_pem = self.cert_pem()?;
         // a pem we can't fingerprint still pins fine on the phone — don't fail
         // pairing over a display-only field
@@ -195,9 +229,17 @@ impl PairingService {
         let record = self.tickets.consume(ticket)?;
         let device_id = self.fresh_device_id()?;
         let name = record.name.unwrap_or_else(|| device_id.clone());
-        let device_secret = self
-            .devices
-            .issue(&device_id, &name, self.cfg.device_ttl_secs)?;
+        // unparseable stored preset => least privilege, never a wider default
+        let preset = match record.preset.as_deref() {
+            None => Preset::User,
+            Some(p) => p.parse::<Preset>().unwrap_or(Preset::Guest),
+        };
+        let device_secret = self.devices.issue(
+            &device_id,
+            &name,
+            self.cfg.device_ttl_secs,
+            Some(&preset.grants()),
+        )?;
         let jwt_token = crate::auth::jwt::mint_device_token(
             self.cfg.jwt_secret.as_bytes(),
             &device_id,

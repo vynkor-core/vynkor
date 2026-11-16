@@ -14,13 +14,14 @@ use tokio::sync::mpsc;
 use tower_http::timeout::TimeoutLayer;
 use tracing::info;
 
-use crate::api::middleware::{auth_middleware, require_kernel_admin};
+use crate::api::middleware::{auth_middleware, require_grant};
 use crate::api::rate_limit::{build_rate_limiter, rate_limit_middleware, TokenRateLimiter};
 use crate::api::routes::{
     consume_ticket, get_plugin, get_plugin_logs, health_check, list_devices, list_plugins,
     pair_device, restart_plugin, start_plugin, stop_plugin, AppState,
 };
 use crate::api::websocket::{ws_handler, WsGateway};
+use crate::auth::grants::Grant;
 use crate::auth::jwt::JwtValidator;
 use crate::auth::pairing::PairingService;
 use crate::ipc::messages::IncomingMessage;
@@ -88,6 +89,7 @@ pub fn create_router_full(config: RouterConfig) -> BuiltRouter {
         started_at: config.started_at,
         plugin_defs: config.plugin_defs,
         pairing: config.pairing,
+        devices: config.device_store.clone(),
     });
 
     // /devices/consume is public on purpose: the single-use ticket is the
@@ -99,23 +101,47 @@ pub fn create_router_full(config: RouterConfig) -> BuiltRouter {
     // All non-health endpoints require auth when jwt_secret is configured.
     // auth_middleware short-circuits to next.run when jwt_validator is None,
     // so allow_no_auth deployments see no change in behaviour.
-    // Lifecycle routes additionally require PERMISSION_KERNEL_ADMIN (T-01):
-    // auth_middleware only proves the caller holds *a* valid JWT, not that
-    // it's authorized to start/stop/restart plugins.
-    let admin = Router::new()
+    // K3: every host-control route is guarded by a grant. A device caller is
+    // judged by the grants in its DeviceRecord; any other caller keeps the
+    // pre-K3 rule (PERMISSION_KERNEL_ADMIN for lifecycle + pairing, plain
+    // auth for reads). /metrics stays auth-only.
+    let view = Router::new()
+        .route("/plugins", get(list_plugins))
+        .route("/plugins/{id}", get(get_plugin))
+        .layer(middleware::from_fn(|r, n| {
+            require_grant(Grant::PluginsView, false, r, n)
+        }));
+    let logs = Router::new()
+        .route("/plugins/{id}/logs", get(get_plugin_logs))
+        .layer(middleware::from_fn(|r, n| {
+            require_grant(Grant::PluginsLogs, false, r, n)
+        }));
+    let control = Router::new()
         .route("/plugins/{id}/start", post(start_plugin))
         .route("/plugins/{id}/stop", post(stop_plugin))
         .route("/plugins/{id}/restart", post(restart_plugin))
+        .layer(middleware::from_fn(|r, n| {
+            require_grant(Grant::PluginsControl, true, r, n)
+        }));
+    let pair = Router::new()
         .route("/devices/pair", post(pair_device))
-        .layer(middleware::from_fn(require_kernel_admin));
+        .layer(middleware::from_fn(|r, n| {
+            require_grant(Grant::DevicesManage, true, r, n)
+        }));
+    let devices_list =
+        Router::new()
+            .route("/devices", get(list_devices))
+            .layer(middleware::from_fn(|r, n| {
+                require_grant(Grant::DevicesManage, false, r, n)
+            }));
 
     let mut protected = Router::new()
         .route("/metrics", get(get_metrics))
-        .route("/plugins", get(list_plugins))
-        .route("/plugins/{id}", get(get_plugin))
-        .route("/plugins/{id}/logs", get(get_plugin_logs))
-        .route("/devices", get(list_devices))
-        .merge(admin);
+        .merge(view)
+        .merge(logs)
+        .merge(control)
+        .merge(pair)
+        .merge(devices_list);
 
     // Per-token rate limiting: only active when JWT auth is configured. Layered
     // *before* auth_middleware is added below, so auth ends up outermost and

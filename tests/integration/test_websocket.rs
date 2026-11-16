@@ -623,7 +623,7 @@ async fn per_device_token_registers_device_plugin_end_to_end() {
 
     // pair phone-1 exactly like `vyn device connect` does server-side
     let store = DeviceStore::new(data_dir.path(), secret);
-    let device_secret = store.issue("phone-1", "phone-1", 3600).unwrap();
+    let device_secret = store.issue("phone-1", "phone-1", 3600, None).unwrap();
 
     let token = create_device_token(
         "phone-1",

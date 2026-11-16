@@ -23,6 +23,7 @@ use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
+use crate::auth::grants::{self, Grants, Preset};
 use crate::utils::errors::VynkorError;
 
 const STORE_FILE: &str = "devices.json";
@@ -51,6 +52,9 @@ pub struct DeviceRecord {
     /// unix secs when the credential stops working (matches the token TTL)
     pub expires_at: u64,
     pub revoked: bool,
+    /// K3: grant strings; `None` (rows written before K3) means `Preset::User`
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grants: Option<Vec<String>>,
     /// AES-256-GCM(nonce(12) || ciphertext||tag) of the hex secret
     secret_enc: Vec<u8>,
 }
@@ -64,6 +68,14 @@ impl DeviceRecord {
         } else {
             DeviceStatus::Active
         }
+    }
+}
+
+/// Effective grants of a row (legacy rows without the field = `Preset::User`).
+pub fn record_grants(row: &DeviceRecord) -> Grants {
+    match &row.grants {
+        None => Preset::User.grants(),
+        Some(raw) => grants::parse_lenient(raw),
     }
 }
 
@@ -172,7 +184,16 @@ impl DeviceStore {
 
     /// Issue or rotate the credential for `device_id`. The plaintext secret is
     /// returned exactly once for the pair payload.
-    pub fn issue(&self, device_id: &str, name: &str, ttl_secs: u64) -> Result<String, VynkorError> {
+    ///
+    /// `grants: None` keeps an existing row's grants (re-pair) and gives a new
+    /// row `Preset::User`.
+    pub fn issue(
+        &self,
+        device_id: &str,
+        name: &str,
+        ttl_secs: u64,
+        grants: Option<&Grants>,
+    ) -> Result<String, VynkorError> {
         let now = now_secs();
         let secret_hex = random_device_secret_hex();
         let _guard = self.lock_writes();
@@ -186,6 +207,9 @@ impl DeviceStore {
                 row.expires_at = now + ttl_secs;
                 row.revoked = false;
                 row.secret_enc = enc;
+                if let Some(g) = grants {
+                    row.grants = Some(grants::to_strings(g));
+                }
             }
             None => rows.push(DeviceRecord {
                 device_id: device_id.to_string(),
@@ -193,6 +217,9 @@ impl DeviceStore {
                 created_at: now,
                 expires_at: now + ttl_secs,
                 revoked: false,
+                grants: Some(grants::to_strings(
+                    &grants.cloned().unwrap_or_else(|| Preset::User.grants()),
+                )),
                 secret_enc: enc,
             }),
         }
@@ -223,6 +250,30 @@ impl DeviceStore {
         let mut changed = false;
         for row in rows.iter_mut().filter(|r| r.device_id == device_id) {
             row.revoked = revoked;
+            changed = true;
+        }
+        if changed {
+            self.write_all(&rows)?;
+        }
+        Ok(changed)
+    }
+
+    /// Effective grants of a device, re-read from disk. `None` = no such device.
+    pub fn grants(&self, device_id: &str) -> Result<Option<Grants>, VynkorError> {
+        Ok(self
+            .read_all()?
+            .into_iter()
+            .find(|r| r.device_id == device_id)
+            .map(|r| record_grants(&r)))
+    }
+
+    /// Replace a device's grants. `false` = no such device.
+    pub fn set_grants(&self, device_id: &str, new: &Grants) -> Result<bool, VynkorError> {
+        let _guard = self.lock_writes();
+        let mut rows = self.read_all()?;
+        let mut changed = false;
+        for row in rows.iter_mut().filter(|r| r.device_id == device_id) {
+            row.grants = Some(grants::to_strings(new));
             changed = true;
         }
         if changed {
@@ -332,7 +383,7 @@ mod tests {
     #[test]
     fn issue_and_recover_round_trip() {
         let (_dir, store) = tmp_store();
-        let secret = store.issue("dev-1", "phone", 3600).unwrap();
+        let secret = store.issue("dev-1", "phone", 3600, None).unwrap();
         assert_eq!(secret.len(), DEVICE_SECRET_HEX_LEN);
 
         let (row, recovered) = store.get("dev-1").unwrap().unwrap();
@@ -344,7 +395,7 @@ mod tests {
     #[test]
     fn secrets_are_never_plaintext_on_disk() {
         let (_dir, store) = tmp_store();
-        let secret = store.issue("dev-1", "phone", 60).unwrap();
+        let secret = store.issue("dev-1", "phone", 60, None).unwrap();
         let raw = std::fs::read_to_string(store.path.clone()).unwrap();
         assert!(
             !raw.contains(&secret),
@@ -358,7 +409,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         {
             let store = DeviceStore::new(dir.path(), MASTER);
-            store.issue("dev-1", "phone", 60).unwrap();
+            store.issue("dev-1", "phone", 60, None).unwrap();
         }
         let other = DeviceStore::new(dir.path(), "a-different-master-secret-that-is-long!!");
         assert!(other.get("dev-1").is_err());
@@ -369,7 +420,7 @@ mod tests {
     #[test]
     fn revoke_blocks_then_unrevoke_restores() {
         let (_dir, store) = tmp_store();
-        store.issue("dev-1", "phone", 3600).unwrap();
+        store.issue("dev-1", "phone", 3600, None).unwrap();
         assert!(store.active_secret("dev-1").unwrap().is_some());
 
         assert!(store.set_revoked("dev-1", true).unwrap());
@@ -384,13 +435,13 @@ mod tests {
     fn expired_rows_are_rejected_like_revoked_ones() {
         let (_dir, store) = tmp_store();
         // pure lifecycle math first — no wall clock involved
-        store.issue("dev-1", "phone", 60).unwrap();
+        store.issue("dev-1", "phone", 60, None).unwrap();
         let (row, _) = store.get("dev-1").unwrap().unwrap();
         assert_eq!(row.status(0), DeviceStatus::Active);
         assert_eq!(row.status(u64::MAX), DeviceStatus::Expired);
 
         // gate-level: wait out a 1-second TTL
-        store.issue("dev-2", "phone", 1).unwrap();
+        store.issue("dev-2", "phone", 1, None).unwrap();
         std::thread::sleep(Duration::from_millis(1300));
         let err = store.active_secret("dev-2").unwrap_err();
         assert!(err.to_string().contains("expired"));
@@ -405,7 +456,7 @@ mod tests {
     #[test]
     fn remove_drops_the_row() {
         let (_dir, store) = tmp_store();
-        store.issue("dev-1", "phone", 60).unwrap();
+        store.issue("dev-1", "phone", 60, None).unwrap();
         assert!(store.remove("dev-1").unwrap());
         assert!(store.get("dev-1").unwrap().is_none());
         assert!(!store.remove("dev-1").unwrap());
@@ -414,10 +465,10 @@ mod tests {
     #[test]
     fn reissue_rotates_secret_and_clears_revocation() {
         let (_dir, store) = tmp_store();
-        let s1 = store.issue("dev-1", "phone", 60).unwrap();
+        let s1 = store.issue("dev-1", "phone", 60, None).unwrap();
         store.set_revoked("dev-1", true).unwrap();
 
-        let s2 = store.issue("dev-1", "phone-2", 120).unwrap();
+        let s2 = store.issue("dev-1", "phone-2", 120, None).unwrap();
         assert_ne!(s1, s2, "re-pair must mint a fresh secret");
         let (row, secret) = store.get("dev-1").unwrap().unwrap();
         assert_eq!(secret, s2);
@@ -428,8 +479,8 @@ mod tests {
     #[test]
     fn multiple_rows_coexist() {
         let (_dir, store) = tmp_store();
-        store.issue("dev-a", "a", 60).unwrap();
-        store.issue("dev-b", "b", 60).unwrap();
+        store.issue("dev-a", "a", 60, None).unwrap();
+        store.issue("dev-b", "b", 60, None).unwrap();
         assert_eq!(store.list().unwrap().len(), 2);
         store.set_revoked("dev-a", true).unwrap();
         assert!(store.active_secret("dev-b").unwrap().is_some());
