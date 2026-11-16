@@ -1,3 +1,5 @@
+use crate::auth::device_store::{record_grants, DeviceStatus};
+use crate::auth::grants::{Grant, Grants};
 use crate::auth::jwt::JwtValidator;
 use crate::auth::permissions::{
     check_ipc_send, check_ipc_target, check_permission, normalize_permission,
@@ -36,6 +38,37 @@ use super::helpers::{
 };
 use crate::ipc::connection::out_frame;
 use crate::ipc::framing::target_as_str;
+
+fn now_unix_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+/// K3: grants a DEVICE connection must hold to run a kernel command
+/// (empty = any device). Every command in `CommandHandler::dispatch`:
+///
+/// | command         | required                                   |
+/// |-----------------|--------------------------------------------|
+/// | `health_check`  | none                                       |
+/// | `list_plugins`  | `plugins.view`                             |
+/// | `get_manifest`  | `plugins.view`                             |
+/// | `list_devices`  | `devices.manage`                           |
+/// | `reload_config` | all grants (owner)                         |
+/// | anything else   | all grants (owner) — fail closed           |
+///
+/// There are no kernel commands for plugin logs or start/stop/restart/enable/
+/// disable yet (those are HTTP-only); when added they map to `plugins.logs`
+/// and `plugins.control`. Pairing/revocation have no kernel command either.
+pub fn command_grants(command: &str) -> Grants {
+    match command {
+        "health_check" => Grants::new(),
+        "list_plugins" | "get_manifest" => [Grant::PluginsView].into_iter().collect(),
+        "list_devices" => [Grant::DevicesManage].into_iter().collect(),
+        _ => Grant::ALL.into_iter().collect(),
+    }
+}
 
 pub struct MessageRouter;
 
@@ -329,6 +362,55 @@ impl MessageRouter {
     /// stays admin-gated. This is what lets the `agent` plugin read plugin
     /// manifests for tool discovery without holding admin.
     const READONLY_COMMANDS: [&str; 3] = ["health_check", "list_plugins", "get_manifest"];
+
+    /// K3: `None` = allowed, `Some(reason)` = denied.
+    ///
+    /// A connection whose registration carries a `device_id` that has a row in
+    /// the device store is judged ONLY by that row's grants, re-read on every
+    /// command (so `vyn device grants` bites the live connection at once); its
+    /// JWT `PERMISSION_KERNEL_ADMIN` confers nothing. Every other connection
+    /// (local plugins, no device store) keeps the pre-K3 rule.
+    fn authorize_kernel_command(
+        registry: &PluginRegistry,
+        device_store: Option<&crate::auth::device_store::DeviceStore>,
+        sender_id: &str,
+        sender_device_id: &str,
+        command: &str,
+    ) -> Option<String> {
+        if let (Some(store), false) = (device_store, sender_device_id.is_empty()) {
+            match store.get(sender_device_id) {
+                Err(_) => return Some("device store unavailable".to_string()),
+                Ok(Some((row, _))) => {
+                    let held = if row.status(now_unix_secs()) == DeviceStatus::Active {
+                        record_grants(&row)
+                    } else {
+                        Grants::new()
+                    };
+                    let missing: Vec<&str> = command_grants(command)
+                        .iter()
+                        .filter(|g| !held.contains(g))
+                        .map(|g| g.as_str())
+                        .collect();
+                    return if missing.is_empty() {
+                        None
+                    } else {
+                        Some(format!(
+                            "device {sender_device_id} lacks grant: {}",
+                            missing.join(", ")
+                        ))
+                    };
+                }
+                Ok(None) => {}
+            }
+        }
+        if !Self::READONLY_COMMANDS.contains(&command)
+            && check_permission(registry, sender_id, PermissionType::PermissionKernelAdmin)
+                .is_err()
+        {
+            return Some(format!("{sender_id} lacks PERMISSION_KERNEL_ADMIN"));
+        }
+        None
+    }
 
     // 12 params mirror the kernel's wired components; collapsing them into a
     // config struct is MA-06's scope, not this lint
@@ -1189,23 +1271,25 @@ impl MessageRouter {
             }
 
             Some(envelope::Payload::KernelCommand(cmd)) => {
-                let sender_id = registry
+                let (sender_id, sender_device_id) = registry
                     .get_by_conn_id(msg.conn_id)
-                    .map(|e| e.plugin_id.clone())
+                    .map(|e| (e.plugin_id.clone(), e.device_id.clone()))
                     .unwrap_or_default();
 
-                let outcome = if !Self::READONLY_COMMANDS.contains(&cmd.command.as_str())
-                    && check_permission(registry, &sender_id, PermissionType::PermissionKernelAdmin)
-                        .is_err()
-                {
+                let denial = Self::authorize_kernel_command(
+                    registry,
+                    device_store,
+                    &sender_id,
+                    &sender_device_id,
+                    &cmd.command,
+                );
+                let outcome = if let Some(reason) = denial {
                     warn!(
                         sender = %sender_id,
                         command = %cmd.command,
                         "kernel command permission denied"
                     );
-                    CommandOutcome::permission_denied(format!(
-                        "{sender_id} lacks PERMISSION_KERNEL_ADMIN"
-                    ))
+                    CommandOutcome::permission_denied(reason)
                 } else {
                     CommandHandler::dispatch(
                         &cmd.command,

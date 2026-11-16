@@ -22,6 +22,7 @@ mod test_proto;
 mod test_proto_sync;
 mod test_registry;
 mod test_router;
+mod test_router_grants;
 mod test_sdk;
 mod test_server;
 mod test_supervisor;
