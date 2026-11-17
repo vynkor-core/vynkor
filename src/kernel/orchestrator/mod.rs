@@ -306,6 +306,7 @@ impl Kernel {
                 .map(|s| Arc::new(s.as_bytes().to_vec())),
             config.legacy_plugin_mac,
         );
+        supervisor.set_token_audience(config.jwt_audience.clone());
         let supervisor = Arc::new(supervisor);
         let sup_loop = Arc::clone(&supervisor);
         background_handles.push(tokio::spawn(async move { sup_loop.monitor_loop().await }));

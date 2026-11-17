@@ -115,6 +115,8 @@ pub struct PluginSupervisor {
     /// plugin's per-plugin MAC key (`VYN_JWT_SECRET`). Never passed through.
     pub(crate) mac_master: Option<Arc<Vec<u8>>>,
     pub(crate) legacy_plugin_mac: bool,
+    /// `aud` of the registration tokens minted for spawned plugins
+    pub(crate) token_audience: String,
     pub(crate) entries: Arc<DashMap<String, PluginEntry>>,
     pub(crate) event_tx: mpsc::Sender<ExitEvent>,
     pub(crate) event_rx: Arc<Mutex<mpsc::Receiver<ExitEvent>>>,
@@ -164,6 +166,12 @@ impl PluginSupervisor {
         self.legacy_plugin_mac = legacy;
     }
 
+    /// audience for the tokens minted for spawned plugins: the kernel's
+    /// `jwt_audience`, or "vynkor" (what pairing uses) when none is set
+    pub fn set_token_audience(&mut self, audience: Option<String>) {
+        self.token_audience = audience.unwrap_or_else(|| "vynkor".to_string());
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn with_events(
         socket_path: &str,
@@ -179,6 +187,7 @@ impl PluginSupervisor {
             data_dir: None,
             mac_master: None,
             legacy_plugin_mac: false,
+            token_audience: "vynkor".to_string(),
             backoff_base_ms,
             backoff_max_ms,
             entries: Arc::new(DashMap::new()),
