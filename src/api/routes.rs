@@ -12,7 +12,6 @@ use crate::auth::jwt::JwtValidator;
 use crate::auth::pairing::{PairPayload, PairRequest, PairingService, TicketView};
 use crate::plugins::loader::{validate_plugin_def, PluginLoader};
 use crate::plugins::manager::PluginManager;
-use crate::utils::config::PluginDef;
 use crate::utils::errors::{TicketRejection, VynkorError};
 
 pub struct AppState {
@@ -21,7 +20,7 @@ pub struct AppState {
     pub started_at: Instant,
     /// Plugins declared under `plugins:` in config.yaml — the set `POST
     /// /plugins/:id/start` is allowed to spawn (never arbitrary binaries).
-    pub plugin_defs: Vec<PluginDef>,
+    pub plugin_defs: crate::plugins::reload::SharedDefs,
     /// cd-01: ticket pairing; `None` without jwt_secret (nothing to sign with)
     pub pairing: Option<Arc<PairingService>>,
     /// K3: device records, consulted per request for the caller's grants
@@ -146,7 +145,7 @@ pub async fn list_plugins(State(state): State<Arc<AppState>>) -> Json<Vec<Plugin
         .collect::<Vec<_>>();
     // declared but not connected (stopped, or lazy and not yet spawned): the
     // ui needs them to offer "start"; registered entries win over their def
-    for def in &state.plugin_defs {
+    for def in &state.plugin_defs.snapshot() {
         if plugins.iter().any(|p| p.plugin_id == def.id) {
             continue;
         }
@@ -237,7 +236,7 @@ pub async fn start_plugin(
             "plugin '{id}' is already running"
         )));
     }
-    let def = match state.plugin_defs.iter().find(|d| d.id == id) {
+    let def = match state.plugin_defs.get(&id) {
         Some(d) => d,
         None => {
             return Err(ApiError::not_found(&format!(
@@ -245,7 +244,7 @@ pub async fn start_plugin(
             )))
         }
     };
-    match validate_plugin_def(def) {
+    match validate_plugin_def(&def) {
         Ok(_) => {}
         Err(VynkorError::PermissionDenied(_)) => {
             return Err(ApiError::forbidden(
@@ -258,7 +257,7 @@ pub async fn start_plugin(
             ))
         }
     }
-    let config = PluginLoader::config_from_def(def);
+    let config = PluginLoader::config_from_def(&def);
     match state.manager.start(config).await {
         Ok(_) => Ok(StatusCode::OK),
         Err(_) => Err(ApiError::unprocessable(&format!(

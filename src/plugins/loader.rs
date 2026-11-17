@@ -77,6 +77,19 @@ impl PluginLoader {
         event_bus: Option<&Arc<EventBus>>,
         lazy_idle_stop_secs: u64,
     ) -> HashMap<String, PluginConfig> {
+        Self::load_some(defs, None, manager, event_bus, lazy_idle_stop_secs).await
+    }
+
+    /// [`load_all`](Self::load_all) that starts only the ids in `only` (a
+    /// reload): `defs` is the whole configured set, so `requires` resolves
+    /// against plugins already running
+    pub async fn load_some(
+        defs: &[PluginDef],
+        only: Option<&HashSet<String>>,
+        manager: &Arc<PluginManager>,
+        event_bus: Option<&Arc<EventBus>>,
+        lazy_idle_stop_secs: u64,
+    ) -> HashMap<String, PluginConfig> {
         let mut lazy_configs: HashMap<String, PluginConfig> = HashMap::new();
         if defs.is_empty() {
             return lazy_configs;
@@ -178,7 +191,7 @@ impl PluginLoader {
                 Some(d) => d,
                 None => continue,
             };
-            if refused.contains(id) {
+            if refused.contains(id) || only.is_some_and(|o| !o.contains(id)) {
                 continue;
             }
 

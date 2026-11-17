@@ -142,7 +142,7 @@ pub async fn run<F: Future<Output = ()>>(
         shutdown,
         EmbedOptions {
             bridge_status,
-            bridge_retry: None,
+            ..Default::default()
         },
     )
     .await
@@ -155,6 +155,9 @@ pub struct EmbedOptions {
     pub bridge_status: Option<watch::Sender<BridgeStatus>>,
     /// `notify_waiters()` = reconnect the bridge now (a "reconnect" button)
     pub bridge_retry: Option<std::sync::Arc<tokio::sync::Notify>>,
+    /// `notify_one()` = re-read the config file and start, stop or restart
+    /// the plugins that changed (an app installed or removed one)
+    pub plugins_reload: Option<std::sync::Arc<tokio::sync::Notify>>,
 }
 
 /// [`run`] with every embedder hook
@@ -166,6 +169,7 @@ pub async fn run_with<F: Future<Output = ()>>(
     let EmbedOptions {
         bridge_status,
         bridge_retry,
+        plugins_reload,
     } = opts;
     validate_config(&cfg)?;
     let _lock = InstanceLock::acquire(&cfg.pid_file)?;
@@ -177,6 +181,7 @@ pub async fn run_with<F: Future<Output = ()>>(
         RunOptions {
             bridge_status,
             bridge_retry,
+            plugins_reload,
         },
     )
     .await

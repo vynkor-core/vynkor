@@ -297,7 +297,7 @@ async fn kernel_targeted_action_request_returns_not_found_not_fake_ok() {
 #[tokio::test]
 async fn kernel_routes_action_to_declared_provider_and_correlates_response() {
     let (shutdown_tx, _registry, _bus) =
-        start_kernel("/tmp/vynkor_integ_action_route.sock", 19217).await;
+        start_kernel("/tmp/vynkor_integ_action_route.sock", 19294).await;
 
     // Provider registers first and declares the action.
     let mut provider = VynkorClient::connect("/tmp/vynkor_integ_action_route.sock")

@@ -101,7 +101,7 @@ async fn joined_event_carries_device_fields() {
     // device identity so discovery subscribers can key on device without a
     // follow-up /devices call.
     let (shutdown_tx, _registry, _bus) =
-        start_kernel("/tmp/vynkor_integ_joined_dev.sock", 19204).await;
+        start_kernel("/tmp/vynkor_integ_joined_dev.sock", 19290).await;
 
     let mut observer = VynkorClient::connect("/tmp/vynkor_integ_joined_dev.sock")
         .await
@@ -169,7 +169,7 @@ async fn joined_event_carries_action_specs() {
     // (action_specs) so an AI subscriber can enumerate callable actions from
     // the event alone, without a follow-up get_manifest round-trip.
     let (shutdown_tx, _registry, _bus) =
-        start_kernel("/tmp/vynkor_integ_joined_specs.sock", 19205).await;
+        start_kernel("/tmp/vynkor_integ_joined_specs.sock", 19291).await;
 
     let mut observer = VynkorClient::connect("/tmp/vynkor_integ_joined_specs.sock")
         .await

@@ -24,8 +24,30 @@ pub const DEFAULT_MAX_PROCS: u64 = 1024;
 pub const DEFAULT_MAX_VMEM_MB: u64 = 2048;
 
 /// Component name (under the delegated cgroup root) holding all per-plugin
-/// pids scopes.
+/// pids scopes; `vyn-<instance>` once [`set_cgroup_instance`] ran.
 const VYN_CGROUP_DIR: &str = "vyn";
+
+static CGROUP_INSTANCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Name this kernel's cgroup container after its instance lock file. Two
+/// kernels of one user (a test kernel beside the real one) would otherwise
+/// share `vyn/<plugin_id>`: the second joined its plugin into the first's
+/// scope. The pid file is unique per running instance (InstanceLock), and
+/// stable across restarts, so no stale containers pile up. First call wins.
+pub fn set_cgroup_instance(pid_file: &Path) {
+    let _ = CGROUP_INSTANCE.set(cgroup_container_name(pid_file));
+}
+
+/// `vyn-` + 8 hex of FNV-1a over the path: deterministic across builds,
+/// unlike std's hasher
+pub fn cgroup_container_name(pid_file: &Path) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in pid_file.as_os_str().as_encoded_bytes() {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{VYN_CGROUP_DIR}-{:08x}", h as u32)
+}
 
 /// Run inside new user + network namespaces and apply resource limits.
 /// Passed as a `pre_exec` hook; executes in the child process before exec.
@@ -156,7 +178,7 @@ pub fn prepare_pids_cgroup(plugin_id: &str, max_procs: u64) -> Option<PathBuf> {
         if !has_pids_controller(&dir) {
             continue;
         }
-        let container = dir.join(VYN_CGROUP_DIR);
+        let container = dir.join(CGROUP_INSTANCE.get().map_or(VYN_CGROUP_DIR, String::as_str));
         if let Err(e) = std::fs::create_dir_all(&container) {
             // root-owned subtree below the delegated root (or the mount root
             // itself for non-root) — probe the next ancestor
@@ -329,6 +351,19 @@ fn sanitize_plugin_id(plugin_id: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn cgroup_container_differs_per_instance_and_is_stable() {
+        let a = cgroup_container_name(Path::new("/run/user/1000/vyn/kernel.pid"));
+        let b = cgroup_container_name(Path::new("/run/user/1000/other/kernel.pid"));
+        assert_ne!(a, b);
+        assert_eq!(
+            a,
+            cgroup_container_name(Path::new("/run/user/1000/vyn/kernel.pid"))
+        );
+        assert!(a.starts_with("vyn-") && a.len() == 12, "{a}");
+    }
+
     use super::*;
 
     #[test]

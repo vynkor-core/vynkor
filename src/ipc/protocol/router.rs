@@ -126,7 +126,7 @@ impl MessageRouter {
         // `None`/missing-entry plugins (not declared in config.yaml) are left
         // unclamped — matches `validate_plugin_def`'s existing boot-time rule
         // that an absent/empty list means "no restriction"
-        config_permissions: Option<Arc<HashMap<String, Vec<String>>>>,
+        config_permissions: Option<crate::plugins::reload::SharedDefs>,
         ipc_rate_limit_rps: Option<u32>,
         // R6-03: per-(caller, provider) action quota. Both None = unlimited,
         // matching ipc_rate_limit_rps's existing opt-in convention
@@ -310,7 +310,7 @@ impl MessageRouter {
                         event_store.as_ref(),
                         &mac_secret,
                         legacy_plugin_mac,
-                        config_permissions.as_deref(),
+                        config_permissions.as_ref(),
                         action_limiter.as_deref(),
                         action_caller_max_concurrent,
                         action_timeout_ms,
@@ -424,7 +424,7 @@ impl MessageRouter {
         event_store: Option<&Arc<EventStore>>,
         mac_secret: &Option<Arc<Vec<u8>>>,
         legacy_plugin_mac: bool,
-        config_permissions: Option<&HashMap<String, Vec<String>>>,
+        config_permissions: Option<&crate::plugins::reload::SharedDefs>,
         action_limiter: Option<&DefaultKeyedRateLimiter<(String, String)>>,
         action_caller_max_concurrent: Option<u32>,
         action_timeout_ms: u32,
@@ -537,7 +537,8 @@ impl MessageRouter {
                 // no entry for this id (not config.yaml-declared) or an empty
                 // list (operator placed no restriction) leaves it unclamped —
                 // same convention as `validate_plugin_def`
-                if let Some(allowed) = config_permissions.and_then(|m| m.get(&plugin_id)) {
+                if let Some(allowed) = config_permissions.and_then(|m| m.permissions_of(&plugin_id))
+                {
                     if !allowed.is_empty() {
                         // normalize both sides (N2): config.yaml may list the
                         // lowercase form while the token claims PERMISSION_* names

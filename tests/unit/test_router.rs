@@ -1081,7 +1081,17 @@ fn spawn_router_with_jwt_and_config_perms(
         None,
         None,
         false, // legacy_plugin_mac
-        Some(Arc::new(config_permissions)),
+        Some(
+            config_permissions
+                .into_iter()
+                .map(|(id, permissions)| vynkor::utils::config::PluginDef {
+                    id,
+                    permissions,
+                    ..Default::default()
+                })
+                .collect::<Vec<_>>()
+                .into(),
+        ),
         None,
         None,
         None,

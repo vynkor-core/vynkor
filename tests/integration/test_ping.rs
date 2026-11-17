@@ -6,7 +6,7 @@ use vynkor_sdk::VynkorClient;
 
 #[tokio::test]
 async fn ping_pong_round_trip() {
-    let (shutdown_tx, _registry, _bus) = start_kernel("/tmp/vynkor_integ_ping.sock", 19206).await;
+    let (shutdown_tx, _registry, _bus) = start_kernel("/tmp/vynkor_integ_ping.sock", 19292).await;
 
     let mut client = VynkorClient::connect("/tmp/vynkor_integ_ping.sock")
         .await
@@ -31,7 +31,7 @@ async fn ping_pong_round_trip() {
 
 #[tokio::test]
 async fn pong_carries_original_timestamp() {
-    let (shutdown_tx, _registry, _bus) = start_kernel("/tmp/vynkor_integ_pong.sock", 19207).await;
+    let (shutdown_tx, _registry, _bus) = start_kernel("/tmp/vynkor_integ_pong.sock", 19293).await;
 
     let mut client = VynkorClient::connect("/tmp/vynkor_integ_pong.sock")
         .await

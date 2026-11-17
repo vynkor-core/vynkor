@@ -5,6 +5,7 @@ pub mod loader;
 pub mod manager;
 pub mod metrics;
 pub mod registry;
+pub mod reload;
 pub mod runner;
 #[cfg(target_os = "linux")]
 pub mod seccomp;
