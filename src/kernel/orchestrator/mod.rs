@@ -42,6 +42,8 @@ pub(super) struct ShutdownHandles {
 pub struct RunOptions {
     /// receives the bridge connection status (`Disabled` when there is no bridge)
     pub bridge_status: Option<tokio::sync::watch::Sender<BridgeStatus>>,
+    /// notify_waiters() on it = reconnect the bridge now instead of after the backoff
+    pub bridge_retry: Option<std::sync::Arc<tokio::sync::Notify>>,
 }
 
 pub struct Kernel;
@@ -201,10 +203,13 @@ impl Kernel {
         let mut bridge_status = opts.bridge_status;
         let bridge_handle = if config.role == Role::Client {
             if let Some(bridge_cfg) = &config.bridge {
-                let handle = match bridge_status.take() {
+                let mut handle = match bridge_status.take() {
                     Some(tx) => BridgeHandle::with_status(tx),
                     None => BridgeHandle::new(),
                 };
+                if let Some(retry) = opts.bridge_retry.clone() {
+                    handle = handle.with_retry(retry);
+                }
                 let bridge = Bridge::new(
                     bridge_cfg.clone(),
                     resolve_device_id(&config),
