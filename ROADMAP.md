@@ -165,6 +165,8 @@ action name (`chat_completion`, stt/tts, quotas) lives in `vynkor-plugins`.
       DONE 2026-09-28: vynkor-sdk 0.0.5 `ResponseSink` (#18),
       vynkor-plugins #77, vynkor-client-android #8. The agent route
       (`goal_start`) does not stream yet — CD-04.
+      Agent goals can be stopped: `goal_cancel {id | cancel_key}` (agent 0.1.8,
+      vynkor-plugins #102), used by the desktop chat Stop button.
 - [ ] CD-04 — assistant session in `agent`; stt partial transcripts
       (**vynkor-plugins** + client; kernel: none).
 - [x] CD-05 — `caller_plugin_id` stamping regression test for device targets
