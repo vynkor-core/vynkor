@@ -40,6 +40,55 @@ pub(crate) fn merged_env(
     out
 }
 
+/// lifetime of a minted plugin token: the plugin presents it again on every
+/// reconnect, and a restart mints a fresh one
+const PLUGIN_TOKEN_TTL_SECS: u64 = 365 * 24 * 3600;
+
+/// The registration token for a plugin the kernel spawns itself, when its
+/// config carries none: `sub` = plugin id, the permissions and ipc_targets
+/// its `plugin.json` (next to the binary) declares. The operator chose to run
+/// this binary; T-04 still clamps the permissions to a non-empty
+/// `permissions:` list in its config. Before this, every plugin installed
+/// by `vynm` or the app store failed registration ("missing JWT token")
+/// until someone minted a token by hand.
+pub(crate) fn minted_plugin_token(
+    master: &[u8],
+    audience: &str,
+    plugin_id: &str,
+    binary: &std::path::Path,
+) -> Option<String> {
+    let manifest: serde_json::Value = binary
+        .parent()
+        .and_then(|d| std::fs::read(d.join("plugin.json")).ok())
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+    let strings = |key: &str| -> Vec<String> {
+        manifest
+            .get(key)
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|s| s.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    match crate::auth::jwt::mint_device_token(
+        master,
+        plugin_id,
+        strings("permissions"),
+        strings("ipc_targets"),
+        PLUGIN_TOKEN_TTL_SECS,
+        audience,
+    ) {
+        Ok(t) => Some(t),
+        Err(e) => {
+            warn!(plugin_id, error = %e, "cannot mint the plugin's registration token");
+            None
+        }
+    }
+}
+
 impl PluginSupervisor {
     pub(crate) async fn spawn_internal(
         &self,
@@ -143,8 +192,22 @@ impl PluginSupervisor {
                 "plugin config sets VYN_JWT_SECRET; ignored — the kernel injects a per-plugin key. Remove it from plugins.d"
             );
         }
+        let has_token = config.env.iter().any(|kv| kv.starts_with("VYN_JWT_TOKEN="));
+        // auth on, per-plugin keys (not legacy), no token of its own: mint one
+        let token = match (&self.mac_master, mac_override.is_some(), has_token) {
+            (Some(master), true, false) => minted_plugin_token(
+                master,
+                &self.token_audience,
+                &config.plugin_id,
+                &config.binary_path,
+            ),
+            _ => None,
+        };
         for (k, v) in merged_env(&config.env, mac_override) {
             cmd.env(k, v);
+        }
+        if let Some(t) = token {
+            cmd.env("VYN_JWT_TOKEN", t);
         }
         let max_procs = config
             .max_procs
@@ -450,5 +513,48 @@ mod mac_env_tests {
                 ("X".to_string(), "1".to_string())
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod minted_token_tests {
+    use super::minted_plugin_token;
+    use crate::auth::jwt::JwtValidator;
+
+    const M: &[u8] = b"supervisor-test-master-secret-32-bytes!!";
+
+    #[test]
+    fn token_carries_the_manifest_permissions_and_validates() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("plugin.json"),
+            r#"{"plugin_id":"ai","permissions":["network","secrets"],"ipc_targets":["speech"]}"#,
+        )
+        .unwrap();
+        let t = minted_plugin_token(M, "vynkor", "ai", &dir.path().join("ai")).unwrap();
+        let claims = JwtValidator::with_audience(M, Some("vynkor".into()))
+            .validate(&t)
+            .unwrap();
+        assert_eq!(claims.sub, "ai");
+        assert_eq!(claims.permissions, ["network", "secrets"]);
+        assert_eq!(claims.ipc_targets, ["speech"]);
+        // another audience is refused when the kernel requires its own
+        assert!(JwtValidator::with_audience(M, Some("other".into()))
+            .validate(&t)
+            .is_err());
+    }
+
+    #[test]
+    fn no_manifest_means_no_permissions_not_no_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let t = minted_plugin_token(M, "vynkor", "x", &dir.path().join("x")).unwrap();
+        let claims = JwtValidator::new(M).validate(&t).unwrap();
+        assert!(claims.permissions.is_empty() && claims.ipc_targets.is_empty());
+    }
+
+    #[test]
+    fn a_short_secret_mints_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(minted_plugin_token(b"short", "vynkor", "x", &dir.path().join("x")).is_none());
     }
 }
