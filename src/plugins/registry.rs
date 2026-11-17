@@ -600,6 +600,13 @@ impl PluginRegistry {
         self.dormant.insert(d.plugin_id.clone(), d);
     }
 
+    /// forget a lazy plugin (removed from config on reload)
+    pub fn remove_dormant(&self, plugin_id: &str) {
+        self.drop_dormant_actions(plugin_id);
+        self.dormant.remove(plugin_id);
+        self.last_used.remove(plugin_id);
+    }
+
     pub fn get_dormant(&self, plugin_id: &str) -> Option<DormantPlugin> {
         self.dormant.get(plugin_id).map(|d| d.clone())
     }

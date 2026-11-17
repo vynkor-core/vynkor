@@ -22,6 +22,8 @@ fn reload_config_on_sighup(config_file: &Option<String>) -> anyhow::Result<Confi
 impl Kernel {
     pub async fn run(config: Config) -> anyhow::Result<()> {
         let config_file = config.config_file.clone();
+        let plugins_reload = Arc::new(tokio::sync::Notify::new());
+        let reload_trigger = Arc::clone(&plugins_reload);
         let shutdown = async move {
             let mut sigterm =
                 signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
@@ -34,14 +36,27 @@ impl Kernel {
                     _ = sighup.recv() => {
                         info!("received SIGHUP — reloading config");
                         match reload_config_on_sighup(&config_file) {
-                            Ok(cfg) => info!(log_level = %cfg.log_level, "config reloaded via SIGHUP"),
+                            Ok(cfg) => {
+                                info!(log_level = %cfg.log_level, "config reloaded via SIGHUP");
+                                reload_trigger.notify_one();
+                            }
                             Err(e) => tracing::warn!("SIGHUP config reload failed: {e}"),
                         }
                     }
                 }
             }
         };
-        Self::run_with_shutdown(config, shutdown).await
+        Self::run_with_options(
+            config,
+            Arc::new(PluginRegistry::new()),
+            Arc::new(EventBus::new()),
+            shutdown,
+            RunOptions {
+                plugins_reload: Some(plugins_reload),
+                ..Default::default()
+            },
+        )
+        .await
     }
 
     pub(super) async fn disconnect_loop(

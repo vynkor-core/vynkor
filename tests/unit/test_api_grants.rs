@@ -40,7 +40,7 @@ fn fx() -> Fx {
         started_at: Instant::now(),
         rate_limit_rps: None,
         rate_limit_burst: None,
-        plugin_defs: vec![],
+        plugin_defs: vec![].into(),
         ws_handshake_timeout_secs: 5,
         max_ws_connections: 16,
         ws_register_timeout_secs: 10,

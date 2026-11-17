@@ -29,12 +29,30 @@ pub trait PluginStarter: Send + Sync {
 
 pub struct ManagerStarter {
     manager: Arc<PluginManager>,
-    configs: HashMap<String, PluginConfig>,
+    // a reload adds and drops lazy plugins while the waker runs
+    configs: std::sync::RwLock<HashMap<String, PluginConfig>>,
 }
 
 impl ManagerStarter {
     pub fn new(manager: Arc<PluginManager>, configs: HashMap<String, PluginConfig>) -> Self {
-        Self { manager, configs }
+        Self {
+            manager,
+            configs: std::sync::RwLock::new(configs),
+        }
+    }
+
+    pub fn insert(&self, plugin_id: String, config: PluginConfig) {
+        self.configs
+            .write()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(plugin_id, config);
+    }
+
+    pub fn remove(&self, plugin_id: &str) {
+        self.configs
+            .write()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(plugin_id);
     }
 }
 
@@ -43,9 +61,12 @@ impl PluginStarter for ManagerStarter {
         Box::pin(async move {
             let config = self
                 .configs
+                .read()
+                .unwrap_or_else(|p| p.into_inner())
                 .get(plugin_id)
+                .cloned()
                 .ok_or_else(|| VynkorError::PluginNotFound(plugin_id.to_string()))?;
-            match self.manager.start(config.clone()).await {
+            match self.manager.start(config).await {
                 Ok(_) => Ok(()),
                 // already supervised (e.g. mid-restart): it will register on its own
                 Err(VynkorError::PluginAlreadyRunning(_)) => Ok(()),

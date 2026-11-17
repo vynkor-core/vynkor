@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use tracing::warn;
 
 /// One plugin entry in the `plugins:` list in config.yaml.
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Clone, Default, PartialEq)]
 pub struct PluginDef {
     pub id: String,
     pub binary: String,

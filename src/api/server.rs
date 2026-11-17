@@ -26,7 +26,6 @@ use crate::auth::jwt::JwtValidator;
 use crate::auth::pairing::PairingService;
 use crate::ipc::messages::IncomingMessage;
 use crate::plugins::manager::PluginManager;
-use crate::utils::config::PluginDef;
 
 /// All router wiring in one place (MA-06): replaces the former 11-argument
 /// positional signature that needed a clippy suppression.
@@ -42,7 +41,7 @@ pub struct RouterConfig {
     pub started_at: Instant,
     pub rate_limit_rps: Option<u32>,
     pub rate_limit_burst: Option<u32>,
-    pub plugin_defs: Vec<PluginDef>,
+    pub plugin_defs: crate::plugins::reload::SharedDefs,
     pub ws_handshake_timeout_secs: u64,
     pub max_ws_connections: usize,
     pub ws_register_timeout_secs: u64,
@@ -73,7 +72,7 @@ pub fn create_router(
         started_at: Instant::now(),
         rate_limit_rps: None,
         rate_limit_burst: None,
-        plugin_defs: vec![],
+        plugin_defs: Default::default(),
         ws_handshake_timeout_secs: 5,
         max_ws_connections: 1024,
         ws_register_timeout_secs: 10,
@@ -226,7 +225,7 @@ pub struct ApiServer {
     rate_limit_burst: Option<u32>,
     tls_cert_path: Option<PathBuf>,
     tls_key_path: Option<PathBuf>,
-    plugin_defs: Vec<PluginDef>,
+    plugin_defs: crate::plugins::reload::SharedDefs,
     ws_handshake_timeout_secs: u64,
     max_ws_connections: usize,
     ws_register_timeout_secs: u64,
@@ -248,7 +247,7 @@ impl ApiServer {
         rate_limit_burst: Option<u32>,
         tls_cert_path: Option<PathBuf>,
         tls_key_path: Option<PathBuf>,
-        plugin_defs: Vec<PluginDef>,
+        plugin_defs: crate::plugins::reload::SharedDefs,
         ws_handshake_timeout_secs: u64,
         max_ws_connections: usize,
         ws_register_timeout_secs: u64,

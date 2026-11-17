@@ -37,13 +37,16 @@ pub(super) struct ShutdownHandles {
     pub(super) background: Vec<tokio::task::JoinHandle<()>>,
 }
 
-/// embedder hooks; `Default` = what the cli does
+/// embedder hooks; `Default` = none (the cli adds `plugins_reload` on SIGHUP)
 #[derive(Default)]
 pub struct RunOptions {
     /// receives the bridge connection status (`Disabled` when there is no bridge)
     pub bridge_status: Option<tokio::sync::watch::Sender<BridgeStatus>>,
     /// notify_waiters() on it = reconnect the bridge now instead of after the backoff
     pub bridge_retry: Option<std::sync::Arc<tokio::sync::Notify>>,
+    /// notify_one() on it = re-read the config file and start, stop or
+    /// restart the plugins whose definitions changed (plugins.d hot-load)
+    pub plugins_reload: Option<std::sync::Arc<tokio::sync::Notify>>,
 }
 
 pub struct Kernel;
@@ -84,6 +87,7 @@ impl Kernel {
         // tls server/bridge through here without ever running the binary
         crate::utils::tls::install_crypto_provider();
         crate::metrics::init_metrics();
+        crate::plugins::runner::set_cgroup_instance(&config.pid_file);
 
         let event_store = match EventStore::new(&config.data_dir) {
             Ok(s) => {
@@ -187,15 +191,10 @@ impl Kernel {
                 s,
             ))
         });
-        // T-04: operator-declared permission allowlist per plugin id, used to
-        // clamp JWT-claimed permissions at registration (see protocol.rs).
-        let config_permissions = Arc::new(
-            config
-                .plugins
-                .iter()
-                .map(|d| (d.id.clone(), d.permissions.clone()))
-                .collect::<std::collections::HashMap<_, _>>(),
-        );
+        // the configured plugin set, swapped by a reload. also T-04's
+        // per-plugin permission allowlist: registration clamps JWT-claimed
+        // permissions to it (see protocol.rs)
+        let plugin_defs = crate::plugins::reload::SharedDefs::from(config.plugins.clone());
         // D-06: in client role, mirror the configured capabilities to the host
         // and hand the router the relay handle (frames whose target is not in
         // the local registry fall through to the host).
@@ -243,7 +242,7 @@ impl Kernel {
             event_store.clone(),
             mac_secret,
             config.legacy_plugin_mac,
-            Some(config_permissions),
+            Some(plugin_defs.clone()),
             config.ipc_rate_limit_rps,
             config.action_caller_rate_limit_rps,
             config.action_caller_max_concurrent,
@@ -330,21 +329,30 @@ impl Kernel {
             config.lazy_idle_stop_secs,
         )
         .await;
-        // no lazy plugins configured: nothing can be dormant, so no waker task
-        // (dropping lazy_rx makes any wake request fail fast)
-        let lazy_handle = if lazy_configs.is_empty() {
-            None
-        } else {
-            Some(tokio::spawn(
-                LazyStarter::new(
-                    Arc::clone(&registry),
-                    Arc::new(ManagerStarter::new(Arc::clone(&manager), lazy_configs)),
-                    ws_router_tx.clone(),
-                    std::time::Duration::from_millis(config.lazy_start_timeout_ms),
-                )
-                .run(lazy_rx),
-            ))
-        };
+        // the waker runs even with no lazy plugin: a reload may add one
+        let lazy_starter = Arc::new(ManagerStarter::new(Arc::clone(&manager), lazy_configs));
+        let lazy_handle = Some(tokio::spawn(
+            LazyStarter::new(
+                Arc::clone(&registry),
+                Arc::clone(&lazy_starter) as Arc<dyn crate::plugins::lazy::PluginStarter>,
+                ws_router_tx.clone(),
+                std::time::Duration::from_millis(config.lazy_start_timeout_ms),
+            )
+            .run(lazy_rx),
+        ));
+        // plugins.d hot-load: SIGHUP or the embedder's notify re-reads the
+        // config and starts/stops/restarts what changed
+        if let Some(trigger) = opts.plugins_reload.clone() {
+            let reloader = Arc::new(crate::plugins::reload::Reloader::new(
+                Arc::clone(&manager),
+                Arc::clone(&event_bus),
+                plugin_defs.clone(),
+                lazy_starter,
+                config.lazy_idle_stop_secs,
+                config.config_file.clone(),
+            ));
+            background_handles.push(tokio::spawn(reloader.run(trigger)));
+        }
         // CD-01: ticket pairing shares the device store; needs jwt_secret to
         // sign device tokens, so it exists exactly when the store does
         let pairing = match (&device_store, &config.jwt_secret) {
@@ -380,7 +388,7 @@ impl Kernel {
             config.api_rate_limit_burst,
             tls_cert_path,
             tls_key_path,
-            config.plugins.clone(),
+            plugin_defs.clone(),
             config.ws_handshake_timeout_secs,
             config.max_ws_connections,
             config.ws_register_timeout_secs,

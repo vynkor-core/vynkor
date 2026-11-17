@@ -61,7 +61,7 @@ All repos live in `vynkor-core`. The wire protocol in [`vynkor-wire`](https://gi
 - **Run plugins in isolation.** Supervised, auto-restart, resource limits (`512 MiB` / `1024` pids, cgroup `pids.max` + PID-namespace per plugin on Linux). One crash never takes the host down.
 - **Use any language.** `cargo add vynkor-sdk` / `pip install vynkor-sdk` — streaming actions (`ActionRequestChunk`/`ResponseChunk`), `publish_event`, `SessionClose` — same in Rust/Python/C++.
 - **Connect a phone in 10 seconds.** `vyn device connect --name my-phone` → QR with TLS cert pinning + encrypted `device_secret` (`AES-256-GCM`). `vyn devices`, `vyn device revoke <id>`, per-device grants (`vyn device grants`, see [docs/DEVICE_GRANTS.md](docs/DEVICE_GRANTS.md)), per-device JWT (`aud`/`jti`/`exp`).
-- **Install from a signed marketplace.** `vynm` fetches `registry.json`, verifies Ed25519 + sha256, checks kernel compat, writes `plugins.d/<slug>.yaml` drop-ins. Offline cache, no kernel marketplace code.
+- **Install from a signed marketplace.** `vynm` fetches `registry.json`, verifies Ed25519 + sha256, checks kernel compat, writes `plugins.d/<slug>.yaml` drop-ins. Offline cache, no kernel marketplace code. `kill -HUP` (or an embedder's `plugins_reload` notify) starts, stops and restarts plugins whose drop-ins changed — no kernel restart.
 - **Stay local by default, remote when you want.** `role: host` + Tailscale/headscale overlay — zero kernel change — or `role: client` bridge that mirrors local plugins as `device.<cap>`.
 
 ---
