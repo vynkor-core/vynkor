@@ -3770,7 +3770,7 @@ dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
- "prost 0.13.5",
+ "prost 0.14.4",
  "qrcode",
  "rand 0.10.2",
  "rcgen",
