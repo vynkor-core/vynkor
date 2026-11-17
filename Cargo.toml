@@ -37,7 +37,7 @@ vynkor-wire = { version = "0.0.4", features = ["manifest"] }
 tokio = { version = "1", features = ["full"] }
 
 axum = { version = "0.8", features = ["ws"] }
-axum-server = { version = "0.8", features = ["tls-rustls"] }
+axum-server = { version = "0.9", features = ["tls-rustls"] }
 tower-http = { version = "0.7.0", features = ["timeout"] }
 
 tracing = "0.1"
