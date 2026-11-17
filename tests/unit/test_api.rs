@@ -1018,3 +1018,54 @@ async fn start_already_running_plugin_returns_conflict() {
     assert_eq!(response.status(), StatusCode::CONFLICT);
     manager.stop("already-up").await.ok();
 }
+
+#[tokio::test]
+async fn list_plugins_includes_declared_but_not_running() {
+    let registry = make_registry();
+    register(&registry, "live", 1);
+    let manager = make_manager(Arc::clone(&registry), make_supervisor());
+    let mut lazy = sleep_def("sleepy");
+    lazy.lazy = true;
+    let app = create_router_full(RouterConfig {
+        manager,
+        device_store: None,
+        pairing: None,
+        jwt_validator: None,
+        ws_router_tx: None,
+        ws_disconnect_tx: None,
+        started_at: Instant::now(),
+        rate_limit_rps: None,
+        rate_limit_burst: None,
+        // "live" is both declared and registered: listed once, as registered
+        plugin_defs: vec![sleep_def("live"), sleep_def("off"), lazy],
+        ws_handshake_timeout_secs: 5,
+        max_ws_connections: 1024,
+        ws_register_timeout_secs: 10,
+        ws_device_recheck_secs: 10,
+    })
+    .app;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/plugins")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let rows: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    let state_of = |id: &str| -> Vec<String> {
+        rows.iter()
+            .filter(|r| r["plugin_id"] == id)
+            .map(|r| r["state"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(state_of("live").len(), 1);
+    assert_ne!(state_of("live")[0], "stopped");
+    assert_eq!(state_of("off"), vec!["stopped"]);
+    assert_eq!(state_of("sleepy"), vec!["lazy"]);
+}
