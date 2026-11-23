@@ -56,7 +56,7 @@ rand = "0.10"
 
 # extra features: sandbox shim (plugins/shim.rs) — pdeathsig (prctl module,
 # gated by "process"), proc mount, readiness poll, socketpair
-nix = { version = "0.31", features = ["signal", "process", "fs", "sched", "resource", "user", "mount", "poll", "socket"] }
+nix = { version = "0.32", features = ["signal", "process", "fs", "sched", "resource", "user", "mount", "poll", "socket"] }
 
 # R9-03: filesystem isolation (plugins/fsaccess.rs) — Landlock LSM, linux-only
 [target.'cfg(target_os = "linux")'.dependencies]
