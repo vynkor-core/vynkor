@@ -100,7 +100,7 @@ rcgen = "0.14"
 
 # D-14/K-05: `vyn-pair` (src/bin/vyn-pair.rs) renders the pairing QR (terminal
 # UTF-8 / SVG) — not used by the `vyn` lib/bin, see the vyn-pair [[bin]] above
-qrcode = "0.14"
+qrcode = "0.15"
 # base64url-encodes the pair payload for the vynkor://pair link (used by `vyn`)
 base64 = "0.22"
 
